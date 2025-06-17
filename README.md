@@ -23,7 +23,13 @@ The emulator expects the path to a ROM file. The command below will start the em
 cargo run -- path/to/rom.gb
 ```
 
-Pass `--dmg` to force DMG mode, `--cgb` to force CGB mode, or `--serial` to run in serial test mode.
+Pass `--dmg` to force DMG mode, `--cgb` to force CGB mode, or `--serial` to run in serial test mode. Add `--headless` to run without a window or audio output. When headless you can control execution with:
+
+* `--frames <n>` – run for the given number of frames.
+* `--seconds <n>` – run for about `<n>` seconds.
+* `--cycles <n>` – stop after `<n>` CPU cycles.
+
+If no limit is specified the emulator runs until interrupted.
 
 Test ROMs used for development are located in the `roms/` directory.
 

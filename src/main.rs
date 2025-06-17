@@ -44,6 +44,18 @@ struct Args {
     /// Run without opening a window
     #[arg(long)]
     headless: bool,
+
+    /// Number of frames to run in headless mode
+    #[arg(long)]
+    frames: Option<usize>,
+
+    /// Number of seconds to run in headless mode
+    #[arg(long)]
+    seconds: Option<u64>,
+
+    /// Number of CPU cycles to run in headless mode
+    #[arg(long)]
+    cycles: Option<u64>,
 }
 
 fn main() {
@@ -90,7 +102,11 @@ fn main() {
         if cgb_mode { "CGB" } else { "DMG" }
     );
 
-    let _stream = apu::Apu::start_stream(Arc::clone(&gb.mmu.apu));
+    let _stream = if args.headless {
+        None
+    } else {
+        Some(apu::Apu::start_stream(Arc::clone(&gb.mmu.apu)))
+    };
 
     let mut frame = vec![0u32; 160 * 144];
     let mut frame_count = 0u64;
@@ -168,10 +184,24 @@ fn main() {
             frame_count += 1;
         }
     } else {
-        const MAX_FRAMES: usize = 10;
-        for _ in 0..MAX_FRAMES {
+        let frame_limit = args.frames;
+        let cycle_limit = args.cycles;
+        let second_limit = args.seconds.map(Duration::from_secs);
+
+        let start = std::time::Instant::now();
+        'headless: loop {
             while !gb.mmu.ppu.frame_ready() {
                 gb.cpu.step(&mut gb.mmu);
+                if let Some(max) = cycle_limit {
+                    if gb.cpu.cycles >= max {
+                        break 'headless;
+                    }
+                }
+                if let Some(limit) = second_limit {
+                    if start.elapsed() >= limit {
+                        break 'headless;
+                    }
+                }
             }
 
             frame.copy_from_slice(gb.mmu.ppu.framebuffer());
@@ -195,6 +225,17 @@ fn main() {
             }
 
             frame_count += 1;
+
+            if let Some(max) = frame_limit {
+                if frame_count >= max as u64 {
+                    break;
+                }
+            }
+            if let Some(limit) = second_limit {
+                if start.elapsed() >= limit {
+                    break;
+                }
+            }
         }
     }
 
