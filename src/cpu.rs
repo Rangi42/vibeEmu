@@ -928,6 +928,11 @@ impl Cpu {
                 self.a ^= val;
                 self.f = if self.a == 0 { 0x80 } else { 0 };
             }
+            0xAF => {
+                self.a ^= self.a;
+                // XOR A resets NF, HF, CF and sets Z
+                self.f = 0x80;
+            }
             opcode @ 0xB0..=0xB7 => {
                 let src = opcode & 0x07;
                 let val = match src {
@@ -966,11 +971,6 @@ impl Cpu {
                         0
                     }
                     | if self.a < val { 0x10 } else { 0 };
-            }
-            0xAF => {
-                self.a ^= self.a;
-                // XOR A resets NF, HF, CF and sets Z
-                self.f = 0x80;
             }
             0xC0 => {
                 if self.f & 0x80 == 0 {
