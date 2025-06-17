@@ -111,9 +111,49 @@ fn oam_dma_transfer() {
         mmu.write_byte(0x8000 + i, i as u8);
     }
     mmu.write_byte(0xFF46, 0x80); // copy from 0x8000
+    mmu.dma_step(644);
+    assert_eq!(mmu.ppu.oam[0], 0x00);
+    assert_eq!(mmu.ppu.oam[0x9F], 0x9F);
+}
+
+#[test]
+fn oam_dma_initial_delay() {
+    let mut mmu = Mmu::new();
+    for i in 0..0xA0u16 {
+        mmu.write_byte(0x8000 + i, i as u8);
+    }
+    mmu.write_byte(0xFF46, 0x80);
+    // First 4 cycles should be idle
+    mmu.dma_step(4);
+    assert_eq!(mmu.ppu.oam[0], 0x00);
+    assert_eq!(mmu.ppu.oam[0x9F], 0x00);
+    // Remaining cycles copy the data
     mmu.dma_step(640);
     assert_eq!(mmu.ppu.oam[0], 0x00);
     assert_eq!(mmu.ppu.oam[0x9F], 0x9F);
+}
+
+#[test]
+fn oam_dma_restart_timing() {
+    let mut mmu = Mmu::new();
+    for i in 0..0xA0u16 {
+        mmu.write_byte(0x8000 + i, i as u8);
+        mmu.write_byte(0x9000 + i, (i + 0x10) as u8);
+    }
+
+    mmu.write_byte(0xFF46, 0x80);
+    // Start DMA and copy first two bytes
+    mmu.dma_step(8);
+    assert_eq!(mmu.ppu.oam[0], 0x00);
+
+    // Restart DMA while previous one is running
+    mmu.write_byte(0xFF46, 0x90);
+    // 1 M-cycle later, previous DMA still active
+    mmu.dma_step(4);
+    assert_eq!(mmu.ppu.oam[0], 0x00);
+    // After another M-cycle, new DMA begins and overwrites first byte
+    mmu.dma_step(4);
+    assert_eq!(mmu.ppu.oam[0], 0x10);
 }
 
 #[test]
