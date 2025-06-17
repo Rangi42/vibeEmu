@@ -21,6 +21,8 @@ pub struct Mmu {
     pub rp: u8,
     pub dma_cycles: u16,
     dma_source: u16,
+    pending_dma: Option<u16>,
+    pending_delay: u16,
     cgb_mode: bool,
 }
 
@@ -50,6 +52,8 @@ impl Mmu {
             rp: 0,
             dma_cycles: 0,
             dma_source: 0,
+            pending_dma: None,
+            pending_delay: 0,
             cgb_mode: cgb,
         }
     }
@@ -176,8 +180,15 @@ impl Mmu {
             0xFF4F => self.ppu.vram_bank = (val & 0x01) as usize,
             0xFF46 => {
                 self.ppu.dma = val;
-                self.dma_source = (val as u16) << 8;
-                self.dma_cycles = 640;
+                let src = (val as u16) << 8;
+                if self.dma_active() {
+                    self.pending_dma = Some(src);
+                    self.pending_delay = 4;
+                } else {
+                    self.dma_source = src;
+                    // 1 M-cycle delay (4 cycles) then 160 bytes * 4 cycles each
+                    self.dma_cycles = 644;
+                }
             }
             0xFF50 => self.boot_mapped = false,
             0xFF70 => {
@@ -197,22 +208,37 @@ impl Mmu {
     /// Advance the ongoing OAM DMA transfer if active.
     pub fn dma_step(&mut self, cycles: u16) {
         for _ in 0..cycles {
+            if self.pending_delay > 0 {
+                self.pending_delay -= 1;
+                if self.pending_delay == 0 {
+                    if let Some(src) = self.pending_dma.take() {
+                        self.dma_source = src;
+                        self.dma_cycles = 644;
+                    }
+                }
+            }
+
             if self.dma_cycles == 0 {
-                break;
+                continue;
             }
-            let progress = 640 - self.dma_cycles;
-            if progress % 4 == 0 && progress / 4 < 0xA0 {
-                let idx: u16 = progress / 4;
-                let byte = self.read_byte(self.dma_source.wrapping_add(idx));
-                self.ppu.oam[idx as usize] = byte;
+
+            let elapsed = 644 - self.dma_cycles;
+            if elapsed >= 4 {
+                let progress = elapsed - 4;
+                if progress % 4 == 0 && progress / 4 < 0xA0 {
+                    let idx: u16 = progress / 4;
+                    let byte = self.read_byte(self.dma_source.wrapping_add(idx));
+                    self.ppu.oam[idx as usize] = byte;
+                }
             }
+
             self.dma_cycles -= 1;
         }
     }
 
     /// Return true if a DMA transfer is in progress.
     pub fn dma_active(&self) -> bool {
-        self.dma_cycles > 0
+        self.dma_cycles > 0 || self.pending_delay > 0
     }
 }
 
