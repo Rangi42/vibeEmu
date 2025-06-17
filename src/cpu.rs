@@ -974,8 +974,9 @@ impl Cpu {
             }
             0xC0 => {
                 if self.f & 0x80 == 0 {
+                    self.tick(mmu, 1);
                     self.pc = self.pop_stack(mmu);
-                    self.tick(mmu, 2);
+                    self.tick(mmu, 1);
                 } else {
                     self.tick(mmu, 1);
                 }
@@ -999,15 +1000,15 @@ impl Cpu {
             0xC4 => {
                 let addr = self.fetch16(mmu);
                 if self.f & 0x80 == 0 {
+                    self.tick(mmu, 1);
                     self.push_stack(mmu, self.pc);
                     self.pc = addr;
-                    self.tick(mmu, 1);
                 }
             }
             0xC5 => {
                 let val = self.get_bc();
-                self.push_stack(mmu, val);
                 self.tick(mmu, 1);
+                self.push_stack(mmu, val);
             }
             0xC6 => {
                 let val = self.fetch8(mmu);
@@ -1033,14 +1034,16 @@ impl Cpu {
                     0xFF => 0x38,
                     _ => unreachable!(),
                 };
+                self.tick(mmu, 1);
                 self.push_stack(mmu, self.pc);
                 self.pc = target;
-                self.tick(mmu, 1);
+                //  self.tick(mmu, 1);
             }
             0xC8 => {
                 if self.f & 0x80 != 0 {
+                    self.tick(mmu, 1);
                     self.pc = self.pop_stack(mmu);
-                    self.tick(mmu, 2);
+                    self.tick(mmu, 1);
                 } else {
                     self.tick(mmu, 1);
                 }
@@ -1063,16 +1066,16 @@ impl Cpu {
             0xCC => {
                 let addr = self.fetch16(mmu);
                 if self.f & 0x80 != 0 {
+                    self.tick(mmu, 1);
                     self.push_stack(mmu, self.pc);
                     self.pc = addr;
-                    self.tick(mmu, 1);
                 }
             }
             0xCD => {
                 let addr = self.fetch16(mmu);
+                self.tick(mmu, 1);
                 self.push_stack(mmu, self.pc);
                 self.pc = addr;
-                self.tick(mmu, 1);
             }
             0xCE => {
                 let val = self.fetch8(mmu);
@@ -1090,8 +1093,9 @@ impl Cpu {
             }
             0xD0 => {
                 if self.f & 0x10 == 0 {
+                    self.tick(mmu, 1);
                     self.pc = self.pop_stack(mmu);
-                    self.tick(mmu, 2);
+                    self.tick(mmu, 1);
                 } else {
                     self.tick(mmu, 1);
                 }
@@ -1110,15 +1114,15 @@ impl Cpu {
             0xD4 => {
                 let addr = self.fetch16(mmu);
                 if self.f & 0x10 == 0 {
+                    self.tick(mmu, 1);
                     self.push_stack(mmu, self.pc);
                     self.pc = addr;
-                    self.tick(mmu, 1);
                 }
             }
             0xD5 => {
                 let val = self.get_de();
-                self.push_stack(mmu, val);
                 self.tick(mmu, 1);
+                self.push_stack(mmu, val);
             }
             0xD6 => {
                 let val = self.fetch8(mmu);
@@ -1135,8 +1139,9 @@ impl Cpu {
             }
             0xD8 => {
                 if self.f & 0x10 != 0 {
+                    self.tick(mmu, 1);
                     self.pc = self.pop_stack(mmu);
-                    self.tick(mmu, 2);
+                    self.tick(mmu, 1);
                 } else {
                     self.tick(mmu, 1);
                 }
@@ -1156,9 +1161,9 @@ impl Cpu {
             0xDC => {
                 let addr = self.fetch16(mmu);
                 if self.f & 0x10 != 0 {
+                    self.tick(mmu, 1);
                     self.push_stack(mmu, self.pc);
                     self.pc = addr;
-                    self.tick(mmu, 1);
                 }
             }
             0xDE => {
@@ -1191,8 +1196,8 @@ impl Cpu {
             }
             0xE5 => {
                 let val = self.get_hl();
-                self.push_stack(mmu, val);
                 self.tick(mmu, 1);
+                self.push_stack(mmu, val);
             }
             0xE6 => {
                 let val = self.fetch8(mmu);
@@ -1246,8 +1251,8 @@ impl Cpu {
             }
             0xF5 => {
                 let val = ((self.a as u16) << 8) | (self.f as u16 & 0xF0);
-                self.push_stack(mmu, val);
                 self.tick(mmu, 1);
+                self.push_stack(mmu, val);
             }
             0xF6 => {
                 let val = self.fetch8(mmu);
