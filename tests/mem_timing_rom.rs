@@ -23,19 +23,16 @@ fn run_individual(rom_name: &str) {
 }
 
 #[test]
-#[ignore]
 fn mem_timing_read() {
     run_individual("01-read_timing.gb");
 }
 
 #[test]
-#[ignore]
 fn mem_timing_write() {
     run_individual("02-write_timing.gb");
 }
 
 #[test]
-#[ignore]
 fn mem_timing_modify() {
     run_individual("03-modify_timing.gb");
 }
