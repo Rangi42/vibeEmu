@@ -463,9 +463,9 @@ impl Apu {
             self.wave_shadow[(addr - 0xFF30) as usize] = val;
         }
 
-    if addr != 0xFF26 && (0xFF10..=0xFF3F).contains(&addr) {
-        self.regs[(addr - 0xFF10) as usize] = val;
-    }
+        if addr != 0xFF26 && (0xFF10..=0xFF3F).contains(&addr) {
+            self.regs[(addr - 0xFF10) as usize] = val;
+        }
 
         match addr {
             0xFF10 => {
