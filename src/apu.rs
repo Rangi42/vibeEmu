@@ -369,6 +369,7 @@ impl Apu {
         self.ch2 = SquareChannel::new(false);
         self.ch3 = WaveChannel::default();
         self.ch4 = NoiseChannel::default();
+        self.regs.fill(0);
         self.nr50 = 0;
         self.nr51 = 0;
         self.samples.clear();
@@ -454,21 +455,18 @@ impl Apu {
     }
 
     pub fn write_reg(&mut self, addr: u16, val: u8) {
-        if (0xFF10..=0xFF3F).contains(&addr) {
-            let idx = (addr - 0xFF10) as usize;
-            if addr == 0xFF26 {
-                self.regs[idx] = (val & 0x7F) | (self.nr52 & 0x80);
-            } else {
-                self.regs[idx] = val;
-            }
+        if self.nr52 & 0x80 == 0 && addr != 0xFF26 && !(0xFF30..=0xFF3F).contains(&addr) {
+            return;
         }
+
         if (0xFF30..=0xFF3F).contains(&addr) {
             self.wave_shadow[(addr - 0xFF30) as usize] = val;
         }
 
-        if self.nr52 & 0x80 == 0 && addr != 0xFF26 && !(0xFF30..=0xFF3F).contains(&addr) {
-            return;
-        }
+    if addr != 0xFF26 && (0xFF10..=0xFF3F).contains(&addr) {
+        self.regs[(addr - 0xFF10) as usize] = val;
+    }
+
         match addr {
             0xFF10 => {
                 if let Some(s) = self.ch1.sweep.as_mut() {
@@ -551,11 +549,13 @@ impl Apu {
             0xFF25 => self.nr51 = val,
             0xFF26 => {
                 if val & 0x80 == 0 {
-                    self.nr52 &= 0x7F;
+                    self.nr52 &= !0x80;
                     self.power_off();
                 } else {
                     self.nr52 |= 0x80;
                 }
+                let idx = (addr - 0xFF10) as usize;
+                self.regs[idx] = 0x70 | (self.nr52 & 0x80);
             }
             0xFF30..=0xFF3F => {
                 if !(self.ch3.enabled && self.ch3.dac_enabled) {
