@@ -1,10 +1,11 @@
+mod common;
 use image::io::Reader as ImageReader;
 use vibeEmu::{cartridge::Cartridge, gameboy::GameBoy};
 
 #[test]
 fn cgb_acid2_rom() {
     let mut gb = GameBoy::new_with_mode(true);
-    let rom = std::fs::read("roms/cgb-acid2/cgb-acid2.gbc").expect("rom not found");
+    let rom = std::fs::read(common::rom_path("cgb-acid2/cgb-acid2.gbc")).expect("rom not found");
     gb.mmu.load_cart(Cartridge::load(rom));
 
     let mut frames = 0u32;
@@ -16,7 +17,7 @@ fn cgb_acid2_rom() {
         }
     }
 
-    let expected = ImageReader::open("roms/cgb-acid2/cgb-acid2.png")
+    let expected = ImageReader::open(common::rom_path("cgb-acid2/cgb-acid2.png"))
         .unwrap()
         .decode()
         .unwrap()

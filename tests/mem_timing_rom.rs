@@ -1,3 +1,4 @@
+mod common;
 use vibeEmu::{cartridge::Cartridge, gameboy::GameBoy};
 
 fn run_mem_timing<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> String {
@@ -17,7 +18,9 @@ fn run_mem_timing<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> St
 }
 
 fn run_individual(rom_name: &str) {
-    let path = std::path::Path::new("roms/blargg/mem_timing/individual").join(rom_name);
+    let path = common::roms_dir()
+        .join("blargg/mem_timing/individual")
+        .join(rom_name);
     let output = run_mem_timing(&path, 10_000_000);
     assert!(output.contains("Passed"), "{} failed: {}", rom_name, output);
 }

@@ -1,3 +1,4 @@
+mod common;
 use image::io::Reader as ImageReader;
 use vibeEmu::{cartridge::Cartridge, gameboy::GameBoy};
 
@@ -6,7 +7,7 @@ const DMG_PALETTE: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
 #[test]
 fn halt_bug_rom() {
     let mut gb = GameBoy::new();
-    let rom = std::fs::read("roms/blargg/halt_bug.gb").expect("rom not found");
+    let rom = std::fs::read(common::rom_path("blargg/halt_bug.gb")).expect("rom not found");
     gb.mmu.load_cart(Cartridge::load(rom));
 
     let mut frames = 0u32;
@@ -18,7 +19,7 @@ fn halt_bug_rom() {
         }
     }
 
-    let expected = ImageReader::open("roms/blargg/halt_bug-dmg-cgb.png")
+    let expected = ImageReader::open(common::rom_path("blargg/halt_bug-dmg-cgb.png"))
         .unwrap()
         .decode()
         .unwrap()
