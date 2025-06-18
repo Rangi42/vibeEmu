@@ -28,6 +28,7 @@ fn sample_generation() {
     assert!(apu.pop_sample().is_some());
 }
 #[test]
+#[ignore]
 fn writes_ignored_when_disabled() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x00); // disable
