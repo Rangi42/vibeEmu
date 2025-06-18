@@ -29,6 +29,7 @@ pub fn roms_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("test_roms")
 }
 
+#[allow(dead_code)]
 pub fn rom_path<P: AsRef<Path>>(relative: P) -> PathBuf {
     roms_dir().join(relative)
 }

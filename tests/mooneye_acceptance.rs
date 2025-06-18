@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 mod common;
 use vibeEmu::{cartridge::Cartridge, gameboy::GameBoy};
 const FIB_SEQ: [u8; 6] = [3, 5, 8, 13, 21, 34];
@@ -12,7 +13,7 @@ fn run_mooneye_acceptance<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u6
         }
     }
     let out = gb.mmu.serial.take_output();
-    out.len() >= 6 && &out[0..6] == FIB_SEQ
+    out.len() >= 6 && out[0..6] == FIB_SEQ
 }
 
 #[test]
