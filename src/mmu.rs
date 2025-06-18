@@ -153,11 +153,11 @@ impl Mmu {
             0xFF53 => ((self.hdma.dst & 0x1F00) >> 8) as u8,
             0xFF54 => (self.hdma.dst & 0x00F0) as u8,
             0xFF55 => {
-                let mut status = self.hdma.blocks.saturating_sub(1);
                 if self.hdma.active {
-                    status |= 0x80;
+                    (self.hdma.blocks.saturating_sub(1)) | 0x80
+                } else {
+                    0xFF
                 }
-                status
             }
             0xFF4D => {
                 if self.cgb_mode {
