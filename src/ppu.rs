@@ -1,7 +1,44 @@
+// Screen resolution used by the Game Boy PPU
+const SCREEN_WIDTH: usize = 160;
+const SCREEN_HEIGHT: usize = 144;
+
+// Timing constants per LCD mode in T-cycles
+const MODE0_CYCLES: u16 = 204; // HBlank
+const MODE1_CYCLES: u16 = 456; // One line during VBlank
+const MODE2_CYCLES: u16 = 80; // OAM scan
+const MODE3_CYCLES: u16 = 172; // Pixel transfer
+
+// Number of lines spent in VBlank
+const VBLANK_LINES: u8 = 10;
+
+// Sprite limits
+const MAX_SPRITES_PER_LINE: usize = 10;
+const TOTAL_SPRITES: usize = 40;
+
+// Internal memory sizes
+const VRAM_BANK_SIZE: usize = 0x2000;
+const OAM_SIZE: usize = 0xA0;
+const PAL_RAM_SIZE: usize = 0x40;
+
+// Window X position is clipped if greater than this value
+const WINDOW_X_MAX: u8 = 166;
+
+// VRAM layout constants
+const BG_MAP_0_BASE: usize = 0x1800;
+const BG_MAP_1_BASE: usize = 0x1C00;
+const TILE_DATA_0_BASE: usize = 0x0000;
+const TILE_DATA_1_BASE: usize = 0x0800;
+
+// LCD modes used in the `mode` field
+const MODE_HBLANK: u8 = 0;
+const MODE_VBLANK: u8 = 1;
+const MODE_OAM: u8 = 2;
+const MODE_TRANSFER: u8 = 3;
+
 pub struct Ppu {
-    pub vram: [[u8; 0x2000]; 2],
+    pub vram: [[u8; VRAM_BANK_SIZE]; 2],
     pub vram_bank: usize,
-    pub oam: [u8; 0xA0],
+    pub oam: [u8; OAM_SIZE],
 
     cgb: bool,
 
@@ -22,20 +59,20 @@ pub struct Ppu {
     win_line_counter: u8,
 
     bgpi: u8,
-    bgpd: [u8; 0x40],
+    bgpd: [u8; PAL_RAM_SIZE],
     obpi: u8,
-    obpd: [u8; 0x40],
+    obpd: [u8; PAL_RAM_SIZE],
     /// Object priority mode register (OPRI)
     opri: u8,
 
     mode_clock: u16,
     pub mode: u8,
 
-    pub framebuffer: [u32; 160 * 144],
-    line_priority: [bool; 160],
-    line_color_zero: [bool; 160],
+    pub framebuffer: [u32; SCREEN_WIDTH * SCREEN_HEIGHT],
+    line_priority: [bool; SCREEN_WIDTH],
+    line_color_zero: [bool; SCREEN_WIDTH],
     /// Latched sprites for the current scanline
-    line_sprites: [Sprite; 10],
+    line_sprites: [Sprite; MAX_SPRITES_PER_LINE],
     sprite_count: usize,
     /// Indicates a completed frame is available in `framebuffer`
     frame_ready: bool,
@@ -57,9 +94,9 @@ struct Sprite {
 impl Ppu {
     pub fn new_with_mode(cgb: bool) -> Self {
         Self {
-            vram: [[0; 0x2000]; 2],
+            vram: [[0; VRAM_BANK_SIZE]; 2],
             vram_bank: 0,
-            oam: [0; 0xA0],
+            oam: [0; OAM_SIZE],
             cgb,
             lcdc: 0,
             stat: 0,
@@ -75,16 +112,16 @@ impl Ppu {
             wx: 0,
             win_line_counter: 0,
             bgpi: 0,
-            bgpd: [0; 0x40],
+            bgpd: [0; PAL_RAM_SIZE],
             obpi: 0,
-            obpd: [0; 0x40],
+            obpd: [0; PAL_RAM_SIZE],
             opri: 0,
             mode_clock: 0,
-            mode: 2,
-            framebuffer: [0; 160 * 144],
-            line_priority: [false; 160],
-            line_color_zero: [false; 160],
-            line_sprites: [Sprite::default(); 10],
+            mode: MODE_OAM,
+            framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
+            line_priority: [false; SCREEN_WIDTH],
+            line_color_zero: [false; SCREEN_WIDTH],
+            line_sprites: [Sprite::default(); MAX_SPRITES_PER_LINE],
             sprite_count: 0,
             frame_ready: false,
             prev_stat_irq: 0,
@@ -95,8 +132,8 @@ impl Ppu {
     fn oam_scan(&mut self) {
         let sprite_height: i16 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
         self.sprite_count = 0;
-        for i in 0..40 {
-            if self.sprite_count >= 10 {
+        for i in 0..TOTAL_SPRITES {
+            if self.sprite_count >= MAX_SPRITES_PER_LINE {
                 break;
             }
             let base = i * 4;
@@ -140,7 +177,7 @@ impl Ppu {
         self.stat = 0x85;
         self.dma = 0xFF;
         self.bgp = 0xFC;
-        self.mode = 1;
+        self.mode = MODE_VBLANK;
         self.win_line_counter = 0;
     }
 
@@ -183,7 +220,7 @@ impl Ppu {
 
     /// Returns the current framebuffer. Call `frame_ready()` to check if a
     /// frame is complete. After presenting, call `clear_frame_flag()`.
-    pub fn framebuffer(&self) -> &[u32; 160 * 144] {
+    pub fn framebuffer(&self) -> &[u32; SCREEN_WIDTH * SCREEN_HEIGHT] {
         &self.framebuffer
     }
 
@@ -265,7 +302,7 @@ impl Ppu {
     }
 
     fn render_scanline(&mut self) {
-        if self.lcdc & 0x80 == 0 || self.ly >= 144 {
+        if self.lcdc & 0x80 == 0 || self.ly as usize >= SCREEN_HEIGHT {
             return;
         }
 
@@ -293,26 +330,26 @@ impl Ppu {
             let idx = self.bgp & 0x03;
             DMG_PALETTE[idx as usize]
         };
-        for x in 0..160usize {
-            let idx = self.ly as usize * 160 + x;
+        for x in 0..SCREEN_WIDTH {
+            let idx = self.ly as usize * SCREEN_WIDTH + x;
             self.framebuffer[idx] = bg_color;
             self.line_color_zero[x] = true;
         }
 
         if bg_enabled {
             let tile_map_base = if self.lcdc & 0x08 != 0 {
-                0x1C00
+                BG_MAP_1_BASE
             } else {
-                0x1800
+                BG_MAP_0_BASE
             };
             let tile_data_base = if self.lcdc & 0x10 != 0 {
-                0x0000
+                TILE_DATA_0_BASE
             } else {
-                0x0800
+                TILE_DATA_1_BASE
             };
 
             // draw background
-            for x in 0..160u16 {
+            for x in 0..SCREEN_WIDTH as u16 {
                 let scx = self.scx as u16;
                 let px = x.wrapping_add(scx) & 0xFF;
                 let tile_col = (px / 8) as usize;
@@ -354,7 +391,7 @@ impl Ppu {
                     let idx = (self.bgp >> (color_id * 2)) & 0x03;
                     (DMG_PALETTE[idx as usize], idx)
                 };
-                let idx = self.ly as usize * 160 + x as usize;
+                let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
                 self.framebuffer[idx] = color;
                 self.line_priority[x as usize] = priority;
                 self.line_color_zero[x as usize] = color_idx == 0;
@@ -362,15 +399,15 @@ impl Ppu {
 
             // window
             let mut window_drawn = false;
-            if self.lcdc & 0x20 != 0 && self.ly >= self.wy && self.wx <= 166 {
+            if self.lcdc & 0x20 != 0 && self.ly >= self.wy && self.wx <= WINDOW_X_MAX {
                 let wx = self.wx.wrapping_sub(7) as u16;
                 let window_map_base = if self.lcdc & 0x40 != 0 {
-                    0x1C00
+                    BG_MAP_1_BASE
                 } else {
-                    0x1800
+                    BG_MAP_0_BASE
                 };
                 let window_y = self.win_line_counter as usize;
-                for x in wx..160 {
+                for x in wx..SCREEN_WIDTH as u16 {
                     let window_x = (x - wx) as usize;
                     let tile_col = window_x / 8;
                     let tile_row = window_y / 8;
@@ -411,9 +448,9 @@ impl Ppu {
                         let idx = (self.bgp >> (color_id * 2)) & 0x03;
                         (DMG_PALETTE[idx as usize], idx)
                     };
-                    let idx = self.ly as usize * 160 + x as usize;
+                    let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
                     self.framebuffer[idx] = color;
-                    if (x as usize) < 160 {
+                    if (x as usize) < SCREEN_WIDTH {
                         self.line_priority[x as usize] = priority;
                         self.line_color_zero[x as usize] = color_idx == 0;
                     }
@@ -428,7 +465,7 @@ impl Ppu {
         // sprites
         if self.lcdc & 0x02 != 0 {
             let sprite_height: i16 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
-            let mut drawn = [false; 160];
+            let mut drawn = [false; SCREEN_WIDTH];
             for s in &self.line_sprites[..self.sprite_count] {
                 let mut tile = s.tile;
                 if sprite_height == 16 {
@@ -454,7 +491,7 @@ impl Ppu {
                         continue;
                     }
                     let sx = s.x + px as i16;
-                    if !(0i16..160i16).contains(&sx) || drawn[sx as usize] {
+                    if !(0i16..SCREEN_WIDTH as i16).contains(&sx) || drawn[sx as usize] {
                         continue;
                     }
                     let bg_zero = if !bg_enabled {
@@ -481,7 +518,7 @@ impl Ppu {
                         let idxc = (self.obp0 >> (color_id * 2)) & 0x03;
                         DMG_PALETTE[idxc as usize]
                     };
-                    let idx = self.ly as usize * 160 + sx as usize;
+                    let idx = self.ly as usize * SCREEN_WIDTH + sx as usize;
                     self.framebuffer[idx] = color;
                     drawn[sx as usize] = true;
                 }
@@ -496,7 +533,7 @@ impl Ppu {
             let increment = remaining.min(4);
             remaining -= increment;
             if self.lcdc & 0x80 == 0 {
-                self.mode = 0;
+                self.mode = MODE_HBLANK;
                 self.ly = 0;
                 self.mode_clock = 0;
                 self.win_line_counter = 0;
@@ -506,52 +543,52 @@ impl Ppu {
             self.mode_clock += increment;
 
             match self.mode {
-                0 => {
-                    if self.mode_clock >= 204 {
-                        self.mode_clock -= 204;
+                MODE_HBLANK => {
+                    if self.mode_clock >= MODE0_CYCLES {
+                        self.mode_clock -= MODE0_CYCLES;
                         self.ly += 1;
-                        if self.ly == 144 {
+                        if self.ly == SCREEN_HEIGHT as u8 {
                             self.frame_ready = true;
-                            self.mode = 1;
+                            self.mode = MODE_VBLANK;
                             if self.stat & 0x10 != 0 {
                                 *if_reg |= 0x02;
                             }
                             *if_reg |= 0x01;
                         } else {
-                            self.mode = 2;
+                            self.mode = MODE_OAM;
                             if self.stat & 0x20 != 0 {
                                 *if_reg |= 0x02;
                             }
                         }
                     }
                 }
-                1 => {
-                    if self.mode_clock >= 456 {
-                        self.mode_clock -= 456;
+                MODE_VBLANK => {
+                    if self.mode_clock >= MODE1_CYCLES {
+                        self.mode_clock -= MODE1_CYCLES;
                         self.ly += 1;
-                        if self.ly > 153 {
+                        if self.ly > SCREEN_HEIGHT as u8 + VBLANK_LINES - 1 {
                             self.ly = 0;
                             self.frame_ready = false;
                             self.win_line_counter = 0;
-                            self.mode = 2;
+                            self.mode = MODE_OAM;
                             if self.stat & 0x20 != 0 {
                                 *if_reg |= 0x02;
                             }
                         }
                     }
                 }
-                2 => {
-                    if self.mode_clock >= 80 {
-                        self.mode_clock -= 80;
+                MODE_OAM => {
+                    if self.mode_clock >= MODE2_CYCLES {
+                        self.mode_clock -= MODE2_CYCLES;
                         self.oam_scan();
-                        self.mode = 3;
+                        self.mode = MODE_TRANSFER;
                     }
                 }
-                3 => {
-                    if self.mode_clock >= 172 {
-                        self.mode_clock -= 172;
+                MODE_TRANSFER => {
+                    if self.mode_clock >= MODE3_CYCLES {
+                        self.mode_clock -= MODE3_CYCLES;
                         self.render_scanline();
-                        self.mode = 0;
+                        self.mode = MODE_HBLANK;
                         hblank_triggered = true;
                         if self.stat & 0x08 != 0 {
                             *if_reg |= 0x02;
@@ -572,17 +609,17 @@ impl Ppu {
             current |= 0x40;
         }
         match self.mode {
-            0 => {
+            MODE_HBLANK => {
                 if self.stat & 0x08 != 0 {
                     current |= 0x08;
                 }
             }
-            1 => {
+            MODE_VBLANK => {
                 if self.stat & 0x10 != 0 {
                     current |= 0x10;
                 }
             }
-            2 => {
+            MODE_OAM => {
                 if self.stat & 0x20 != 0 {
                     current |= 0x20;
                 }
