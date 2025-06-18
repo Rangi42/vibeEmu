@@ -7,6 +7,12 @@ const CPU_CLOCK_HZ: u32 = 4_194_304;
 const FRAME_SEQUENCER_PERIOD: u32 = 8192;
 const VOLUME_FACTOR: i16 = 64;
 
+const POWER_ON_REGS: [u8; 0x30] = [
+    0x80, 0xBF, 0xF3, 0xFF, 0xBF, 0xFF, 0x3F, 0x00, 0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF, 0xFF,
+    0xFF, 0x00, 0x00, 0xBF, 0x77, 0xF3, 0xF1, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
 #[derive(Default, Clone, Copy)]
 struct Envelope {
     initial: u8,
@@ -324,6 +330,8 @@ pub struct Apu {
     hp_prev_output_left: f32,
     hp_prev_input_right: f32,
     hp_prev_output_right: f32,
+    regs: [u8; 0x30],
+    wave_shadow: [u8; 0x10],
 }
 
 impl Apu {
@@ -361,6 +369,7 @@ impl Apu {
         self.ch2 = SquareChannel::new(false);
         self.ch3 = WaveChannel::default();
         self.ch4 = NoiseChannel::default();
+        self.regs.fill(0);
         self.nr50 = 0;
         self.nr51 = 0;
         self.samples.clear();
@@ -376,6 +385,8 @@ impl Apu {
             ch3: WaveChannel::default(),
             ch4: NoiseChannel::default(),
             wave_ram: [0; 0x10],
+            regs: POWER_ON_REGS,
+            wave_shadow: [0; 0x10],
             nr50: 0x77,
             nr51: 0xF3,
             nr52: 0xF1,
@@ -415,10 +426,8 @@ impl Apu {
 
     pub fn read_reg(&self, addr: u16) -> u8 {
         if addr == 0xFF26 {
-            let mut val = 0x70;
-            if self.nr52 & 0x80 != 0 {
-                val |= 0x80;
-            }
+            let mut val = self.regs[(addr - 0xFF10) as usize] & 0x7F;
+            val |= self.nr52 & 0x80;
             if self.ch1.enabled {
                 val |= 0x01;
             }
@@ -431,82 +440,33 @@ impl Apu {
             if self.ch4.enabled {
                 val |= 0x08;
             }
-            return val;
+            return val | Apu::read_mask(addr);
         }
 
-        if self.nr52 & 0x80 == 0 && !(0xFF30..=0xFF3F).contains(&addr) {
-            return Apu::read_mask(addr);
+        if (0xFF30..=0xFF3F).contains(&addr) {
+            if self.ch3.enabled && self.ch3.dac_enabled {
+                return 0xFF;
+            }
+            return self.wave_ram[(addr - 0xFF30) as usize];
         }
 
-        let value = match addr {
-            0xFF10 => self
-                .ch1
-                .sweep
-                .as_ref()
-                .map(|s| (s.period << 4) | ((s.negate as u8) << 3) | s.shift)
-                .unwrap_or(0x00),
-            0xFF11 => (self.ch1.duty << 6) | self.ch1.length,
-            0xFF12 => {
-                (self.ch1.envelope.initial << 4)
-                    | ((self.ch1.envelope.add as u8) << 3)
-                    | self.ch1.envelope.period
-            }
-            0xFF13 => (self.ch1.frequency & 0xFF) as u8,
-            0xFF14 => {
-                ((self.ch1.length_enable as u8) << 6) | ((self.ch1.frequency >> 8) as u8 & 0x07)
-            }
-            0xFF16 => (self.ch2.duty << 6) | self.ch2.length,
-            0xFF17 => {
-                (self.ch2.envelope.initial << 4)
-                    | ((self.ch2.envelope.add as u8) << 3)
-                    | self.ch2.envelope.period
-            }
-            0xFF18 => (self.ch2.frequency & 0xFF) as u8,
-            0xFF19 => {
-                ((self.ch2.length_enable as u8) << 6) | ((self.ch2.frequency >> 8) as u8 & 0x07)
-            }
-            0xFF1A => {
-                if self.ch3.dac_enabled {
-                    0x80
-                } else {
-                    0
-                }
-            }
-            0xFF1B => self.ch3.length as u8,
-            0xFF1C => (self.ch3.volume << 5) | 0x9F,
-            0xFF1D => (self.ch3.frequency & 0xFF) as u8,
-            0xFF1E => {
-                ((self.ch3.length_enable as u8) << 6) | ((self.ch3.frequency >> 8) as u8 & 0x07)
-            }
-            0xFF20 => self.ch4.length,
-            0xFF21 => {
-                (self.ch4.envelope.initial << 4)
-                    | ((self.ch4.envelope.add as u8) << 3)
-                    | self.ch4.envelope.period
-            }
-            0xFF22 => {
-                (self.ch4.clock_shift << 4) | ((self.ch4.width7 as u8) << 3) | self.ch4.divisor
-            }
-            0xFF23 => (self.ch4.length_enable as u8) << 6,
-            0xFF24 => self.nr50,
-            0xFF25 => self.nr51,
-            0xFF30..=0xFF3F => {
-                if self.ch3.enabled && self.ch3.dac_enabled {
-                    0xFF
-                } else {
-                    self.wave_ram[(addr - 0xFF30) as usize]
-                }
-            }
-            _ => 0xFF,
-        };
-
-        value | Apu::read_mask(addr)
+        let idx = (addr - 0xFF10) as usize;
+        self.regs[idx] | Apu::read_mask(addr)
     }
 
     pub fn write_reg(&mut self, addr: u16, val: u8) {
         if self.nr52 & 0x80 == 0 && addr != 0xFF26 && !(0xFF30..=0xFF3F).contains(&addr) {
             return;
         }
+
+        if (0xFF30..=0xFF3F).contains(&addr) {
+            self.wave_shadow[(addr - 0xFF30) as usize] = val;
+        }
+
+    if addr != 0xFF26 && (0xFF10..=0xFF3F).contains(&addr) {
+        self.regs[(addr - 0xFF10) as usize] = val;
+    }
+
         match addr {
             0xFF10 => {
                 if let Some(s) = self.ch1.sweep.as_mut() {
@@ -589,11 +549,13 @@ impl Apu {
             0xFF25 => self.nr51 = val,
             0xFF26 => {
                 if val & 0x80 == 0 {
-                    self.nr52 &= 0x7F;
+                    self.nr52 &= !0x80;
                     self.power_off();
                 } else {
                     self.nr52 |= 0x80;
                 }
+                let idx = (addr - 0xFF10) as usize;
+                self.regs[idx] = 0x70 | (self.nr52 & 0x80);
             }
             0xFF30..=0xFF3F => {
                 if !(self.ch3.enabled && self.ch3.dac_enabled) {
