@@ -98,7 +98,9 @@ impl Cpu {
         let hw_cycles = if self.double_speed { 2 } else { 4 } * m_cycles as u16;
         self.cycles += hw_cycles as u64;
         mmu.timer.step(hw_cycles, &mut mmu.if_reg);
-        mmu.ppu.step(hw_cycles, &mut mmu.if_reg);
+        if mmu.ppu.step(hw_cycles, &mut mmu.if_reg) {
+            mmu.hdma_hblank_transfer();
+        }
         mmu.apu.lock().unwrap().step(hw_cycles);
     }
 

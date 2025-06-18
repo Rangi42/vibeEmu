@@ -489,8 +489,9 @@ impl Ppu {
         }
     }
 
-    pub fn step(&mut self, cycles: u16, if_reg: &mut u8) {
+    pub fn step(&mut self, cycles: u16, if_reg: &mut u8) -> bool {
         let mut remaining = cycles;
+        let mut hblank_triggered = false;
         while remaining > 0 {
             let increment = remaining.min(4);
             remaining -= increment;
@@ -551,6 +552,7 @@ impl Ppu {
                         self.mode_clock -= 172;
                         self.render_scanline();
                         self.mode = 0;
+                        hblank_triggered = true;
                         if self.stat & 0x08 != 0 {
                             *if_reg |= 0x02;
                         }
@@ -561,6 +563,7 @@ impl Ppu {
 
             self.update_stat_irq(if_reg);
         }
+        hblank_triggered
     }
 
     fn update_stat_irq(&mut self, if_reg: &mut u8) {
