@@ -47,6 +47,8 @@ pub struct Mmu {
     dma_source: u16,
     pending_dma: Option<u16>,
     pending_delay: u16,
+    /// Remaining stall cycles after a General DMA
+    gdma_cycles: u32,
     cgb_mode: bool,
 }
 
@@ -85,6 +87,7 @@ impl Mmu {
             dma_source: 0,
             pending_dma: None,
             pending_delay: 0,
+            gdma_cycles: 0,
             cgb_mode: cgb,
         }
     }
@@ -210,25 +213,37 @@ impl Mmu {
             0xFF10..=0xFF3F => self.apu.lock().unwrap().write_reg(addr, val),
             0xFF40..=0xFF45 | 0xFF47..=0xFF4B | 0xFF68..=0xFF6B => self.ppu.write_reg(addr, val),
             0xFF51 => {
-                self.hdma.src = (val as u16) << 8 | (self.hdma.src & 0x00FF);
+                if !self.hdma.active {
+                    self.hdma.src = (val as u16) << 8 | (self.hdma.src & 0x00FF);
+                }
             }
             0xFF52 => {
-                self.hdma.src = (self.hdma.src & 0xFF00) | (val & 0xF0) as u16;
+                if !self.hdma.active {
+                    self.hdma.src = (self.hdma.src & 0xFF00) | (val & 0xF0) as u16;
+                }
             }
             0xFF53 => {
-                let vram_hi = (val & 0x1F) as u16;
-                self.hdma.dst = 0x8000 | (vram_hi << 8) | (self.hdma.dst & 0x00FF);
+                if !self.hdma.active {
+                    let vram_hi = (val & 0x1F) as u16;
+                    self.hdma.dst = 0x8000 | (vram_hi << 8) | (self.hdma.dst & 0x00FF);
+                }
             }
             0xFF54 => {
-                self.hdma.dst = (self.hdma.dst & 0xFF00) | (val & 0xF0) as u16;
+                if !self.hdma.active {
+                    self.hdma.dst = (self.hdma.dst & 0xFF00) | (val & 0xF0) as u16;
+                }
             }
             0xFF55 => {
+                if !self.cgb_mode {
+                    return;
+                }
                 let requested_blocks = (val & 0x7F) + 1;
-                if val & 0x80 == 0 {
-                    self.start_gdma(requested_blocks);
-                } else if self.hdma.active {
+                if self.hdma.active && (val & 0x80) == 0 {
+                    // Abort ongoing HDMA
                     self.hdma.active = false;
                     self.hdma.blocks = 0;
+                } else if val & 0x80 == 0 {
+                    self.start_gdma(requested_blocks);
                 } else {
                     self.hdma.mode = DmaMode::Hdma;
                     self.hdma.blocks = requested_blocks;
@@ -267,6 +282,11 @@ impl Mmu {
             0xFFFF => self.ie_reg = (val & 0x1F) | (self.ie_reg & 0xE0),
             _ => {}
         }
+    }
+
+    /// Write to VRAM bypassing mode checks (used by DMA transfers)
+    fn vram_dma_write(&mut self, addr: u16, val: u8) {
+        self.ppu.vram[self.ppu.vram_bank][(addr - 0x8000) as usize] = val;
     }
 
     pub fn take_serial(&mut self) -> Vec<u8> {
@@ -309,17 +329,36 @@ impl Mmu {
         self.dma_cycles > 0 || self.pending_delay > 0
     }
 
+    /// Return true if a General or HBlank DMA stall is in progress.
+    pub fn gdma_active(&self) -> bool {
+        self.gdma_cycles > 0
+    }
+
+    /// Decrement the GDMA stall counter by the given number of m-cycles.
+    pub fn gdma_step(&mut self, cycles: u16) {
+        if self.gdma_cycles > 0 {
+            self.gdma_cycles = self.gdma_cycles.saturating_sub(cycles as u32);
+        }
+    }
+
     /// Perform a General DMA transfer immediately, consuming CPU cycles.
     fn start_gdma(&mut self, blocks: u8) {
         let total_bytes = blocks as usize * 0x10;
-        for i in 0..total_bytes {
-            let byte = self.read_byte(self.hdma.src.wrapping_add(i as u16));
-            let dst = (self.hdma.dst.wrapping_add(i as u16) & 0x9FF0) | ((i as u16) & 0x0F);
-            self.write_byte(dst, byte);
+        let mut src = self.hdma.src;
+        let mut dst = self.hdma.dst;
+
+        for _ in 0..total_bytes {
+            let byte = self.read_byte(src);
+            self.vram_dma_write(dst, byte);
+            src = src.wrapping_add(1);
+            dst = 0x8000 | ((dst.wrapping_add(1)) & 0x1FFF);
         }
-        self.tick(blocks as u32 * 8);
+
+        self.hdma.src = src;
+        self.hdma.dst = dst & 0xFFF0;
         self.hdma.active = false;
         self.hdma.blocks = 0;
+        self.gdma_cycles = blocks as u32 * 8;
     }
 
     /// Execute a single 0x10-byte HDMA burst during H-Blank.
@@ -330,10 +369,9 @@ impl Mmu {
 
         for _ in 0..0x10 {
             let byte = self.read_byte(self.hdma.src);
-            let dst = (self.hdma.dst & 0x9FF0) | (self.hdma.dst & 0x0F);
-            self.write_byte(dst, byte);
+            self.vram_dma_write(self.hdma.dst, byte);
             self.hdma.src = self.hdma.src.wrapping_add(1);
-            self.hdma.dst = self.hdma.dst.wrapping_add(1);
+            self.hdma.dst = 0x8000 | ((self.hdma.dst.wrapping_add(1)) & 0x1FFF);
         }
 
         self.hdma.blocks = self.hdma.blocks.saturating_sub(1);
@@ -341,7 +379,8 @@ impl Mmu {
             self.hdma.active = false;
         }
 
-        self.tick(8);
+        self.hdma.dst &= 0xFFF0;
+        self.gdma_cycles += 8;
     }
 
     fn tick(&mut self, m_cycles: u32) {

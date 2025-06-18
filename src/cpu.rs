@@ -334,6 +334,12 @@ impl Cpu {
             return;
         }
 
+        if mmu.gdma_active() {
+            mmu.gdma_step(1);
+            self.tick(mmu, 1);
+            return;
+        }
+
         if self.halted {
             self.tick(mmu, 1);
             self.handle_interrupts(mmu);
