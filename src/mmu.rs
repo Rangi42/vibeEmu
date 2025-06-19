@@ -117,7 +117,13 @@ impl Mmu {
         self.boot_mapped = true;
     }
 
-    pub fn read_byte(&mut self, addr: u16) -> u8 {
+    fn read_byte_inner(&mut self, addr: u16, allow_dma: bool) -> u8 {
+        if !allow_dma && self.dma_cycles > 0 {
+            match addr {
+                0x0000..=0x7FFF | 0xFF80..=0xFFFF | 0xFF46 => {}
+                _ => return 0xFF,
+            }
+        }
         match addr {
             0x0000..=0x00FF if self.boot_mapped => self
                 .boot_rom
@@ -150,7 +156,8 @@ impl Mmu {
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.if_reg,
             0xFF10..=0xFF3F => self.apu.lock().unwrap().read_reg(addr),
-            0xFF40..=0xFF4B | 0xFF68..=0xFF6B => self.ppu.read_reg(addr),
+            0xFF40..=0xFF45 | 0xFF47..=0xFF4B | 0xFF68..=0xFF6B => self.ppu.read_reg(addr),
+            0xFF46 => self.ppu.dma,
             0xFF51 => (self.hdma.src >> 8) as u8,
             0xFF52 => (self.hdma.src & 0x00F0) as u8,
             0xFF53 => ((self.hdma.dst & 0x1F00) >> 8) as u8,
@@ -184,7 +191,22 @@ impl Mmu {
         }
     }
 
+    pub fn read_byte(&mut self, addr: u16) -> u8 {
+        self.read_byte_inner(addr, false)
+    }
+
+    fn dma_read_byte(&mut self, addr: u16) -> u8 {
+        self.read_byte_inner(addr, true)
+    }
+
     pub fn write_byte(&mut self, addr: u16, val: u8) {
+        if self.dma_cycles > 0 {
+            match addr {
+                0xFF80..=0xFFFF | 0xFF46 => {}
+                _ => return,
+            }
+        }
+
         match addr {
             0x8000..=0x9FFF => {
                 if self.ppu.mode != 3 {
@@ -264,14 +286,9 @@ impl Mmu {
             0xFF46 => {
                 self.ppu.dma = val;
                 let src = (val as u16) << 8;
-                if self.dma_active() {
-                    self.pending_dma = Some(src);
-                    self.pending_delay = 4;
-                } else {
-                    self.dma_source = src;
-                    // 1 M-cycle delay (4 cycles) then 160 bytes * 4 cycles each
-                    self.dma_cycles = 644;
-                }
+                self.pending_dma = Some(src);
+                // DMA starts after two M-cycles (8 cycles)
+                self.pending_delay = 8;
             }
             0xFF50 => self.boot_mapped = false,
             0xFF70 => {
@@ -301,7 +318,8 @@ impl Mmu {
                 if self.pending_delay == 0 {
                     if let Some(src) = self.pending_dma.take() {
                         self.dma_source = src;
-                        self.dma_cycles = 644;
+                        // 160 bytes * 4 cycles each
+                        self.dma_cycles = 640;
                     }
                 }
             }
@@ -310,14 +328,11 @@ impl Mmu {
                 continue;
             }
 
-            let elapsed = 644 - self.dma_cycles;
-            if elapsed >= 4 {
-                let progress = elapsed - 4;
-                if progress % 4 == 0 && progress / 4 < 0xA0 {
-                    let idx: u16 = progress / 4;
-                    let byte = self.read_byte(self.dma_source.wrapping_add(idx));
-                    self.ppu.oam[idx as usize] = byte;
-                }
+            let elapsed = 640 - self.dma_cycles;
+            if elapsed % 4 == 0 && elapsed / 4 < 0xA0 {
+                let idx: u16 = elapsed / 4;
+                let byte = self.dma_read_byte(self.dma_source.wrapping_add(idx));
+                self.ppu.oam[idx as usize] = byte;
             }
 
             self.dma_cycles -= 1;
