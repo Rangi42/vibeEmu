@@ -184,7 +184,6 @@ fn call_cc_timing_gb() {
 }
 
 #[test]
-#[ignore]
 fn call_cc_timing2_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/call_cc_timing2.gb"),
@@ -204,7 +203,6 @@ fn call_timing_gb() {
 }
 
 #[test]
-#[ignore]
 fn call_timing2_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/call_timing2.gb"),
@@ -381,7 +379,6 @@ fn oam_dma__sources_GS_gb() {
 }
 
 #[test]
-#[ignore]
 fn oam_dma_restart_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/oam_dma_restart.gb"),
@@ -400,7 +397,6 @@ fn oam_dma_start_gb() {
 }
 
 #[test]
-#[ignore]
 fn oam_dma_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/oam_dma_timing.gb"),
@@ -534,7 +530,6 @@ fn ppu__vblank_stat_intr_GS_gb() {
 }
 
 #[test]
-#[ignore]
 fn push_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/push_timing.gb"),
@@ -593,7 +588,6 @@ fn reti_timing_gb() {
 }
 
 #[test]
-#[ignore]
 fn rst_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/rst_timing.gb"),
