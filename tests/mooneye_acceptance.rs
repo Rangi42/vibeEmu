@@ -391,7 +391,6 @@ fn oam_dma_restart_gb() {
 }
 
 #[test]
-#[ignore]
 fn oam_dma_start_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/oam_dma_start.gb"),

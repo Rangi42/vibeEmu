@@ -149,6 +149,7 @@ impl Cpu {
             mmu.hdma_hblank_transfer();
         }
         mmu.apu.lock().unwrap().step(hw_cycles);
+        mmu.dma_step(hw_cycles);
     }
 
     #[inline(always)]
@@ -383,12 +384,6 @@ impl Cpu {
     }
 
     pub fn step(&mut self, mmu: &mut crate::mmu::Mmu) {
-        if mmu.dma_active() {
-            mmu.dma_step(OAM_DMA_STEP_CYCLES.into());
-            self.tick(mmu, 1);
-            return;
-        }
-
         if mmu.gdma_active() {
             mmu.gdma_step(GDMA_STEP_CYCLES.into());
             self.tick(mmu, 1);
