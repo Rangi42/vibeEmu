@@ -559,7 +559,6 @@ fn ret_cc_timing_gb() {
 }
 
 #[test]
-#[ignore]
 fn ret_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/ret_timing.gb"),
