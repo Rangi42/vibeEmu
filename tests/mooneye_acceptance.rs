@@ -17,7 +17,6 @@ fn run_mooneye_acceptance<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u6
 }
 
 #[test]
-#[ignore]
 fn add_sp_e_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/add_sp_e_timing.gb"),
@@ -174,7 +173,6 @@ fn boot_regs_sgb2_gb() {
 }
 
 #[test]
-#[ignore]
 fn call_cc_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/call_cc_timing.gb"),
@@ -193,7 +191,6 @@ fn call_cc_timing2_gb() {
 }
 
 #[test]
-#[ignore]
 fn call_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/call_timing.gb"),
@@ -321,7 +318,6 @@ fn intr_timing_gb() {
 }
 
 #[test]
-#[ignore]
 fn jp_cc_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/jp_cc_timing.gb"),
@@ -331,7 +327,6 @@ fn jp_cc_timing_gb() {
 }
 
 #[test]
-#[ignore]
 fn jp_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/jp_timing.gb"),
@@ -341,7 +336,6 @@ fn jp_timing_gb() {
 }
 
 #[test]
-#[ignore]
 fn ld_hl_sp_e_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/ld_hl_sp_e_timing.gb"),
@@ -549,7 +543,6 @@ fn rapid_di_ei_gb() {
 }
 
 #[test]
-#[ignore]
 fn ret_cc_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/ret_cc_timing.gb"),
@@ -577,7 +570,6 @@ fn reti_intr_timing_gb() {
 }
 
 #[test]
-#[ignore]
 fn reti_timing_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/reti_timing.gb"),
