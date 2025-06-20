@@ -39,6 +39,7 @@ struct UiState {
     spawn_vram: bool,
 }
 
+use ui::window::resize_pixels;
 use ui::window::{UiWindow, WindowKind};
 
 #[derive(Parser)]
@@ -368,7 +369,10 @@ fn main() {
                                 windows.remove(window_id);
                             }
                             WindowEvent::Resized(size) => {
-                                win.pixels.resize_surface(size.width, size.height).ok();
+                                resize_pixels(&mut win.pixels, *size);
+                            }
+                            WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                                resize_pixels(&mut win.pixels, **new_inner_size);
                             }
                             WindowEvent::CursorMoved { position, .. }
                                 if matches!(win.kind, WindowKind::Main) =>

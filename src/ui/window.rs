@@ -21,6 +21,15 @@ pub enum WindowKind {
     Main,
 }
 
+/// Update the surface and buffer size of a [`Pixels`] instance.
+pub fn resize_pixels(pixels: &mut Pixels, new_size: winit::dpi::PhysicalSize<u32>) {
+    // Update surface size for wgpu
+    pixels.resize_surface(new_size.width, new_size.height).ok();
+
+    // Resize backing buffer if using a fixed internal resolution
+    // pixels.resize_buffer(SCREEN_W as u32, SCREEN_H as u32);
+}
+
 impl UiWindow {
     /// Create a new UiWindow with its own renderer
     pub fn new(kind: WindowKind, win: Window, pixels: Pixels, imgui: &mut imgui::Context) -> Self {
