@@ -103,7 +103,7 @@ fn spawn_debugger_window(
 
     let w = winit::window::WindowBuilder::new()
         .with_title("vibeEmu \u{2013} Debugger")
-        .with_inner_size(LogicalSize::new(640.0, 480.0))
+        .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64))
         .build(event_loop)
         .unwrap();
 
@@ -127,7 +127,7 @@ fn spawn_vram_window(
 
     let w = winit::window::WindowBuilder::new()
         .with_title("vibeEmu \u{2013} VRAM")
-        .with_inner_size(LogicalSize::new(640.0, 480.0))
+        .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64))
         .build(event_loop)
         .unwrap();
 
@@ -474,6 +474,15 @@ fn main() {
                                             )],
                                             depth_stencil_attachment: None,
                                         });
+
+                                    let surface_size = win.win.inner_size();
+                                    rpass.set_scissor_rect(
+                                        0,
+                                        0,
+                                        surface_size.width,
+                                        surface_size.height,
+                                    );
+
                                     win.renderer
                                         .render(
                                             draw_data,
