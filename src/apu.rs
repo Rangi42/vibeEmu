@@ -723,12 +723,16 @@ impl Apu {
         self.sequencer.step
     }
 
-    pub fn start_stream(apu: Arc<Mutex<Self>>) -> cpal::Stream {
+    pub fn start_stream(apu: Arc<Mutex<Self>>) -> Option<cpal::Stream> {
         let host = cpal::default_host();
-        let device = host.default_output_device().expect("no output device");
-        let supported = device
-            .default_output_config()
-            .expect("no supported output config");
+        let device = host.default_output_device()?;
+        let supported = match device.default_output_config() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("no supported output config: {e}");
+                return None;
+            }
+        };
         let sample_format = supported.sample_format();
         let config: cpal::StreamConfig = supported.into();
         {
@@ -797,7 +801,7 @@ impl Apu {
         };
 
         stream.play().expect("failed to play stream");
-        stream
+        Some(stream)
     }
 }
 

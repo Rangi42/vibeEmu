@@ -139,7 +139,7 @@ fn main() {
     let _stream = if args.headless {
         None
     } else {
-        Some(apu::Apu::start_stream(Arc::clone(&gb.mmu.apu)))
+        apu::Apu::start_stream(Arc::clone(&gb.mmu.apu))
     };
 
     let mut frame = vec![0u32; 160 * 144];
