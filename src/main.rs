@@ -277,22 +277,26 @@ fn main() {
                     pixels
                         .frame_mut()
                         .copy_from_slice(bytemuck::cast_slice(&frame));
+                    let draw_data = imgui.render();
                     let render_result = pixels.render_with(|encoder, render_target, _| {
-                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("imgui_pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: render_target,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: true,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                        });
-                        renderer
-                            .render(imgui.render(), pixels.queue(), pixels.device(), &mut rpass)
-                            .expect("imgui render failed");
+                        if draw_data.total_vtx_count > 0 {
+                            let mut rpass =
+                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("imgui_pass"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: render_target,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Load,
+                                            store: true,
+                                        },
+                                    })],
+                                    depth_stencil_attachment: None,
+                                });
+                            renderer
+                                .render(draw_data, pixels.queue(), pixels.device(), &mut rpass)
+                                .expect("imgui render failed");
+                        }
                         Ok(())
                     });
                     if render_result.is_err() {
