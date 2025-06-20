@@ -2,3 +2,4 @@
 *.sav
 *.rtc
 test_roms/
+imgui.ini
