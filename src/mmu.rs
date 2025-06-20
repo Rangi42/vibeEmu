@@ -120,8 +120,8 @@ impl Mmu {
     fn read_byte_inner(&mut self, addr: u16, allow_dma: bool) -> u8 {
         if !allow_dma && self.dma_cycles > 0 {
             match addr {
-                // allow ROM, WRAM and HRAM/I/O during DMA
-                0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF80..=0xFFFF | 0xFF46 => {}
+                // allow ROM, WRAM and all I/O/HRAM during DMA
+                0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
                 // block accesses within OAM (and forbidden gap)
                 0xFE00..=0xFEFF => return 0xFF,
                 // block VRAM and other regions
@@ -206,8 +206,8 @@ impl Mmu {
     pub fn write_byte(&mut self, addr: u16, val: u8) {
         if self.dma_cycles > 0 {
             match addr {
-                // allow writes to ROM, WRAM and HRAM/I/O during DMA
-                0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF80..=0xFFFF | 0xFF46 => {}
+                // allow writes to ROM, WRAM and all I/O/HRAM during DMA
+                0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
                 // block writes within OAM (and forbidden gap)
                 0xFE00..=0xFEFF => return,
                 // block VRAM and other regions
