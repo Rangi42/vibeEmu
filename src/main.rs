@@ -11,6 +11,9 @@ mod serial;
 mod timer;
 
 use clap::Parser;
+use imgui::{ConfigFlags, Context as ImguiContext};
+use imgui_wgpu::{Renderer, RendererConfig};
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use log::info;
 use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
@@ -85,7 +88,7 @@ fn cursor_in_screen(window: &winit::window::Window, pos: PhysicalPosition<f64>) 
     x_in && y_in
 }
 
-fn build_ui(_ui: &mut UiState) {
+fn build_ui(_state: &mut UiState, _ui: &imgui::Ui) {
     // Placeholder for UI rendering
 }
 
@@ -136,7 +139,7 @@ fn main() {
     let _stream = if args.headless {
         None
     } else {
-        Some(apu::Apu::start_stream(Arc::clone(&gb.mmu.apu)))
+        apu::Apu::start_stream(Arc::clone(&gb.mmu.apu))
     };
 
     let mut frame = vec![0u32; 160 * 144];
@@ -158,14 +161,22 @@ fn main() {
         let surface = SurfaceTexture::new(size.width, size.height, &window);
         let mut pixels = Pixels::new(160, 144, surface).expect("Pixels error");
 
-        let _device = pixels.device();
-        let _queue = pixels.queue();
-
+        let mut imgui = ImguiContext::create();
+        imgui.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE | ConfigFlags::VIEWPORTS_ENABLE;
+        let mut platform = WinitPlatform::init(&mut imgui);
+        platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
+        let renderer_config = RendererConfig {
+            texture_format: pixels.render_texture_format(),
+            ..Default::default()
+        };
+        let mut renderer =
+            Renderer::new(&mut imgui, pixels.device(), pixels.queue(), renderer_config);
         let mut state = 0xFFu8;
         let mut cursor_pos = PhysicalPosition::new(0.0, 0.0);
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
+            platform.handle_event(imgui.io_mut(), &window, &event);
             match event {
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
@@ -234,10 +245,12 @@ fn main() {
                         gb.cpu.step(&mut gb.mmu);
                     }
 
-                    build_ui(&mut ui_state);
+                    if gb.mmu.ppu.frame_ready() {
+                        frame.copy_from_slice(gb.mmu.ppu.framebuffer());
+                        gb.mmu.ppu.clear_frame_flag();
+                    }
 
-                    frame.copy_from_slice(gb.mmu.ppu.framebuffer());
-                    gb.mmu.ppu.clear_frame_flag();
+                    // UI built during RedrawRequested
                     window.request_redraw();
 
                     if args.debug && frame_count % 60 == 0 {
@@ -260,10 +273,45 @@ fn main() {
                     frame_count += 1;
                 }
                 Event::RedrawRequested(_) => {
-                    pixels
-                        .frame_mut()
-                        .copy_from_slice(bytemuck::cast_slice(&frame));
-                    if pixels.render().is_err() {
+                    platform
+                        .prepare_frame(imgui.io_mut(), &window)
+                        .expect("prepare frame");
+                    let ui = imgui.frame();
+                    build_ui(&mut ui_state, ui);
+                    platform.prepare_render(ui, &window);
+
+                    let pixel_frame: &mut [u32] = bytemuck::cast_slice_mut(pixels.frame_mut());
+                    for (dst, src) in pixel_frame.iter_mut().zip(&frame) {
+                        let r = ((src >> 16) & 0xFF) as u8;
+                        let g = ((src >> 8) & 0xFF) as u8;
+                        let b = (src & 0xFF) as u8;
+                        *dst = u32::from_ne_bytes([r, g, b, 0xFF]);
+                    }
+                    let draw_data = imgui.render();
+                    let render_result = pixels.render_with(|encoder, render_target, context| {
+                        context.scaling_renderer.render(encoder, render_target);
+
+                        if draw_data.total_vtx_count > 0 {
+                            let mut rpass =
+                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("imgui_pass"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: render_target,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Load,
+                                            store: true,
+                                        },
+                                    })],
+                                    depth_stencil_attachment: None,
+                                });
+                            renderer
+                                .render(draw_data, pixels.queue(), pixels.device(), &mut rpass)
+                                .expect("imgui render failed");
+                        }
+                        Ok(())
+                    });
+                    if render_result.is_err() {
                         *control_flow = ControlFlow::Exit;
                     }
                 }
