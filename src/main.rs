@@ -16,6 +16,7 @@ use imgui_wgpu::{Renderer, RendererConfig};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use log::info;
 use pixels::{Pixels, SurfaceTexture};
+use rfd::FileDialog;
 use std::sync::Arc;
 use std::time::Duration;
 use winit::dpi::PhysicalPosition;
@@ -88,8 +89,132 @@ fn cursor_in_screen(window: &winit::window::Window, pos: PhysicalPosition<f64>) 
     x_in && y_in
 }
 
-fn build_ui(_state: &mut UiState, _ui: &imgui::Ui) {
-    // Placeholder for UI rendering
+fn build_ui(state: &mut UiState, ui: &imgui::Ui, gb: &mut gameboy::GameBoy) {
+    if state.show_context {
+        let flags = imgui::WindowFlags::NO_TITLE_BAR
+            | imgui::WindowFlags::NO_MOVE
+            | imgui::WindowFlags::NO_DECORATION;
+        ui.window("ctx")
+            .position(state.ctx_pos, imgui::Condition::Always)
+            .flags(flags)
+            .always_auto_resize(true)
+            .opened(&mut state.show_context)
+            .build(|| {
+                if ui.button("Load ROM") {
+                    if let Some(path) = FileDialog::new()
+                        .add_filter("Game Boy ROM", &["gb", "gbc"])
+                        .pick_file()
+                    {
+                        if let Ok(cart) = cartridge::Cartridge::from_file(&path) {
+                            gb.reset();
+                            gb.mmu.load_cart(cart);
+                            state.paused = false;
+                        }
+                    }
+                }
+                if ui.button("Reset GB") {
+                    gb.reset();
+                    state.paused = false;
+                }
+                if ui.button("Debugger") {
+                    state.show_debugger = true;
+                }
+                if ui.button("VRAM Viewer") {
+                    state.show_vram = true;
+                }
+            });
+    }
+
+    if state.show_debugger {
+        ui.window("Debugger")
+            .opened(&mut state.show_debugger)
+            .build(|| {
+                if let Some(_table) = ui.begin_table("regs", 2) {
+                    ui.table_next_row();
+                    ui.table_next_column();
+                    ui.text("A");
+                    ui.table_next_column();
+                    ui.text(format!("{:02X}", gb.cpu.a));
+
+                    ui.table_next_column();
+                    ui.text("F");
+                    ui.table_next_column();
+                    ui.text(format!("{:02X}", gb.cpu.f));
+
+                    ui.table_next_column();
+                    ui.text("B");
+                    ui.table_next_column();
+                    ui.text(format!("{:02X}", gb.cpu.b));
+
+                    ui.table_next_column();
+                    ui.text("C");
+                    ui.table_next_column();
+                    ui.text(format!("{:02X}", gb.cpu.c));
+
+                    ui.table_next_column();
+                    ui.text("D");
+                    ui.table_next_column();
+                    ui.text(format!("{:02X}", gb.cpu.d));
+
+                    ui.table_next_column();
+                    ui.text("E");
+                    ui.table_next_column();
+                    ui.text(format!("{:02X}", gb.cpu.e));
+
+                    ui.table_next_column();
+                    ui.text("H");
+                    ui.table_next_column();
+                    ui.text(format!("{:02X}", gb.cpu.h));
+
+                    ui.table_next_column();
+                    ui.text("L");
+                    ui.table_next_column();
+                    ui.text(format!("{:02X}", gb.cpu.l));
+
+                    ui.table_next_column();
+                    ui.text("SP");
+                    ui.table_next_column();
+                    ui.text(format!("{:04X}", gb.cpu.sp));
+
+                    ui.table_next_column();
+                    ui.text("PC");
+                    ui.table_next_column();
+                    ui.text(format!("{:04X}", gb.cpu.pc));
+
+                    ui.table_next_column();
+                    ui.text("IME");
+                    ui.table_next_column();
+                    ui.text(format!("{}", gb.cpu.ime));
+
+                    ui.table_next_column();
+                    ui.text("Cycles");
+                    ui.table_next_column();
+                    ui.text(format!("{}", gb.cpu.cycles));
+                }
+            });
+    }
+
+    if state.show_vram {
+        ui.window("VRAM Viewer")
+            .size([640.0, 480.0], imgui::Condition::FirstUseEver)
+            .opened(&mut state.show_vram)
+            .build(|| {
+                if let Some(_tabbar) = imgui::TabBar::new("vram_tabs").begin(ui) {
+                    if let Some(_tab) = imgui::TabItem::new("BG Map").begin(ui) {
+                        // draw BG map texture
+                    }
+                    if let Some(_tab) = imgui::TabItem::new("Tiles").begin(ui) {
+                        // 8×8 tile atlas
+                    }
+                    if let Some(_tab) = imgui::TabItem::new("OAM").begin(ui) {
+                        // sprite inspector
+                    }
+                    if let Some(_tab) = imgui::TabItem::new("Palettes").begin(ui) {
+                        // CGB palette table
+                    }
+                }
+            });
+    }
 }
 
 fn main() {
@@ -277,7 +402,7 @@ fn main() {
                         .prepare_frame(imgui.io_mut(), &window)
                         .expect("prepare frame");
                     let ui = imgui.frame();
-                    build_ui(&mut ui_state, ui);
+                    build_ui(&mut ui_state, ui, &mut gb);
                     platform.prepare_render(ui, &window);
 
                     let pixel_frame: &mut [u32] = bytemuck::cast_slice_mut(pixels.frame_mut());
