@@ -4,7 +4,7 @@
 
 ---
 
-- [ ] **Create a per-window wrapper**
+- [x] **Create a per-window wrapper**
 
     ```rust
     struct UiWindow {
@@ -17,13 +17,13 @@
 
 ---
 
-- [ ] **Add a `windows: HashMap<WindowId, UiWindow>` to `main.rs`**
+- [x] **Add a `windows: HashMap<WindowId, UiWindow>` to `main.rs`**
 
     Seed it with the existing main screen window (kind = `Main`).
 
 ---
 
-- [ ] **Attach every new window to ImGui’s platform layer**
+- [x] **Attach every new window to ImGui’s platform layer**
 
     ```rust
     platform.attach_window(imgui.io_mut(), &new_win.window, HiDpiMode::Rounded);
@@ -31,7 +31,7 @@
 
 ---
 
-- [ ] **Create a window spawn helper function**
+- [x] **Create a window spawn helper function**
 
     ```rust
     fn spawn_debugger_window(event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
@@ -67,7 +67,7 @@
 
 ---
 
-- [ ] **Update context menu to spawn windows on click**
+- [x] **Update context menu to spawn windows on click**
 
     ```rust
     if ui.button("Debugger") && !windows.values().any(|w| w.kind == WindowKind::Debugger) {
@@ -78,7 +78,7 @@
 
 ---
 
-- [ ] **Implement centralized event loop logic**
+- [x] **Implement centralized event loop logic**
 
     ```rust
     event_loop.run(move |event, target, cf| {
@@ -120,7 +120,7 @@
 
 ---
 
-- [ ] **Write per-window rendering helpers**
+- [x] **Write per-window rendering helpers**
 
     ```rust
     fn draw_debugger(pixels: &mut Pixels, gb: &mut GameBoy, ui: &imgui::Ui) {
@@ -131,7 +131,7 @@
 
 ---
 
-- [ ] **Support resume-on-click in the main window**
+- [x] **Support resume-on-click in the main window**
 
     ```rust
     WindowEvent::MouseInput {
@@ -151,7 +151,7 @@
 
 ---
 
-- [ ] **Avoid `ViewportsEnable` config flag**
+- [x] **Avoid `ViewportsEnable` config flag**
 
     Don't use this:
 
