@@ -282,7 +282,10 @@ fn main() {
 
                     let pixel_frame: &mut [u32] = bytemuck::cast_slice_mut(pixels.frame_mut());
                     for (dst, src) in pixel_frame.iter_mut().zip(&frame) {
-                        *dst = 0xFF00_0000 | *src;
+                        let r = ((src >> 16) & 0xFF) as u8;
+                        let g = ((src >> 8) & 0xFF) as u8;
+                        let b = (src & 0xFF) as u8;
+                        *dst = u32::from_ne_bytes([r, g, b, 0xFF]);
                     }
                     let draw_data = imgui.render();
                     let render_result = pixels.render_with(|encoder, render_target, context| {
