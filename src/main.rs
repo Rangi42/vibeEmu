@@ -9,14 +9,15 @@ mod mmu;
 mod ppu;
 mod serial;
 mod timer;
+mod ui;
 
 use clap::Parser;
 use imgui::{ConfigFlags, Context as ImguiContext};
-use imgui_wgpu::{Renderer, RendererConfig};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use log::info;
 use pixels::{Pixels, SurfaceTexture};
 use rfd::FileDialog;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use winit::dpi::PhysicalPosition;
@@ -34,9 +35,11 @@ struct UiState {
     paused: bool,
     show_context: bool,
     ctx_pos: [f32; 2],
-    show_debugger: bool,
-    show_vram: bool,
+    spawn_debugger: bool,
+    spawn_vram: bool,
 }
+
+use ui::window::{UiWindow, WindowKind};
 
 #[derive(Parser)]
 struct Args {
@@ -89,7 +92,143 @@ fn cursor_in_screen(window: &winit::window::Window, pos: PhysicalPosition<f64>) 
     x_in && y_in
 }
 
-fn build_ui(state: &mut UiState, ui: &imgui::Ui, gb: &mut gameboy::GameBoy) {
+fn spawn_debugger_window(
+    event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+    platform: &mut WinitPlatform,
+    imgui: &mut ImguiContext,
+    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
+) {
+    use winit::dpi::LogicalSize;
+
+    let w = winit::window::WindowBuilder::new()
+        .with_title("vibeEmu \u{2013} Debugger")
+        .with_inner_size(LogicalSize::new(640.0, 480.0))
+        .build(event_loop)
+        .unwrap();
+
+    let size = w.inner_size();
+    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
+    let pixels = pixels::Pixels::new(1, 1, surface).expect("Pixels error");
+
+    platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
+
+    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, imgui);
+    windows.insert(ui_win.win.id(), ui_win);
+}
+
+fn spawn_vram_window(
+    event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+    platform: &mut WinitPlatform,
+    imgui: &mut ImguiContext,
+    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
+) {
+    use winit::dpi::LogicalSize;
+
+    let w = winit::window::WindowBuilder::new()
+        .with_title("vibeEmu \u{2013} VRAM")
+        .with_inner_size(LogicalSize::new(640.0, 480.0))
+        .build(event_loop)
+        .unwrap();
+
+    let size = w.inner_size();
+    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
+    let pixels = pixels::Pixels::new(1, 1, surface).expect("Pixels error");
+
+    platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
+
+    let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, imgui);
+    windows.insert(ui_win.win.id(), ui_win);
+}
+
+fn draw_debugger(pixels: &mut Pixels, gb: &mut gameboy::GameBoy, ui: &imgui::Ui) {
+    let _ = pixels.frame_mut();
+    if let Some(_table) = ui.begin_table("regs", 2) {
+        ui.table_next_row();
+        ui.table_next_column();
+        ui.text("A");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.a));
+
+        ui.table_next_column();
+        ui.text("F");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.f));
+
+        ui.table_next_column();
+        ui.text("B");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.b));
+
+        ui.table_next_column();
+        ui.text("C");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.c));
+
+        ui.table_next_column();
+        ui.text("D");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.d));
+
+        ui.table_next_column();
+        ui.text("E");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.e));
+
+        ui.table_next_column();
+        ui.text("H");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.h));
+
+        ui.table_next_column();
+        ui.text("L");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.l));
+
+        ui.table_next_column();
+        ui.text("SP");
+        ui.table_next_column();
+        ui.text(format!("{:04X}", gb.cpu.sp));
+
+        ui.table_next_column();
+        ui.text("PC");
+        ui.table_next_column();
+        ui.text(format!("{:04X}", gb.cpu.pc));
+
+        ui.table_next_column();
+        ui.text("IME");
+        ui.table_next_column();
+        ui.text(format!("{}", gb.cpu.ime));
+
+        ui.table_next_column();
+        ui.text("Cycles");
+        ui.table_next_column();
+        ui.text(format!("{}", gb.cpu.cycles));
+    }
+}
+
+fn draw_vram(pixels: &mut Pixels, _gb: &mut gameboy::GameBoy, ui: &imgui::Ui) {
+    let _ = pixels.frame_mut();
+    ui.text("VRAM viewer not implemented");
+}
+
+fn draw_game_screen(pixels: &mut Pixels, frame: &[u32]) {
+    let pixel_frame: &mut [u32] = bytemuck::cast_slice_mut(pixels.frame_mut());
+    for (dst, src) in pixel_frame.iter_mut().zip(frame) {
+        let r = ((src >> 16) & 0xFF) as u8;
+        let g = ((src >> 8) & 0xFF) as u8;
+        let b = (src & 0xFF) as u8;
+        *dst = u32::from_ne_bytes([r, g, b, 0xFF]);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_ui(
+    state: &mut UiState,
+    ui: &imgui::Ui,
+    gb: &mut gameboy::GameBoy,
+    _event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+    _platform: &mut WinitPlatform,
+) {
     if state.show_context {
         let flags = imgui::WindowFlags::NO_TITLE_BAR
             | imgui::WindowFlags::NO_MOVE
@@ -121,106 +260,15 @@ fn build_ui(state: &mut UiState, ui: &imgui::Ui, gb: &mut gameboy::GameBoy) {
                     close_menu = true;
                 }
                 if ui.button("Debugger") {
-                    state.show_debugger = true;
+                    state.spawn_debugger = true;
                     close_menu = true;
                 }
                 if ui.button("VRAM Viewer") {
-                    state.show_vram = true;
+                    state.spawn_vram = true;
                     close_menu = true;
                 }
             });
         state.show_context = open && !close_menu;
-    }
-
-    if state.show_debugger {
-        ui.window("Debugger")
-            .opened(&mut state.show_debugger)
-            .build(|| {
-                if let Some(_table) = ui.begin_table("regs", 2) {
-                    ui.table_next_row();
-                    ui.table_next_column();
-                    ui.text("A");
-                    ui.table_next_column();
-                    ui.text(format!("{:02X}", gb.cpu.a));
-
-                    ui.table_next_column();
-                    ui.text("F");
-                    ui.table_next_column();
-                    ui.text(format!("{:02X}", gb.cpu.f));
-
-                    ui.table_next_column();
-                    ui.text("B");
-                    ui.table_next_column();
-                    ui.text(format!("{:02X}", gb.cpu.b));
-
-                    ui.table_next_column();
-                    ui.text("C");
-                    ui.table_next_column();
-                    ui.text(format!("{:02X}", gb.cpu.c));
-
-                    ui.table_next_column();
-                    ui.text("D");
-                    ui.table_next_column();
-                    ui.text(format!("{:02X}", gb.cpu.d));
-
-                    ui.table_next_column();
-                    ui.text("E");
-                    ui.table_next_column();
-                    ui.text(format!("{:02X}", gb.cpu.e));
-
-                    ui.table_next_column();
-                    ui.text("H");
-                    ui.table_next_column();
-                    ui.text(format!("{:02X}", gb.cpu.h));
-
-                    ui.table_next_column();
-                    ui.text("L");
-                    ui.table_next_column();
-                    ui.text(format!("{:02X}", gb.cpu.l));
-
-                    ui.table_next_column();
-                    ui.text("SP");
-                    ui.table_next_column();
-                    ui.text(format!("{:04X}", gb.cpu.sp));
-
-                    ui.table_next_column();
-                    ui.text("PC");
-                    ui.table_next_column();
-                    ui.text(format!("{:04X}", gb.cpu.pc));
-
-                    ui.table_next_column();
-                    ui.text("IME");
-                    ui.table_next_column();
-                    ui.text(format!("{}", gb.cpu.ime));
-
-                    ui.table_next_column();
-                    ui.text("Cycles");
-                    ui.table_next_column();
-                    ui.text(format!("{}", gb.cpu.cycles));
-                }
-            });
-    }
-
-    if state.show_vram {
-        ui.window("VRAM Viewer")
-            .size([640.0, 480.0], imgui::Condition::FirstUseEver)
-            .opened(&mut state.show_vram)
-            .build(|| {
-                if let Some(_tabbar) = imgui::TabBar::new("vram_tabs").begin(ui) {
-                    if let Some(_tab) = imgui::TabItem::new("BG Map").begin(ui) {
-                        // draw BG map texture
-                    }
-                    if let Some(_tab) = imgui::TabItem::new("Tiles").begin(ui) {
-                        // 8×8 tile atlas
-                    }
-                    if let Some(_tab) = imgui::TabItem::new("OAM").begin(ui) {
-                        // sprite inspector
-                    }
-                    if let Some(_tab) = imgui::TabItem::new("Palettes").begin(ui) {
-                        // CGB palette table
-                    }
-                }
-            });
     }
 }
 
@@ -291,89 +339,172 @@ fn main() {
 
         let size = window.inner_size();
         let surface = SurfaceTexture::new(size.width, size.height, &window);
-        let mut pixels = Pixels::new(160, 144, surface).expect("Pixels error");
+        let pixels = Pixels::new(160, 144, surface).expect("Pixels error");
 
         let mut imgui = ImguiContext::create();
-        imgui.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE | ConfigFlags::VIEWPORTS_ENABLE;
+        imgui.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE;
         let mut platform = WinitPlatform::init(&mut imgui);
         platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
-        let renderer_config = RendererConfig {
-            texture_format: pixels.render_texture_format(),
-            ..Default::default()
-        };
-        let mut renderer =
-            Renderer::new(&mut imgui, pixels.device(), pixels.queue(), renderer_config);
+
+        let mut windows = HashMap::new();
+        let main_win = UiWindow::new(WindowKind::Main, window, pixels, &mut imgui);
+        windows.insert(main_win.win.id(), main_win);
+
         let mut state = 0xFFu8;
         let mut cursor_pos = PhysicalPosition::new(0.0, 0.0);
 
-        event_loop.run(move |event, _, control_flow| {
+        event_loop.run(move |event, target, control_flow| {
             *control_flow = ControlFlow::Poll;
-            platform.handle_event(imgui.io_mut(), &window, &event);
-            match event {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-                    WindowEvent::Resized(size) => {
-                        let _ = pixels.resize_surface(size.width, size.height);
-                    }
-                    WindowEvent::CursorMoved { position, .. } => {
-                        cursor_pos = position;
-                    }
-                    WindowEvent::MouseInput {
-                        state: ElementState::Pressed,
-                        button: MouseButton::Right,
-                        ..
-                    } => {
-                        if !ui_state.paused && cursor_in_screen(&window, cursor_pos) {
-                            ui_state.paused = true;
-                            ui_state.show_context = true;
-                            ui_state.ctx_pos = [cursor_pos.x as f32, cursor_pos.y as f32];
-                        }
-                    }
-                    WindowEvent::MouseInput {
-                        state: ElementState::Pressed,
-                        button: MouseButton::Left,
-                        ..
-                    } => {
-                        if ui_state.paused && !imgui.io().want_capture_mouse {
-                            ui_state.paused = false;
-                            ui_state.show_context = false;
-                        }
-                    }
-                    WindowEvent::KeyboardInput { input, .. } => {
-                        // Allow arrows unless we're paused or actively typing in ImGui
-                        if !(ui_state.paused || imgui.io().want_text_input) {
-                            if let Some(key) = input.virtual_keycode {
-                                let pressed = input.state == ElementState::Pressed;
-                                let mask = match key {
-                                    VirtualKeyCode::Right => Some(0x01),
-                                    VirtualKeyCode::Left => Some(0x02),
-                                    VirtualKeyCode::Up => Some(0x04),
-                                    VirtualKeyCode::Down => Some(0x08),
-                                    VirtualKeyCode::S => Some(0x10),
-                                    VirtualKeyCode::A => Some(0x20),
-                                    VirtualKeyCode::LShift | VirtualKeyCode::RShift => Some(0x40),
-                                    VirtualKeyCode::Return => Some(0x80),
-                                    VirtualKeyCode::Escape => {
-                                        if pressed {
-                                            *control_flow = ControlFlow::Exit;
-                                        }
-                                        None
-                                    }
-                                    _ => None,
-                                };
-                                if let Some(mask) = mask {
-                                    if pressed {
-                                        state &= !mask;
-                                    } else {
-                                        state |= mask;
-                                    }
-                                    gb.mmu.input.update_state(state, &mut gb.mmu.if_reg);
+            match &event {
+                Event::WindowEvent {
+                    window_id,
+                    event: win_event,
+                    ..
+                } => {
+                    if let Some(win) = windows.get_mut(window_id) {
+                        platform.handle_event(imgui.io_mut(), &win.win, &event);
+                        match win_event {
+                            WindowEvent::CloseRequested => {
+                                windows.remove(window_id);
+                            }
+                            WindowEvent::Resized(size) => {
+                                win.pixels.resize_surface(size.width, size.height).ok();
+                            }
+                            WindowEvent::CursorMoved { position, .. }
+                                if matches!(win.kind, WindowKind::Main) =>
+                            {
+                                cursor_pos = *position;
+                            }
+                            WindowEvent::MouseInput {
+                                state: ElementState::Pressed,
+                                button: MouseButton::Right,
+                                ..
+                            } if matches!(win.kind, WindowKind::Main) => {
+                                if !ui_state.paused && cursor_in_screen(&win.win, cursor_pos) {
+                                    ui_state.paused = true;
+                                    ui_state.show_context = true;
+                                    ui_state.ctx_pos = [cursor_pos.x as f32, cursor_pos.y as f32];
                                 }
                             }
+                            WindowEvent::MouseInput {
+                                state: ElementState::Pressed,
+                                button: MouseButton::Left,
+                                ..
+                            } if matches!(win.kind, WindowKind::Main) => {
+                                ui_state.paused = false;
+                            }
+                            WindowEvent::KeyboardInput { input, .. }
+                                if matches!(win.kind, WindowKind::Main) =>
+                            {
+                                if !(ui_state.paused || imgui.io().want_text_input) {
+                                    if let Some(key) = input.virtual_keycode {
+                                        let pressed = input.state == ElementState::Pressed;
+                                        let mask = match key {
+                                            VirtualKeyCode::Right => Some(0x01),
+                                            VirtualKeyCode::Left => Some(0x02),
+                                            VirtualKeyCode::Up => Some(0x04),
+                                            VirtualKeyCode::Down => Some(0x08),
+                                            VirtualKeyCode::S => Some(0x10),
+                                            VirtualKeyCode::A => Some(0x20),
+                                            VirtualKeyCode::LShift | VirtualKeyCode::RShift => {
+                                                Some(0x40)
+                                            }
+                                            VirtualKeyCode::Return => Some(0x80),
+                                            VirtualKeyCode::Escape => {
+                                                if pressed {
+                                                    *control_flow = ControlFlow::Exit;
+                                                }
+                                                None
+                                            }
+                                            _ => None,
+                                        };
+                                        if let Some(mask) = mask {
+                                            if pressed {
+                                                state &= !mask;
+                                            } else {
+                                                state |= mask;
+                                            }
+                                            gb.mmu.input.update_state(state, &mut gb.mmu.if_reg);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
-                },
+                }
+                Event::RedrawRequested(window_id) => {
+                    if let Some(win) = windows.get_mut(window_id) {
+                        platform.prepare_frame(imgui.io_mut(), &win.win).unwrap();
+                        let ui = imgui.frame();
+
+                        match win.kind {
+                            WindowKind::Main => {
+                                build_ui(&mut ui_state, ui, &mut gb, target, &mut platform);
+                                draw_game_screen(&mut win.pixels, &frame);
+                            }
+                            WindowKind::Debugger => draw_debugger(&mut win.pixels, &mut gb, ui),
+                            WindowKind::VramViewer => draw_vram(&mut win.pixels, &mut gb, ui),
+                        }
+
+                        platform.prepare_render(ui, &win.win);
+                        let draw_data = imgui.render();
+
+                        let render_result =
+                            win.pixels.render_with(|encoder, render_target, context| {
+                                context.scaling_renderer.render(encoder, render_target);
+
+                                if draw_data.total_vtx_count > 0 {
+                                    let mut rpass =
+                                        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                            label: Some("imgui_pass"),
+                                            color_attachments: &[Some(
+                                                wgpu::RenderPassColorAttachment {
+                                                    view: render_target,
+                                                    resolve_target: None,
+                                                    ops: wgpu::Operations {
+                                                        load: wgpu::LoadOp::Load,
+                                                        store: true,
+                                                    },
+                                                },
+                                            )],
+                                            depth_stencil_attachment: None,
+                                        });
+                                    win.renderer
+                                        .render(
+                                            draw_data,
+                                            win.pixels.queue(),
+                                            win.pixels.device(),
+                                            &mut rpass,
+                                        )
+                                        .expect("imgui render failed");
+                                }
+                                Ok(())
+                            });
+                        if render_result.is_err() {
+                            *control_flow = ControlFlow::Exit;
+                        }
+                    }
+
+                    if ui_state.spawn_debugger
+                        && !windows
+                            .values()
+                            .any(|w| matches!(w.kind, WindowKind::Debugger))
+                    {
+                        spawn_debugger_window(target, &mut platform, &mut imgui, &mut windows);
+                        ui_state.paused = true;
+                        ui_state.spawn_debugger = false;
+                    }
+                    if ui_state.spawn_vram
+                        && !windows
+                            .values()
+                            .any(|w| matches!(w.kind, WindowKind::VramViewer))
+                    {
+                        spawn_vram_window(target, &mut platform, &mut imgui, &mut windows);
+                        ui_state.paused = true;
+                        ui_state.spawn_vram = false;
+                    }
+                }
                 Event::MainEventsCleared => {
                     if !ui_state.paused {
                         while !gb.mmu.ppu.frame_ready() {
@@ -386,8 +517,9 @@ fn main() {
                         gb.mmu.ppu.clear_frame_flag();
                     }
 
-                    // UI built during RedrawRequested
-                    window.request_redraw();
+                    for win in windows.values() {
+                        win.win.request_redraw();
+                    }
 
                     if args.debug && frame_count % 60 == 0 {
                         let serial = gb.mmu.take_serial();
@@ -407,49 +539,6 @@ fn main() {
                     }
 
                     frame_count += 1;
-                }
-                Event::RedrawRequested(_) => {
-                    platform
-                        .prepare_frame(imgui.io_mut(), &window)
-                        .expect("prepare frame");
-                    let ui = imgui.frame();
-                    build_ui(&mut ui_state, ui, &mut gb);
-                    platform.prepare_render(ui, &window);
-
-                    let pixel_frame: &mut [u32] = bytemuck::cast_slice_mut(pixels.frame_mut());
-                    for (dst, src) in pixel_frame.iter_mut().zip(&frame) {
-                        let r = ((src >> 16) & 0xFF) as u8;
-                        let g = ((src >> 8) & 0xFF) as u8;
-                        let b = (src & 0xFF) as u8;
-                        *dst = u32::from_ne_bytes([r, g, b, 0xFF]);
-                    }
-                    let draw_data = imgui.render();
-                    let render_result = pixels.render_with(|encoder, render_target, context| {
-                        context.scaling_renderer.render(encoder, render_target);
-
-                        if draw_data.total_vtx_count > 0 {
-                            let mut rpass =
-                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("imgui_pass"),
-                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: render_target,
-                                        resolve_target: None,
-                                        ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
-                                            store: true,
-                                        },
-                                    })],
-                                    depth_stencil_attachment: None,
-                                });
-                            renderer
-                                .render(draw_data, pixels.queue(), pixels.device(), &mut rpass)
-                                .expect("imgui render failed");
-                        }
-                        Ok(())
-                    });
-                    if render_result.is_err() {
-                        *control_flow = ControlFlow::Exit;
-                    }
                 }
                 _ => {}
             }
