@@ -12,9 +12,16 @@ mod timer;
 
 use clap::Parser;
 use log::info;
-use minifb::{Key, Scale, Window, WindowOptions};
+use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
 use std::time::Duration;
+use winit::{
+    event::{ElementState, Event, VirtualKeyCode, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+};
+
+const SCALE: u32 = 3;
 
 #[derive(Parser)]
 struct Args {
@@ -112,77 +119,104 @@ fn main() {
     let mut frame_count = 0u64;
 
     if !args.headless {
-        let mut window = Window::new(
-            "vibeEmu",
-            160,
-            144,
-            WindowOptions {
-                scale: Scale::X2,
-                ..WindowOptions::default()
-            },
-        )
-        .expect("Failed to create window");
-        window.limit_update_rate(Some(Duration::from_micros(16_700)));
+        let event_loop = EventLoop::new();
+        let window = WindowBuilder::new()
+            .with_title("vibeEmu")
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                (160 * SCALE) as f64,
+                (144 * SCALE) as f64,
+            ))
+            .build(&event_loop)
+            .expect("Failed to create window");
 
-        while window.is_open() && !window.is_key_down(Key::Escape) {
-            // Gather input
-            let mut state = 0xFFu8;
-            if window.is_key_down(Key::Right) {
-                state &= !0x01;
-            }
-            if window.is_key_down(Key::Left) {
-                state &= !0x02;
-            }
-            if window.is_key_down(Key::Up) {
-                state &= !0x04;
-            }
-            if window.is_key_down(Key::Down) {
-                state &= !0x08;
-            }
-            if window.is_key_down(Key::S) {
-                state &= !0x10;
-            }
-            if window.is_key_down(Key::A) {
-                state &= !0x20;
-            }
-            if window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift) {
-                state &= !0x40;
-            }
-            if window.is_key_down(Key::Enter) {
-                state &= !0x80;
-            }
-            gb.mmu.input.update_state(state, &mut gb.mmu.if_reg);
+        let size = window.inner_size();
+        let surface = SurfaceTexture::new(size.width, size.height, &window);
+        let mut pixels = Pixels::new(160, 144, surface).expect("Pixels error");
 
-            while !gb.mmu.ppu.frame_ready() {
-                gb.cpu.step(&mut gb.mmu);
-            }
+        let _device = pixels.device();
+        let _queue = pixels.queue();
 
-            frame.copy_from_slice(gb.mmu.ppu.framebuffer());
-            gb.mmu.ppu.clear_frame_flag();
+        let mut state = 0xFFu8;
 
-            window
-                .update_with_buffer(&frame, 160, 144)
-                .expect("Failed to update window");
-
-            if args.debug && frame_count % 60 == 0 {
-                let serial = gb.mmu.take_serial();
-                if !serial.is_empty() {
-                    print!("[SERIAL] ");
-                    for b in &serial {
-                        if b.is_ascii_graphic() || *b == b' ' {
-                            print!("{}", *b as char);
-                        } else {
-                            print!("\\x{:02X}", b);
+        event_loop.run(move |event, _, control_flow| {
+            *control_flow = ControlFlow::Poll;
+            match event {
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                    WindowEvent::Resized(size) => {
+                        let _ = pixels.resize_surface(size.width, size.height);
+                    }
+                    WindowEvent::KeyboardInput { input, .. } => {
+                        if let Some(key) = input.virtual_keycode {
+                            let pressed = input.state == ElementState::Pressed;
+                            let mask = match key {
+                                VirtualKeyCode::Right => Some(0x01),
+                                VirtualKeyCode::Left => Some(0x02),
+                                VirtualKeyCode::Up => Some(0x04),
+                                VirtualKeyCode::Down => Some(0x08),
+                                VirtualKeyCode::S => Some(0x10),
+                                VirtualKeyCode::A => Some(0x20),
+                                VirtualKeyCode::LShift | VirtualKeyCode::RShift => Some(0x40),
+                                VirtualKeyCode::Return => Some(0x80),
+                                VirtualKeyCode::Escape => {
+                                    if pressed {
+                                        *control_flow = ControlFlow::Exit;
+                                    }
+                                    None
+                                }
+                                _ => None,
+                            };
+                            if let Some(mask) = mask {
+                                if pressed {
+                                    state &= !mask;
+                                } else {
+                                    state |= mask;
+                                }
+                                gb.mmu.input.update_state(state, &mut gb.mmu.if_reg);
+                            }
                         }
                     }
-                    println!();
+                    _ => {}
+                },
+                Event::MainEventsCleared => {
+                    while !gb.mmu.ppu.frame_ready() {
+                        gb.cpu.step(&mut gb.mmu);
+                    }
+
+                    frame.copy_from_slice(gb.mmu.ppu.framebuffer());
+                    gb.mmu.ppu.clear_frame_flag();
+                    window.request_redraw();
+
+                    if args.debug && frame_count % 60 == 0 {
+                        let serial = gb.mmu.take_serial();
+                        if !serial.is_empty() {
+                            print!("[SERIAL] ");
+                            for b in &serial {
+                                if b.is_ascii_graphic() || *b == b' ' {
+                                    print!("{}", *b as char);
+                                } else {
+                                    print!("\\x{:02X}", b);
+                                }
+                            }
+                            println!();
+                        }
+
+                        println!("{}", gb.cpu.debug_state());
+                    }
+
+                    frame_count += 1;
                 }
-
-                println!("{}", gb.cpu.debug_state());
+                Event::RedrawRequested(_) => {
+                    pixels
+                        .frame_mut()
+                        .copy_from_slice(bytemuck::cast_slice(&frame));
+                    if pixels.render().is_err() {
+                        *control_flow = ControlFlow::Exit;
+                    }
+                }
+                _ => {}
             }
-
-            frame_count += 1;
-        }
+        });
     } else {
         let frame_limit = args.frames;
         let cycle_limit = args.cycles;

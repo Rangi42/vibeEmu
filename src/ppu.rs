@@ -79,7 +79,7 @@ pub struct Ppu {
     prev_stat_irq: u8,
 }
 
-/// Default DMG palette colors in 0x00RRGGBB order for `minifb`.
+/// Default DMG palette colors in 0x00RRGGBB order for the `pixels` crate.
 const DMG_PALETTE: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
 
 #[derive(Copy, Clone, Default)]
