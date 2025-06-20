@@ -301,6 +301,11 @@ impl Ppu {
         }
     }
 
+    #[inline(always)]
+    fn dmg_shade(palette: u8, color_id: u8) -> u8 {
+        (palette >> (color_id * 2)) & 0x03
+    }
+
     fn render_scanline(&mut self) {
         if self.lcdc & 0x80 == 0 || self.ly as usize >= SCREEN_HEIGHT {
             return;
@@ -327,7 +332,7 @@ impl Ppu {
         let bg_color = if self.cgb {
             Self::decode_cgb_color(self.bgpd[0], self.bgpd[1])
         } else {
-            let idx = self.bgp & 0x03;
+            let idx = Self::dmg_shade(self.bgp, 0);
             DMG_PALETTE[idx as usize]
         };
         for x in 0..SCREEN_WIDTH {
@@ -388,7 +393,7 @@ impl Ppu {
                         color_id,
                     )
                 } else {
-                    let idx = (self.bgp >> (color_id * 2)) & 0x03;
+                    let idx = Self::dmg_shade(self.bgp,  color_id);
                     (DMG_PALETTE[idx as usize], idx)
                 };
                 let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
@@ -445,7 +450,7 @@ impl Ppu {
                             color_id,
                         )
                     } else {
-                        let idx = (self.bgp >> (color_id * 2)) & 0x03;
+                        let idx = Self::dmg_shade(self.bgp,  color_id);
                         (DMG_PALETTE[idx as usize], idx)
                     };
                     let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
@@ -512,10 +517,10 @@ impl Ppu {
                         let off = palette * 8 + color_id as usize * 2;
                         Self::decode_cgb_color(self.obpd[off], self.obpd[off + 1])
                     } else if s.flags & 0x10 != 0 {
-                        let idxc = (self.obp1 >> (color_id * 2)) & 0x03;
+                        let idxc = Self::dmg_shade(self.obp1, color_id);
                         DMG_PALETTE[idxc as usize]
                     } else {
-                        let idxc = (self.obp0 >> (color_id * 2)) & 0x03;
+                        let idxc = Self::dmg_shade(self.obp0, color_id);
                         DMG_PALETTE[idxc as usize]
                     };
                     let idx = self.ly as usize * SCREEN_WIDTH + sx as usize;
