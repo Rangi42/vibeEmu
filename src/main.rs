@@ -16,12 +16,22 @@ use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
 use std::time::Duration;
 use winit::{
+    event::MouseButton,
     event::{ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
 
 const SCALE: u32 = 3;
+
+#[derive(Default)]
+struct UiState {
+    paused: bool,
+    show_context: bool,
+    ctx_pos: [f32; 2],
+    show_debugger: bool,
+    show_vram: bool,
+}
 
 #[derive(Parser)]
 struct Args {
@@ -63,6 +73,25 @@ struct Args {
     /// Number of CPU cycles to run in headless mode
     #[arg(long)]
     cycles: Option<u64>,
+}
+
+fn handle_ui_event(event: &Event<()>, ui: &mut UiState) {
+    if let Event::WindowEvent { event, .. } = event {
+        if matches!(
+            event,
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            }
+        ) {
+            ui.show_context = true;
+        }
+    }
+}
+
+fn build_ui(_ui: &mut UiState) {
+    // Placeholder for UI rendering
 }
 
 fn main() {
@@ -117,6 +146,7 @@ fn main() {
 
     let mut frame = vec![0u32; 160 * 144];
     let mut frame_count = 0u64;
+    let mut ui_state = UiState::default();
 
     if !args.headless {
         let event_loop = EventLoop::new();
@@ -140,6 +170,7 @@ fn main() {
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
+            handle_ui_event(&event, &mut ui_state);
             match event {
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
@@ -179,9 +210,11 @@ fn main() {
                     _ => {}
                 },
                 Event::MainEventsCleared => {
-                    while !gb.mmu.ppu.frame_ready() {
+                    while !gb.mmu.ppu.frame_ready() && !ui_state.paused {
                         gb.cpu.step(&mut gb.mmu);
                     }
+
+                    build_ui(&mut ui_state);
 
                     frame.copy_from_slice(gb.mmu.ppu.framebuffer());
                     gb.mmu.ppu.clear_frame_flag();
