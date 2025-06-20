@@ -15,6 +15,7 @@ use log::info;
 use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
 use std::time::Duration;
+use winit::dpi::PhysicalPosition;
 use winit::{
     event::MouseButton,
     event::{ElementState, Event, VirtualKeyCode, WindowEvent},
@@ -75,19 +76,13 @@ struct Args {
     cycles: Option<u64>,
 }
 
-fn handle_ui_event(event: &Event<()>, ui: &mut UiState) {
-    if let Event::WindowEvent { event, .. } = event {
-        if matches!(
-            event,
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Right,
-                ..
-            }
-        ) {
-            ui.show_context = true;
-        }
-    }
+fn cursor_in_screen(window: &winit::window::Window, pos: PhysicalPosition<f64>) -> bool {
+    let size = window.inner_size();
+    let width = (160 * SCALE) as f64;
+    let height = (144 * SCALE) as f64;
+    let x_in = pos.x >= 0.0 && pos.x < width.min(size.width as f64);
+    let y_in = pos.y >= 0.0 && pos.y < height.min(size.height as f64);
+    x_in && y_in
 }
 
 fn build_ui(_ui: &mut UiState) {
@@ -167,43 +162,68 @@ fn main() {
         let _queue = pixels.queue();
 
         let mut state = 0xFFu8;
+        let mut cursor_pos = PhysicalPosition::new(0.0, 0.0);
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
-            handle_ui_event(&event, &mut ui_state);
             match event {
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
                     WindowEvent::Resized(size) => {
                         let _ = pixels.resize_surface(size.width, size.height);
                     }
+                    WindowEvent::CursorMoved { position, .. } => {
+                        cursor_pos = position;
+                    }
+                    WindowEvent::MouseInput {
+                        state: ElementState::Pressed,
+                        button: MouseButton::Right,
+                        ..
+                    } => {
+                        if !ui_state.paused && cursor_in_screen(&window, cursor_pos) {
+                            ui_state.paused = true;
+                            ui_state.show_context = true;
+                            ui_state.ctx_pos = [cursor_pos.x as f32, cursor_pos.y as f32];
+                        }
+                    }
+                    WindowEvent::MouseInput {
+                        state: ElementState::Pressed,
+                        button: MouseButton::Left,
+                        ..
+                    } => {
+                        if ui_state.paused {
+                            ui_state.paused = false;
+                        }
+                    }
                     WindowEvent::KeyboardInput { input, .. } => {
-                        if let Some(key) = input.virtual_keycode {
-                            let pressed = input.state == ElementState::Pressed;
-                            let mask = match key {
-                                VirtualKeyCode::Right => Some(0x01),
-                                VirtualKeyCode::Left => Some(0x02),
-                                VirtualKeyCode::Up => Some(0x04),
-                                VirtualKeyCode::Down => Some(0x08),
-                                VirtualKeyCode::S => Some(0x10),
-                                VirtualKeyCode::A => Some(0x20),
-                                VirtualKeyCode::LShift | VirtualKeyCode::RShift => Some(0x40),
-                                VirtualKeyCode::Return => Some(0x80),
-                                VirtualKeyCode::Escape => {
-                                    if pressed {
-                                        *control_flow = ControlFlow::Exit;
+                        if !ui_state.paused {
+                            if let Some(key) = input.virtual_keycode {
+                                let pressed = input.state == ElementState::Pressed;
+                                let mask = match key {
+                                    VirtualKeyCode::Right => Some(0x01),
+                                    VirtualKeyCode::Left => Some(0x02),
+                                    VirtualKeyCode::Up => Some(0x04),
+                                    VirtualKeyCode::Down => Some(0x08),
+                                    VirtualKeyCode::S => Some(0x10),
+                                    VirtualKeyCode::A => Some(0x20),
+                                    VirtualKeyCode::LShift | VirtualKeyCode::RShift => Some(0x40),
+                                    VirtualKeyCode::Return => Some(0x80),
+                                    VirtualKeyCode::Escape => {
+                                        if pressed {
+                                            *control_flow = ControlFlow::Exit;
+                                        }
+                                        None
                                     }
-                                    None
+                                    _ => None,
+                                };
+                                if let Some(mask) = mask {
+                                    if pressed {
+                                        state &= !mask;
+                                    } else {
+                                        state |= mask;
+                                    }
+                                    gb.mmu.input.update_state(state, &mut gb.mmu.if_reg);
                                 }
-                                _ => None,
-                            };
-                            if let Some(mask) = mask {
-                                if pressed {
-                                    state &= !mask;
-                                } else {
-                                    state |= mask;
-                                }
-                                gb.mmu.input.update_state(state, &mut gb.mmu.if_reg);
                             }
                         }
                     }
