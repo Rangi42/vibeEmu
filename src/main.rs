@@ -94,11 +94,13 @@ fn build_ui(state: &mut UiState, ui: &imgui::Ui, gb: &mut gameboy::GameBoy) {
         let flags = imgui::WindowFlags::NO_TITLE_BAR
             | imgui::WindowFlags::NO_MOVE
             | imgui::WindowFlags::NO_DECORATION;
+        let mut open = state.show_context;
+        let mut close_menu = false;
         ui.window("ctx")
             .position(state.ctx_pos, imgui::Condition::Always)
             .flags(flags)
             .always_auto_resize(true)
-            .opened(&mut state.show_context)
+            .opened(&mut open)
             .build(|| {
                 if ui.button("Load ROM") {
                     if let Some(path) = FileDialog::new()
@@ -111,18 +113,23 @@ fn build_ui(state: &mut UiState, ui: &imgui::Ui, gb: &mut gameboy::GameBoy) {
                             state.paused = false;
                         }
                     }
+                    close_menu = true;
                 }
                 if ui.button("Reset GB") {
                     gb.reset();
                     state.paused = false;
+                    close_menu = true;
                 }
                 if ui.button("Debugger") {
                     state.show_debugger = true;
+                    close_menu = true;
                 }
                 if ui.button("VRAM Viewer") {
                     state.show_vram = true;
+                    close_menu = true;
                 }
             });
+        state.show_context = open && !close_menu;
     }
 
     if state.show_debugger {
@@ -327,12 +334,13 @@ fn main() {
                         button: MouseButton::Left,
                         ..
                     } => {
-                        if ui_state.paused {
+                        if ui_state.paused && !imgui.io().want_capture_mouse {
                             ui_state.paused = false;
+                            ui_state.show_context = false;
                         }
                     }
                     WindowEvent::KeyboardInput { input, .. } => {
-                        if !ui_state.paused {
+                        if !imgui.io().want_capture_keyboard {
                             if let Some(key) = input.virtual_keycode {
                                 let pressed = input.state == ElementState::Pressed;
                                 let mask = match key {
@@ -366,8 +374,10 @@ fn main() {
                     _ => {}
                 },
                 Event::MainEventsCleared => {
-                    while !gb.mmu.ppu.frame_ready() && !ui_state.paused {
-                        gb.cpu.step(&mut gb.mmu);
+                    if !ui_state.paused {
+                        while !gb.mmu.ppu.frame_ready() {
+                            gb.cpu.step(&mut gb.mmu);
+                        }
                     }
 
                     if gb.mmu.ppu.frame_ready() {
