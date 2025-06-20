@@ -393,7 +393,7 @@ impl Ppu {
                         color_id,
                     )
                 } else {
-                    let idx = Self::dmg_shade(self.bgp,  color_id);
+                    let idx = Self::dmg_shade(self.bgp, color_id);
                     (DMG_PALETTE[idx as usize], idx)
                 };
                 let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
@@ -450,7 +450,7 @@ impl Ppu {
                             color_id,
                         )
                     } else {
-                        let idx = Self::dmg_shade(self.bgp,  color_id);
+                        let idx = Self::dmg_shade(self.bgp, color_id);
                         (DMG_PALETTE[idx as usize], idx)
                     };
                     let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
