@@ -280,9 +280,10 @@ fn main() {
                     build_ui(&mut ui_state, ui);
                     platform.prepare_render(ui, &window);
 
-                    pixels
-                        .frame_mut()
-                        .copy_from_slice(bytemuck::cast_slice(&frame));
+                    let pixel_frame: &mut [u32] = bytemuck::cast_slice_mut(pixels.frame_mut());
+                    for (dst, src) in pixel_frame.iter_mut().zip(&frame) {
+                        *dst = 0xFF00_0000 | *src;
+                    }
                     let draw_data = imgui.render();
                     let render_result = pixels.render_with(|encoder, render_target, context| {
                         context.scaling_renderer.render(encoder, render_target);
