@@ -244,6 +244,12 @@ fn main() {
                     while !gb.mmu.ppu.frame_ready() && !ui_state.paused {
                         gb.cpu.step(&mut gb.mmu);
                     }
+
+                    if gb.mmu.ppu.frame_ready() {
+                        frame.copy_from_slice(gb.mmu.ppu.framebuffer());
+                        gb.mmu.ppu.clear_frame_flag();
+                    }
+
                     // UI built during RedrawRequested
                     window.request_redraw();
 
@@ -278,7 +284,9 @@ fn main() {
                         .frame_mut()
                         .copy_from_slice(bytemuck::cast_slice(&frame));
                     let draw_data = imgui.render();
-                    let render_result = pixels.render_with(|encoder, render_target, _| {
+                    let render_result = pixels.render_with(|encoder, render_target, context| {
+                        context.scaling_renderer.render(encoder, render_target);
+
                         if draw_data.total_vtx_count > 0 {
                             let mut rpass =
                                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
