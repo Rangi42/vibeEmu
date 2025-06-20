@@ -340,7 +340,8 @@ fn main() {
                         }
                     }
                     WindowEvent::KeyboardInput { input, .. } => {
-                        if !imgui.io().want_capture_keyboard {
+                        // Allow arrows unless we're paused or actively typing in ImGui
+                        if !(ui_state.paused || imgui.io().want_text_input) {
                             if let Some(key) = input.virtual_keycode {
                                 let pressed = input.state == ElementState::Pressed;
                                 let mask = match key {
