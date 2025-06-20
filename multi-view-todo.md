@@ -166,8 +166,10 @@
 ### 💡 Why this works
 
 - `WinitPlatform` handles multiple window attachments.
-- Each `pixels::Pixels` gets its own `SurfaceTexture`, but shares the same `Device` and `Queue`.
-- `imgui-wgpu` rendering is tied to per-window `draw_data` generated via `ui.render()`.
+- Each window owns its own `pixels::Pixels`, `Device`, and `Queue`. The matching
+  `imgui_wgpu::Renderer` is created from that device so rendering stays on the correct GPU
+  context.
+- Per-window `draw_data` is generated via `ui.render()`.
 
 ---
 

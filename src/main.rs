@@ -9,10 +9,10 @@ mod mmu;
 mod ppu;
 mod serial;
 mod timer;
+mod ui;
 
 use clap::Parser;
 use imgui::{ConfigFlags, Context as ImguiContext};
-use imgui_wgpu::{Renderer, RendererConfig};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use log::info;
 use pixels::{Pixels, SurfaceTexture};
@@ -39,17 +39,7 @@ struct UiState {
     spawn_vram: bool,
 }
 
-enum WindowKind {
-    Main,
-    Debugger,
-    Vram,
-}
-
-struct UiWindow {
-    window: winit::window::Window,
-    pixels: pixels::Pixels,
-    kind: WindowKind,
-}
+use ui::window::{UiWindow, WindowKind};
 
 #[derive(Parser)]
 struct Args {
@@ -122,14 +112,8 @@ fn spawn_debugger_window(
 
     platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
 
-    windows.insert(
-        w.id(),
-        UiWindow {
-            window: w,
-            pixels,
-            kind: WindowKind::Debugger,
-        },
-    );
+    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, imgui);
+    windows.insert(ui_win.win.id(), ui_win);
 }
 
 fn spawn_vram_window(
@@ -152,14 +136,8 @@ fn spawn_vram_window(
 
     platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
 
-    windows.insert(
-        w.id(),
-        UiWindow {
-            window: w,
-            pixels,
-            kind: WindowKind::Vram,
-        },
-    );
+    let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, imgui);
+    windows.insert(ui_win.win.id(), ui_win);
 }
 
 fn draw_debugger(pixels: &mut Pixels, gb: &mut gameboy::GameBoy, ui: &imgui::Ui) {
@@ -368,22 +346,9 @@ fn main() {
         let mut platform = WinitPlatform::init(&mut imgui);
         platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
 
-        let renderer_config = RendererConfig {
-            texture_format: pixels.render_texture_format(),
-            ..Default::default()
-        };
-        let mut renderer =
-            Renderer::new(&mut imgui, pixels.device(), pixels.queue(), renderer_config);
-
         let mut windows = HashMap::new();
-        windows.insert(
-            window.id(),
-            UiWindow {
-                window,
-                pixels,
-                kind: WindowKind::Main,
-            },
-        );
+        let main_win = UiWindow::new(WindowKind::Main, window, pixels, &mut imgui);
+        windows.insert(main_win.win.id(), main_win);
 
         let mut state = 0xFFu8;
         let mut cursor_pos = PhysicalPosition::new(0.0, 0.0);
@@ -397,7 +362,7 @@ fn main() {
                     ..
                 } => {
                     if let Some(win) = windows.get_mut(window_id) {
-                        platform.handle_event(imgui.io_mut(), &win.window, &event);
+                        platform.handle_event(imgui.io_mut(), &win.win, &event);
                         match win_event {
                             WindowEvent::CloseRequested => {
                                 windows.remove(window_id);
@@ -415,7 +380,7 @@ fn main() {
                                 button: MouseButton::Right,
                                 ..
                             } if matches!(win.kind, WindowKind::Main) => {
-                                if !ui_state.paused && cursor_in_screen(&win.window, cursor_pos) {
+                                if !ui_state.paused && cursor_in_screen(&win.win, cursor_pos) {
                                     ui_state.paused = true;
                                     ui_state.show_context = true;
                                     ui_state.ctx_pos = [cursor_pos.x as f32, cursor_pos.y as f32];
@@ -470,7 +435,7 @@ fn main() {
                 }
                 Event::RedrawRequested(window_id) => {
                     if let Some(win) = windows.get_mut(window_id) {
-                        platform.prepare_frame(imgui.io_mut(), &win.window).unwrap();
+                        platform.prepare_frame(imgui.io_mut(), &win.win).unwrap();
                         let ui = imgui.frame();
 
                         match win.kind {
@@ -479,10 +444,10 @@ fn main() {
                                 draw_game_screen(&mut win.pixels, &frame);
                             }
                             WindowKind::Debugger => draw_debugger(&mut win.pixels, &mut gb, ui),
-                            WindowKind::Vram => draw_vram(&mut win.pixels, &mut gb, ui),
+                            WindowKind::VramViewer => draw_vram(&mut win.pixels, &mut gb, ui),
                         }
 
-                        platform.prepare_render(ui, &win.window);
+                        platform.prepare_render(ui, &win.win);
                         let draw_data = imgui.render();
 
                         let render_result =
@@ -505,7 +470,7 @@ fn main() {
                                             )],
                                             depth_stencil_attachment: None,
                                         });
-                                    renderer
+                                    win.renderer
                                         .render(
                                             draw_data,
                                             win.pixels.queue(),
@@ -531,7 +496,9 @@ fn main() {
                         ui_state.spawn_debugger = false;
                     }
                     if ui_state.spawn_vram
-                        && !windows.values().any(|w| matches!(w.kind, WindowKind::Vram))
+                        && !windows
+                            .values()
+                            .any(|w| matches!(w.kind, WindowKind::VramViewer))
                     {
                         spawn_vram_window(target, &mut platform, &mut imgui, &mut windows);
                         ui_state.paused = true;
@@ -551,7 +518,7 @@ fn main() {
                     }
 
                     for win in windows.values() {
-                        win.window.request_redraw();
+                        win.win.request_redraw();
                     }
 
                     if args.debug && frame_count % 60 == 0 {
