@@ -372,7 +372,20 @@ fn main() {
                         }
                         match win_event {
                             WindowEvent::CloseRequested => {
-                                windows.remove(window_id);
+                                if matches!(win.kind, WindowKind::Main) {
+                                    // Flush any pending cartridge RAM before quitting.
+                                    gb.mmu.save_cart_ram();
+
+                                    // Tell winit to end the loop and let `event_loop.run` return.
+                                    *control_flow = ControlFlow::Exit;
+
+                                    // Nothing else to process.
+                                    #[allow(clippy::needless_return)]
+                                    return;
+                                } else {
+                                    // Non-main editor/aux window – just close it.
+                                    windows.remove(window_id);
+                                }
                             }
                             WindowEvent::Resized(size) => {
                                 resize_pixels(&mut win.pixels, *size);
@@ -567,6 +580,10 @@ fn main() {
 
                     frame_count += 1;
                 }
+                Event::LoopDestroyed => {
+                    // Extra safety: if we ever reach here without having saved yet.
+                    gb.mmu.save_cart_ram();
+                }
                 _ => {}
             }
         });
@@ -625,6 +642,4 @@ fn main() {
             }
         }
     }
-
-    gb.mmu.save_cart_ram();
 }
