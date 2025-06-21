@@ -1,5 +1,7 @@
 # vibeEmu
 
+![vibeEmu Logo](gfx/vibeEmu_512px.png)
+
 vibeEmu is a Game Boy and Game Boy Color emulator written in Rust.  It now
 features a cycle‑accurate CPU, MMU, PPU and APU along with a `winit` + `pixels`
 frontend.  An ImGui powered debug UI exposes a register viewer and a VRAM
