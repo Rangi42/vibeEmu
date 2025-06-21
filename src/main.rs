@@ -28,7 +28,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-const SCALE: u32 = 3;
+const SCALE: u32 = 2;
 const GB_FPS: f64 = 59.7275;
 const FRAME_TIME: Duration = Duration::from_nanos((1e9_f64 / GB_FPS) as u64);
 const FF_MULT: f32 = 4.0;
