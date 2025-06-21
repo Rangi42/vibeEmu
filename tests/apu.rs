@@ -1,4 +1,5 @@
 use vibeEmu::apu::Apu;
+use vibeEmu::mmu::Mmu;
 
 #[test]
 fn frame_sequencer_tick() {
@@ -106,4 +107,44 @@ fn sweep_trigger_and_step() {
     apu.step(8192); // advance to step 2
     apu.step(8192); // advance to step 3 (sweep clocked on previous step)
     assert_eq!(apu.ch1_frequency(), 0x480);
+}
+
+#[test]
+fn pcm_register_open_bus() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x00); // power off
+    assert_eq!(apu.read_pcm(0xFF76), 0xFF);
+    assert_eq!(apu.read_pcm(0xFF77), 0xFF);
+}
+
+#[test]
+fn pcm_register_sample_values() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable
+
+    apu.write_reg(0xFF11, 0xC0); // duty 75%, length=0
+    apu.write_reg(0xFF12, 0xF0); // envelope volume=15
+    apu.write_reg(0xFF13, 0);
+    apu.write_reg(0xFF14, 0x80); // trigger
+
+    apu.write_reg(0xFF16, 0xC0); // duty 75%
+    apu.write_reg(0xFF17, 0xF0);
+    apu.write_reg(0xFF18, 0);
+    apu.write_reg(0xFF19, 0x80);
+
+    assert_eq!(apu.read_pcm(0xFF76), 0xFF);
+}
+#[test]
+fn pcm_mmu_mapping() {
+    let mut mmu = Mmu::new_with_mode(true);
+    mmu.write_byte(0xFF26, 0x80);
+    mmu.write_byte(0xFF11, 0xC0);
+    mmu.write_byte(0xFF12, 0xF0);
+    mmu.write_byte(0xFF14, 0x80);
+    mmu.write_byte(0xFF16, 0xC0);
+    mmu.write_byte(0xFF17, 0xF0);
+    mmu.write_byte(0xFF19, 0x80);
+    assert_eq!(mmu.read_byte(0xFF76), 0xFF);
+    let mut dmg = Mmu::new();
+    assert_eq!(dmg.read_byte(0xFF76), 0xFF);
 }
