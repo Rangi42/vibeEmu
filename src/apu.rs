@@ -476,6 +476,17 @@ impl Apu {
         self.regs[idx] | Apu::read_mask(addr)
     }
 
+    pub fn read_pcm(&self, addr: u16) -> u8 {
+        if self.nr52 & 0x80 == 0 {
+            return 0xFF;
+        }
+        match addr {
+            0xFF76 => (self.ch2.output() << 4) | self.ch1.output(),
+            0xFF77 => (self.ch4.output() << 4) | self.ch3.output(),
+            _ => 0xFF,
+        }
+    }
+
     pub fn write_reg(&mut self, addr: u16, val: u8) {
         if self.nr52 & 0x80 == 0 && addr != 0xFF26 && !(0xFF30..=0xFF3F).contains(&addr) {
             return;
