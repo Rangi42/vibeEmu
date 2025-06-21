@@ -25,8 +25,19 @@ use winit::{
     event::MouseButton,
     event::{ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
+    window::{Icon, WindowBuilder},
 };
+
+fn load_window_icon() -> Option<Icon> {
+    let icon_data = include_bytes!("../gfx/vibeEmu_512px.png");
+    if let Ok(img) = image::load_from_memory(icon_data) {
+        let img = img.into_rgba8();
+        let (w, h) = (img.width(), img.height());
+        Icon::from_rgba(img.into_raw(), w, h).ok()
+    } else {
+        None
+    }
+}
 
 const SCALE: u32 = 2;
 const GB_FPS: f64 = 59.7275;
@@ -114,6 +125,7 @@ fn spawn_debugger_window(
 
     let w = winit::window::WindowBuilder::new()
         .with_title("vibeEmu \u{2013} Debugger")
+        .with_window_icon(load_window_icon())
         .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64))
         .build(event_loop)
         .unwrap();
@@ -138,6 +150,7 @@ fn spawn_vram_window(
 
     let w = winit::window::WindowBuilder::new()
         .with_title("vibeEmu \u{2013} VRAM")
+        .with_window_icon(load_window_icon())
         .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64))
         .build(event_loop)
         .unwrap();
@@ -380,6 +393,7 @@ fn main() {
         let event_loop = EventLoop::new();
         let window = WindowBuilder::new()
             .with_title("vibeEmu")
+            .with_window_icon(load_window_icon())
             .with_inner_size(winit::dpi::LogicalSize::new(
                 (160 * SCALE) as f64,
                 (144 * SCALE) as f64,
