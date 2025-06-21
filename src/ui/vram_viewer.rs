@@ -15,7 +15,8 @@ enum VramTab {
 pub struct VramViewerWindow {
     current: VramTab,
     bg_map_tex: Option<TextureId>,
-    last_vblank_frame: u64,
+    last_frame: u64,
+    bg_map_buf: Vec<u8>,
 }
 
 impl VramViewerWindow {
@@ -23,7 +24,8 @@ impl VramViewerWindow {
         Self {
             current: VramTab::BgMap,
             bg_map_tex: None,
-            last_vblank_frame: 0,
+            last_frame: 0,
+            bg_map_buf: vec![0u8; 256 * 256 * 4],
         }
     }
 
@@ -109,10 +111,10 @@ impl VramViewerWindow {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) {
-        let vblank = self.last_vblank_frame.wrapping_add(1);
-        if self.bg_map_tex.is_none() || vblank != self.last_vblank_frame {
+        let frame = ppu.frames();
+        if self.bg_map_tex.is_none() || frame != self.last_frame {
             self.bg_map_tex = Some(self.build_bg_map_texture(ppu, renderer, device, queue));
-            self.last_vblank_frame = vblank;
+            self.last_frame = frame;
         }
 
         let tex_id = self.bg_map_tex.unwrap();
@@ -126,10 +128,17 @@ impl VramViewerWindow {
 
         let scx = ppu.read_reg(0xFF43);
         let scy = ppu.read_reg(0xFF42);
-        let tl = [
-            cursor[0] + (scx as f32) * scale,
-            cursor[1] + (scy as f32) * scale,
-        ];
+        let mut sx = scx as f32;
+        if sx > 160.0 {
+            sx -= 256.0;
+        }
+        sx = sx.clamp(-96.0, 160.0);
+        let mut sy = scy as f32;
+        if sy > 144.0 {
+            sy -= 256.0;
+        }
+        sy = sy.clamp(-112.0, 144.0);
+        let tl = [cursor[0] + sx * scale, cursor[1] + sy * scale];
         let br = [tl[0] + 160.0 * scale, tl[1] + 144.0 * scale];
 
         let draw_list = ui.get_window_draw_list();
@@ -141,8 +150,8 @@ impl VramViewerWindow {
         if scx > 96 {
             draw_list
                 .add_rect(
-                    [cursor[0] + ((scx as f32) - 256.0) * scale, tl[1]],
-                    [cursor[0] + ((scx as f32) - 96.0) * scale, br[1]],
+                    [cursor[0] + (sx - 256.0) * scale, tl[1]],
+                    [cursor[0] + (sx - 96.0) * scale, br[1]],
                     imgui::ImColor32::from_rgb(255, 0, 0),
                 )
                 .thickness(1.0)
@@ -151,8 +160,8 @@ impl VramViewerWindow {
         if scy > 112 {
             draw_list
                 .add_rect(
-                    [tl[0], cursor[1] + ((scy as f32) - 256.0) * scale],
-                    [br[0], cursor[1] + ((scy as f32) - 112.0) * scale],
+                    [tl[0], cursor[1] + (sy - 256.0) * scale],
+                    [br[0], cursor[1] + (sy - 112.0) * scale],
                     imgui::ImColor32::from_rgb(255, 0, 0),
                 )
                 .thickness(1.0)
@@ -161,7 +170,7 @@ impl VramViewerWindow {
     }
 
     fn build_bg_map_texture(
-        &self,
+        &mut self,
         ppu: &mut Ppu,
         renderer: &mut Renderer,
         device: &wgpu::Device,
@@ -174,7 +183,8 @@ impl VramViewerWindow {
         const IMG_H: usize = MAP_H * TILE;
         const DMG_PALETTE: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
 
-        let mut rgba = vec![0u8; IMG_W * IMG_H * 4];
+        let rgba = &mut self.bg_map_buf;
+        rgba.fill(0);
 
         let lcdc = ppu.read_reg(0xFF40);
         let map_base = if lcdc & 0x08 != 0 { 0x1C00 } else { 0x1800 };
@@ -183,10 +193,16 @@ impl VramViewerWindow {
         // unsigned from 0x8000.
         let signed_mode = lcdc & 0x10 == 0;
         let bgp = ppu.read_reg(0xFF47);
+        let cgb = ppu.is_cgb();
 
         for tile_y in 0..MAP_H {
             for tile_x in 0..MAP_W {
                 let tile_idx = ppu.vram[0][map_base + tile_y * MAP_W + tile_x];
+                let attr = if cgb {
+                    ppu.vram[1][map_base + tile_y * MAP_W + tile_x]
+                } else {
+                    0
+                };
                 let tile_num = if signed_mode {
                     tile_idx as i8 as i16
                 } else {
@@ -202,17 +218,23 @@ impl VramViewerWindow {
                     (tile_num as usize) * 16
                 };
 
-                if tile_addr + 16 > ppu.vram[0].len() {
+                let bank = if cgb && attr & 0x08 != 0 { 1 } else { 0 };
+                if tile_addr + 16 > ppu.vram[bank].len() {
                     continue;
                 }
                 for row in 0..TILE {
-                    let lo = ppu.vram[0][tile_addr + row * 2];
-                    let hi = ppu.vram[0][tile_addr + row * 2 + 1];
+                    let lo = ppu.vram[bank][tile_addr + row * 2];
+                    let hi = ppu.vram[bank][tile_addr + row * 2 + 1];
                     for col in 0..TILE {
                         let bit = 7 - col;
                         let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                        let shade = (bgp >> (idx * 2)) & 0x03;
-                        let color = DMG_PALETTE[shade as usize];
+                        let color = if cgb {
+                            let pal = (attr & 0x07) as usize;
+                            ppu.bg_palette_color(pal, idx as usize)
+                        } else {
+                            let shade = (bgp >> (idx * 2)) & 0x03;
+                            DMG_PALETTE[shade as usize]
+                        };
                         let x = tile_x * TILE + col;
                         let y = tile_y * TILE + row;
                         let off = (y * IMG_W + x) * 4;
@@ -236,7 +258,7 @@ impl VramViewerWindow {
             ..Default::default()
         };
         let texture = Texture::new(device, renderer, config);
-        texture.write(queue, &rgba, IMG_W as u32, IMG_H as u32);
+        texture.write(queue, rgba, IMG_W as u32, IMG_H as u32);
         renderer.textures.insert(texture)
     }
 
