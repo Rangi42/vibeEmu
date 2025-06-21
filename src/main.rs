@@ -207,9 +207,19 @@ fn draw_debugger(pixels: &mut Pixels, gb: &mut gameboy::GameBoy, ui: &imgui::Ui)
     }
 }
 
-fn draw_vram(pixels: &mut Pixels, _gb: &mut gameboy::GameBoy, ui: &imgui::Ui) {
-    let _ = pixels.frame_mut();
-    ui.text("VRAM viewer not implemented");
+fn draw_vram(win: &mut ui::window::UiWindow, gb: &mut gameboy::GameBoy, ui: &imgui::Ui) {
+    let _ = win.pixels.frame_mut();
+    if let Some(viewer) = win.vram_viewer.as_mut() {
+        viewer.ui(
+            ui,
+            &mut gb.mmu.ppu,
+            &mut win.renderer,
+            win.pixels.device(),
+            win.pixels.queue(),
+        );
+    } else {
+        ui.text("VRAM viewer not initialized");
+    }
 }
 
 fn draw_game_screen(pixels: &mut Pixels, frame: &[u32]) {
@@ -475,7 +485,7 @@ fn main() {
                                 draw_game_screen(&mut win.pixels, &frame);
                             }
                             WindowKind::Debugger => draw_debugger(&mut win.pixels, &mut gb, ui),
-                            WindowKind::VramViewer => draw_vram(&mut win.pixels, &mut gb, ui),
+                            WindowKind::VramViewer => draw_vram(win, &mut gb, ui),
                         }
 
                         platform.prepare_render(ui, &win.win);

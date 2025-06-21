@@ -1,3 +1,4 @@
+use crate::ui::vram_viewer::VramViewerWindow;
 use imgui_wgpu::{Renderer, RendererConfig};
 use pixels::Pixels;
 use winit::window::Window;
@@ -12,6 +13,8 @@ pub struct UiWindow {
     pub renderer: Renderer,
     /// Type of window
     pub kind: WindowKind,
+    /// Optional VRAM viewer state
+    pub vram_viewer: Option<VramViewerWindow>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -42,11 +45,17 @@ impl UiWindow {
                 ..Default::default()
             },
         );
+        let vram_viewer = if matches!(kind, WindowKind::VramViewer) {
+            Some(VramViewerWindow::new())
+        } else {
+            None
+        };
         Self {
             win,
             pixels,
             renderer,
             kind,
+            vram_viewer,
         }
     }
 }
