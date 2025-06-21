@@ -14,18 +14,35 @@ enum VramTab {
 
 pub struct VramViewerWindow {
     current: VramTab,
+    /* BG-map */
     bg_map_tex: Option<TextureId>,
-    last_frame: u64,
     bg_map_buf: Vec<u8>,
+
+    /* Tiles */
+    tiles_tex: Option<TextureId>,
+    tiles_buf: Vec<u8>,
+
+    last_frame: u64,
 }
 
 impl VramViewerWindow {
     pub fn new() -> Self {
+        // Maximum canvas is 256×192 (CGB shows both banks side-by-side)
+        const MAX_TILES_W: usize = 256;
+        const TILES_H: usize = 192;
+
         Self {
             current: VramTab::BgMap,
+
+            /* BG-map */
             bg_map_tex: None,
+            bg_map_buf: vec![0; 256 * 256 * 4],
+
+            /* Tiles */
+            tiles_tex: None,
+            tiles_buf: vec![0; MAX_TILES_W * TILES_H * 4],
+
             last_frame: 0,
-            bg_map_buf: vec![0u8; 256 * 256 * 4],
         }
     }
 
@@ -264,12 +281,100 @@ impl VramViewerWindow {
 
     fn draw_tiles(
         &mut self,
-        _ui: &imgui::Ui,
-        _r: &mut Renderer,
-        _ppu: &mut Ppu,
-        _d: &wgpu::Device,
-        _q: &wgpu::Queue,
+        ui: &imgui::Ui,
+        renderer: &mut Renderer,
+        ppu: &mut Ppu,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
     ) {
+        let frame = ppu.frames();
+        if self.tiles_tex.is_none() || frame != self.last_frame {
+            self.tiles_tex = Some(self.build_tiles_texture(ppu, renderer, device, queue));
+            self.last_frame = frame;
+        }
+
+        let banks = if ppu.is_cgb() { 2 } else { 1 };
+        let size = [128.0 * banks as f32, 192.0];
+        let avail = ui.content_region_avail();
+        let scale = (avail[0] / size[0]).min(3.0);
+        let draw_size = [size[0] * scale, size[1] * scale];
+
+        if let Some(tex) = self.tiles_tex {
+            imgui::Image::new(tex, draw_size).build(ui);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_tiles_texture(
+        &mut self,
+        ppu: &mut Ppu,
+        renderer: &mut Renderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> TextureId {
+        const TILE_W: usize = 8;
+        const TILE_H: usize = 8;
+        const TILES_PER_ROW: usize = 16; // 16 × 8 px  = 128 px per bank
+        const ROWS: usize = 24; // 24 × 8 px  = 192 px
+        const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
+
+        let banks = if ppu.is_cgb() { 2 } else { 1 };
+        let img_w = TILES_PER_ROW * TILE_W * banks;
+        let img_h = ROWS * TILE_H;
+
+        let buf = &mut self.tiles_buf[..img_w * img_h * 4];
+        buf.fill(0);
+
+        let bgp = ppu.read_reg(0xFF47);
+
+        for bank in 0..banks {
+            for tile_idx in 0..384 {
+                let col = tile_idx % TILES_PER_ROW;
+                let row = tile_idx / TILES_PER_ROW;
+
+                let tile_addr = tile_idx * 16; // 16 bytes per tile
+                for y in 0..TILE_H {
+                    let lo = ppu.vram[bank][tile_addr + y * 2];
+                    let hi = ppu.vram[bank][tile_addr + y * 2 + 1];
+
+                    for x in 0..TILE_W {
+                        let bit = 7 - x;
+                        let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+
+                        // Palette choose: CGB → BG palette 0, DMG → BGP shades
+                        let rgb = if ppu.is_cgb() {
+                            ppu.bg_palette_color(0, idx as usize)
+                        } else {
+                            let shade = (bgp >> (idx * 2)) & 0x03;
+                            DMG_COLORS[shade as usize]
+                        };
+
+                        let px = (bank * 128) + (col * TILE_W) + x; // bank 1 sits to the right
+                        let py = row * TILE_H + y;
+                        let off = (py * img_w + px) * 4;
+
+                        buf[off] = ((rgb >> 16) & 0xFF) as u8; // R
+                        buf[off + 1] = ((rgb >> 8) & 0xFF) as u8; // G
+                        buf[off + 2] = (rgb & 0xFF) as u8; // B
+                        buf[off + 3] = 0xFF; // A
+                    }
+                }
+            }
+        }
+
+        let tex_cfg = TextureConfig {
+            size: Extent3d {
+                width: img_w as u32,
+                height: img_h as u32,
+                depth_or_array_layers: 1,
+            },
+            label: Some("VRAM-Tiles"),
+            format: Some(TextureFormat::Rgba8UnormSrgb),
+            ..Default::default()
+        };
+        let texture = Texture::new(device, renderer, tex_cfg);
+        texture.write(queue, buf, img_w as u32, img_h as u32);
+        renderer.textures.insert(texture)
     }
     fn draw_oam(
         &mut self,
