@@ -178,19 +178,33 @@ impl VramViewerWindow {
 
         let lcdc = ppu.read_reg(0xFF40);
         let map_base = if lcdc & 0x08 != 0 { 0x1C00 } else { 0x1800 };
-        let tile_data_base = if lcdc & 0x10 != 0 { 0x0000 } else { 0x0800 };
-        let signed = lcdc & 0x10 == 0;
+        // When bit 4 of LCDC is clear we use signed tile indices relative to
+        // address 0x9000 (offset 0x1000 in VRAM). Otherwise indices are
+        // unsigned from 0x8000.
+        let signed_mode = lcdc & 0x10 == 0;
         let bgp = ppu.read_reg(0xFF47);
 
         for tile_y in 0..MAP_H {
             for tile_x in 0..MAP_W {
                 let tile_idx = ppu.vram[0][map_base + tile_y * MAP_W + tile_x];
-                let tile_num: i16 = if signed {
+                let tile_num = if signed_mode {
                     tile_idx as i8 as i16
                 } else {
                     tile_idx as i16
                 };
-                let tile_addr = tile_data_base + tile_num as usize * 16;
+
+                // Compute address safely for signed indices. Unsigned mode uses
+                // 0x8000 as the base, while signed mode is relative to 0x9000
+                // (offset 0x1000 in VRAM).
+                let tile_addr = if signed_mode {
+                    (0x1000i32 + (tile_num as i32) * 16) as usize
+                } else {
+                    (tile_num as usize) * 16
+                };
+
+                if tile_addr + 16 > ppu.vram[0].len() {
+                    continue;
+                }
                 for row in 0..TILE {
                     let lo = ppu.vram[0][tile_addr + row * 2];
                     let hi = ppu.vram[0][tile_addr + row * 2 + 1];
