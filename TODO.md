@@ -585,7 +585,7 @@ Implementing a full emulator is complex – breaking it into manageable pieces w
 
   - [x] Set up logging (optional) and a basic CLI argument parsing (e.g. accept a ROM file path, and flags like `--serial` for test mode, `--dmg` to force DMG mode, etc.).
 
-- [ ] **Cartridge Loading** – *Dep: Project setup.*
+- [x] **Cartridge Loading** – *Dep: Project setup.*
   
     - [x] Write a function to load a ROM file into memory (Vec<u8>).
   
@@ -599,12 +599,12 @@ Implementing a full emulator is complex – breaking it into manageable pieces w
     
     * [x] For No MBC: reading 0x0000-0x7FFF just returns from ROM (no banking), writing 0xA000-BFFF writes to RAM if present.
     * [x] For MBC1: support bank switching (5-bit ROM bank number, 2-bit RAM bank or upper ROM bits, mode select), and RAM enable.
-    * [ ] For MBC3: support 7-bit ROM bank, 4 8KB RAM banks, RTC registers mapping (just stub the RTC read/write logic initially), RAM enable.
+    * [x] For MBC3: support 7-bit ROM bank, 4 8KB RAM banks, RTC registers mapping (just stub the RTC read/write logic initially), RAM enable.
     * [x] For MBC5: support 9-bit ROM bank, up to 16 RAM banks, RAM enable, possibly rumble enable bit (can ignore actual rumble feedback for now).
   
     - [x] Test: print out some cartridge info (title, MBC type) to ensure parsing is correct.
 
-- [ ] **CPU Core (basic)** – *Dep: Cartridge (for fetching opcodes from ROM).*
+- [x] **CPU Core (basic)** – *Dep: Cartridge (for fetching opcodes from ROM).*
   
   - [x] Implement CPU registers and the main fetch-decode-execute loop. Start with a limited set of opcodes to get something running (e.g. NOP, JP, basic loads).
 
@@ -657,7 +657,7 @@ Implementing a full emulator is complex – breaking it into manageable pieces w
   
   - [x] Test: Write unit tests for MMU addressing (e.g., write to an address and read back to confirm it goes to correct memory). Also, test bank switching logic: e.g., set VRAM bank via FF4F and verify reads go to different memory locations.
 
-- [ ] **PPU Implementation (Rendering)** – *Dep: CPU (for timing), MMU (for memory interface).*
+- [x] **PPU Implementation (Rendering)** – *Dep: CPU (for timing), MMU (for memory interface).*
   
   - [x] Implement PPU registers and internal data:
 
@@ -695,7 +695,7 @@ Implementing a full emulator is complex – breaking it into manageable pieces w
   
   - [ ] Test: To validate PPU, one approach: run known good ROMs like the Nintendo logo (boot ROM) or a simple homebrew that draws something. Alternatively, use test ROMs from the `mooneye-gb` suite (there are many PPU tests). You can also write a simple program to draw a pattern in tile data and see if the frame buffer matches expected values. If using boot ROM, when boot ROM finishes, it displays the Nintendo logo – check that it appears correctly (requires the front end to actually show the frame).
 
-- [ ] **Basic Frontend (Window + Input)** – *Dep: PPU (to get frame), maybe APU (for audio toggle).*
+- [x] **Basic Frontend (Window + Input)** – *Dep: PPU (to get frame), maybe APU (for audio toggle).*
   
   - [x] Create a window using chosen library (e.g. using `minifb`: create Window, or using `winit`: create event loop and window).
 
@@ -713,7 +713,7 @@ Implementing a full emulator is complex – breaking it into manageable pieces w
   
   - [ ] Test: Run a simple ROM (like Tetris or Dr. Mario, which don’t require MBC) to see if you get graphics and can control. Many things might still be missing (timing, etc.), but this will shake out integration issues.
 
-- [ ] **Timers & DIV** – *Dep: CPU (timing), MMU.*
+- [x] **Timers & DIV** – *Dep: CPU (timing), MMU.*
   
   - [x] Implement the Timer module fully as described:
     * [x] Keep track of `div_counter` (16-bit). Perhaps every CPU cycle call `timer.tick()`.
@@ -838,23 +838,23 @@ Implementing a full emulator is complex – breaking it into manageable pieces w
   
   - [ ] **Memory Inspection**: Provide a function to dump a region of memory or registers for debugging. Could integrate with the above REPL or simply use logs.
   
-  - [ ] **VRAM Viewer**: To emulate BGB’s VRAM viewer, one approach:  
+  - [x] **VRAM Viewer**: To emulate BGB’s VRAM viewer, one approach:
     
-    * [ ] When paused, take the contents of VRAM and interpret them to generate an image of the tile set or background map. For instance, you can render the 256 tiles of the tile data as a 128x128 image. Or render the current BG map (32x32 tiles) using the tiles and palette.  
-    * [ ] If using a GUI library (like egui or a separate window), you could display these. Alternatively, dump them to a PNG file for external viewing.  
-    * [ ] At design time, plan the PPU to expose methods to get tile pixel data easily (since PPU already decodes tiles to draw the screen, we can reuse that logic to draw all tiles).
+    * [x] When paused, take the contents of VRAM and interpret them to generate an image of the tile set or background map. For instance, you can render the 256 tiles of the tile data as a 128x128 image. Or render the current BG map (32x32 tiles) using the tiles and palette.
+    * [x] If using a GUI library (like egui or a separate window), you could display these. Alternatively, dump them to a PNG file for external viewing.
+    * [x] At design time, plan the PPU to expose methods to get tile pixel data easily (since PPU already decodes tiles to draw the screen, we can reuse that logic to draw all tiles).
   
-  - [ ] **Register Viewer**: In debug mode, overlay text of current register values, current instruction, etc., on the screen (if using a library that can draw text, or simply print to console every frame which is spammy).
+  - [x] **Register Viewer**: In debug mode, overlay text of current register values, current instruction, etc., on the screen (if using a library that can draw text, or simply print to console every frame which is spammy).
   
   - [ ] Many of these features can be added gradually. The key is that our architecture doesn’t hinder them:  
     
-    * [ ] We have a global `Emulator` state accessible so any dev tool can read memory, VRAM, etc.  
-    * [ ] We ensure the emulator can pause (which means breaking out of the tight loop that runs frames).  
+    * [x] We have a global `Emulator` state accessible so any dev tool can read memory, VRAM, etc.
+    * [x] We ensure the emulator can pause (which means breaking out of the tight loop that runs frames).
     * [ ] It might be useful to run the emulation loop step-by-step rather than frame-by-frame when debugging.
   
-  - [ ] Plan a **CLI flag** like `--debug` to enable a simple interactive debugger. Or even integrate with an existing debugger UI (some emulators allow connecting a remote GDB to the emulated CPU).
-  
-  - [ ] Document how to use these debugging features for developers.
+  - [x] Plan a **CLI flag** like `--debug` to enable a simple interactive debugger. Or even integrate with an existing debugger UI (some emulators allow connecting a remote GDB to the emulated CPU).
+
+  - [x] Document how to use these debugging features for developers.
 
 - [ ] **Final Polish** – *Dep: All features implemented.*
   
@@ -862,11 +862,11 @@ Implementing a full emulator is complex – breaking it into manageable pieces w
   
   - [x] Ensure battery save files are written on exit (and perhaps periodically to avoid loss on crash).
   
-  - [ ] Graceful shutdown when window closed or user interrupts.
+  - [x] Graceful shutdown when window closed or user interrupts.
   
   - [ ] Packaging: Make sure the emulator runs on Windows (maybe requiring bundling the SDL2 DLL if we used SDL2, or no extra steps if using winit/pixels).
   
-  - [ ] Update README (if this were a real project) with usage instructions.
+  - [x] Update README (if this were a real project) with usage instructions.
 
 The above steps can be grouped into **milestones** such as: *CPU + minimal MMU*, *Basic PPU output*, *Interrupts/Timers*, *Complete PPU*, *Audio*, *Accuracy fixes*, *Debug features*. Tackle them in order, as later ones depend on earlier components working. This checklist ensures that by the end, we have a fully functioning, accurate, and extensible Game Boy Color emulator.
 

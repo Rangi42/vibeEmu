@@ -1,6 +1,10 @@
 # vibeEmu
 
-vibeEmu is a Game Boy and Game Boy Color emulator written in Rust. The current implementation contains the basic building blocks such as the CPU core and a simplified memory system. It is meant as a learning project and starting point for a more complete emulator.
+vibeEmu is a Game Boy and Game Boy Color emulator written in Rust.  It now
+features a cycle‑accurate CPU, MMU, PPU and APU along with a `winit` + `pixels`
+frontend.  An ImGui powered debug UI exposes a register viewer and a VRAM
+viewer, making the emulator useful both for playing games and for studying how
+the hardware works.
 
 ## Building
 
@@ -33,15 +37,27 @@ If no limit is specified the emulator runs until interrupted.
 
 Test ROMs used for development are located in the `roms/` directory.
 
+## Debugging UI
+
+Right‑click the main window to pause emulation and open a context menu.  From
+here you can load another ROM, reset the Game Boy or open the **Debugger** and
+**VRAM Viewer** windows.  The debugger shows CPU registers while the VRAM viewer
+lets you inspect background maps, tiles, OAM and palettes.  Hold **Space** to
+fast‑forward (4× speed) and press **Escape** to quit.
+
 ## Controls
 
-The default keyboard mapping is:
+The default controls are:
 
 - **Arrow Keys**: D-pad
 - **S**: A button
 - **A**: B button
 - **Shift**: Select
 - **Enter**: Start
+- **Space**: Hold to fast-forward
+- **Escape**: Quit the emulator
+
+Use the **right mouse button** to pause/resume and bring up the context menu.
 
 ## Testing
 
