@@ -28,7 +28,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-const SCALE: u32 = 3;
+const SCALE: u32 = 2;
 
 #[derive(Default)]
 struct UiState {
