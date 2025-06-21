@@ -9,12 +9,49 @@ mod mmu;
 mod ppu;
 mod serial;
 mod timer;
+mod ui;
 
 use clap::Parser;
+use imgui::{ConfigFlags, Context as ImguiContext};
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use log::info;
-use minifb::{Key, Scale, Window, WindowOptions};
+use pixels::{Pixels, SurfaceTexture};
+use rfd::FileDialog;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use winit::dpi::PhysicalPosition;
+use winit::{
+    event::MouseButton,
+    event::{ElementState, Event, VirtualKeyCode, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+};
+
+const SCALE: u32 = 2;
+const GB_FPS: f64 = 59.7275;
+const FRAME_TIME: Duration = Duration::from_nanos((1e9_f64 / GB_FPS) as u64);
+const FF_MULT: f32 = 4.0;
+#[allow(static_mut_refs)]
+static mut NEXT_FRAME: Option<Instant> = None;
+
+#[derive(Default)]
+struct UiState {
+    paused: bool,
+    show_context: bool,
+    ctx_pos: [f32; 2],
+    spawn_debugger: bool,
+    spawn_vram: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Speed {
+    factor: f32,
+    fast: bool,
+}
+
+use ui::window::resize_pixels;
+use ui::window::{UiWindow, WindowKind};
 
 #[derive(Parser)]
 struct Args {
@@ -56,6 +93,229 @@ struct Args {
     /// Number of CPU cycles to run in headless mode
     #[arg(long)]
     cycles: Option<u64>,
+}
+
+fn cursor_in_screen(window: &winit::window::Window, pos: PhysicalPosition<f64>) -> bool {
+    let size = window.inner_size();
+    let width = (160 * SCALE) as f64;
+    let height = (144 * SCALE) as f64;
+    let x_in = pos.x >= 0.0 && pos.x < width.min(size.width as f64);
+    let y_in = pos.y >= 0.0 && pos.y < height.min(size.height as f64);
+    x_in && y_in
+}
+
+fn spawn_debugger_window(
+    event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+    platform: &mut WinitPlatform,
+    imgui: &mut ImguiContext,
+    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
+) {
+    use winit::dpi::LogicalSize;
+
+    let w = winit::window::WindowBuilder::new()
+        .with_title("vibeEmu \u{2013} Debugger")
+        .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64))
+        .build(event_loop)
+        .unwrap();
+
+    let size = w.inner_size();
+    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
+    let pixels = pixels::Pixels::new(1, 1, surface).expect("Pixels error");
+
+    platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
+
+    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, imgui);
+    windows.insert(ui_win.win.id(), ui_win);
+}
+
+fn spawn_vram_window(
+    event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+    platform: &mut WinitPlatform,
+    imgui: &mut ImguiContext,
+    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
+) {
+    use winit::dpi::LogicalSize;
+
+    let w = winit::window::WindowBuilder::new()
+        .with_title("vibeEmu \u{2013} VRAM")
+        .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64))
+        .build(event_loop)
+        .unwrap();
+
+    let size = w.inner_size();
+    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
+    let pixels = pixels::Pixels::new(1, 1, surface).expect("Pixels error");
+
+    platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
+
+    let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, imgui);
+    windows.insert(ui_win.win.id(), ui_win);
+}
+
+#[allow(static_mut_refs)]
+fn emulate_until(gb: &mut gameboy::GameBoy, speed: Speed, control_flow: &mut ControlFlow) {
+    let target = unsafe { NEXT_FRAME.get_or_insert_with(|| Instant::now() + FRAME_TIME) };
+
+    if let Ok(mut apu) = gb.mmu.apu.lock() {
+        apu.set_speed(speed.factor);
+    }
+
+    while !gb.mmu.ppu.frame_ready() {
+        gb.cpu.step(&mut gb.mmu);
+    }
+
+    if !speed.fast {
+        *control_flow = ControlFlow::WaitUntil(*target);
+        while Instant::now() < *target {
+            std::hint::spin_loop();
+        }
+        *target += FRAME_TIME;
+    } else {
+        *control_flow = ControlFlow::Poll;
+        *target = Instant::now();
+    }
+}
+
+fn draw_debugger(pixels: &mut Pixels, gb: &mut gameboy::GameBoy, ui: &imgui::Ui) {
+    let _ = pixels.frame_mut();
+    if let Some(_table) = ui.begin_table("regs", 2) {
+        ui.table_next_row();
+        ui.table_next_column();
+        ui.text("A");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.a));
+
+        ui.table_next_column();
+        ui.text("F");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.f));
+
+        ui.table_next_column();
+        ui.text("B");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.b));
+
+        ui.table_next_column();
+        ui.text("C");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.c));
+
+        ui.table_next_column();
+        ui.text("D");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.d));
+
+        ui.table_next_column();
+        ui.text("E");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.e));
+
+        ui.table_next_column();
+        ui.text("H");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.h));
+
+        ui.table_next_column();
+        ui.text("L");
+        ui.table_next_column();
+        ui.text(format!("{:02X}", gb.cpu.l));
+
+        ui.table_next_column();
+        ui.text("SP");
+        ui.table_next_column();
+        ui.text(format!("{:04X}", gb.cpu.sp));
+
+        ui.table_next_column();
+        ui.text("PC");
+        ui.table_next_column();
+        ui.text(format!("{:04X}", gb.cpu.pc));
+
+        ui.table_next_column();
+        ui.text("IME");
+        ui.table_next_column();
+        ui.text(format!("{}", gb.cpu.ime));
+
+        ui.table_next_column();
+        ui.text("Cycles");
+        ui.table_next_column();
+        ui.text(format!("{}", gb.cpu.cycles));
+    }
+}
+
+fn draw_vram(win: &mut ui::window::UiWindow, gb: &mut gameboy::GameBoy, ui: &imgui::Ui) {
+    let _ = win.pixels.frame_mut();
+    if let Some(viewer) = win.vram_viewer.as_mut() {
+        viewer.ui(
+            ui,
+            &mut gb.mmu.ppu,
+            &mut win.renderer,
+            win.pixels.device(),
+            win.pixels.queue(),
+        );
+    } else {
+        ui.text("VRAM viewer not initialized");
+    }
+}
+
+fn draw_game_screen(pixels: &mut Pixels, frame: &[u32]) {
+    let pixel_frame: &mut [u32] = bytemuck::cast_slice_mut(pixels.frame_mut());
+    for (dst, src) in pixel_frame.iter_mut().zip(frame) {
+        let r = ((src >> 16) & 0xFF) as u8;
+        let g = ((src >> 8) & 0xFF) as u8;
+        let b = (src & 0xFF) as u8;
+        *dst = u32::from_ne_bytes([r, g, b, 0xFF]);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_ui(
+    state: &mut UiState,
+    ui: &imgui::Ui,
+    gb: &mut gameboy::GameBoy,
+    _event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+    _platform: &mut WinitPlatform,
+) {
+    if state.show_context {
+        let flags = imgui::WindowFlags::NO_TITLE_BAR
+            | imgui::WindowFlags::NO_MOVE
+            | imgui::WindowFlags::NO_DECORATION;
+        let mut open = state.show_context;
+        let mut close_menu = false;
+        ui.window("ctx")
+            .position(state.ctx_pos, imgui::Condition::Always)
+            .flags(flags)
+            .always_auto_resize(true)
+            .opened(&mut open)
+            .build(|| {
+                if ui.button("Load ROM") {
+                    if let Some(path) = FileDialog::new()
+                        .add_filter("Game Boy ROM", &["gb", "gbc"])
+                        .pick_file()
+                    {
+                        if let Ok(cart) = cartridge::Cartridge::from_file(&path) {
+                            gb.reset();
+                            gb.mmu.load_cart(cart);
+                            state.paused = false;
+                        }
+                    }
+                    close_menu = true;
+                }
+                if ui.button("Reset GB") {
+                    gb.reset();
+                    state.paused = false;
+                    close_menu = true;
+                }
+                if ui.button("Debugger") {
+                    state.spawn_debugger = true;
+                    close_menu = true;
+                }
+                if ui.button("VRAM Viewer") {
+                    state.spawn_vram = true;
+                    close_menu = true;
+                }
+            });
+        state.show_context = open && !close_menu;
+    }
 }
 
 fn main() {
@@ -105,84 +365,284 @@ fn main() {
     let _stream = if args.headless {
         None
     } else {
-        Some(apu::Apu::start_stream(Arc::clone(&gb.mmu.apu)))
+        apu::Apu::start_stream(Arc::clone(&gb.mmu.apu))
     };
 
     let mut frame = vec![0u32; 160 * 144];
     let mut frame_count = 0u64;
+    let mut ui_state = UiState::default();
+    let mut speed = Speed {
+        factor: 1.0,
+        fast: false,
+    };
 
     if !args.headless {
-        let mut window = Window::new(
-            "vibeEmu",
-            160,
-            144,
-            WindowOptions {
-                scale: Scale::X2,
-                ..WindowOptions::default()
-            },
-        )
-        .expect("Failed to create window");
-        window.limit_update_rate(Some(Duration::from_micros(16_700)));
+        let event_loop = EventLoop::new();
+        let window = WindowBuilder::new()
+            .with_title("vibeEmu")
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                (160 * SCALE) as f64,
+                (144 * SCALE) as f64,
+            ))
+            .build(&event_loop)
+            .expect("Failed to create window");
 
-        while window.is_open() && !window.is_key_down(Key::Escape) {
-            // Gather input
-            let mut state = 0xFFu8;
-            if window.is_key_down(Key::Right) {
-                state &= !0x01;
-            }
-            if window.is_key_down(Key::Left) {
-                state &= !0x02;
-            }
-            if window.is_key_down(Key::Up) {
-                state &= !0x04;
-            }
-            if window.is_key_down(Key::Down) {
-                state &= !0x08;
-            }
-            if window.is_key_down(Key::S) {
-                state &= !0x10;
-            }
-            if window.is_key_down(Key::A) {
-                state &= !0x20;
-            }
-            if window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift) {
-                state &= !0x40;
-            }
-            if window.is_key_down(Key::Enter) {
-                state &= !0x80;
-            }
-            gb.mmu.input.update_state(state, &mut gb.mmu.if_reg);
+        let size = window.inner_size();
+        let surface = SurfaceTexture::new(size.width, size.height, &window);
+        let pixels = Pixels::new(160, 144, surface).expect("Pixels error");
 
-            while !gb.mmu.ppu.frame_ready() {
-                gb.cpu.step(&mut gb.mmu);
-            }
+        let mut imgui = ImguiContext::create();
+        imgui.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE;
+        let mut platform = WinitPlatform::init(&mut imgui);
+        platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
 
-            frame.copy_from_slice(gb.mmu.ppu.framebuffer());
-            gb.mmu.ppu.clear_frame_flag();
+        let mut windows = HashMap::new();
+        let main_win = UiWindow::new(WindowKind::Main, window, pixels, &mut imgui);
+        windows.insert(main_win.win.id(), main_win);
 
-            window
-                .update_with_buffer(&frame, 160, 144)
-                .expect("Failed to update window");
+        let mut state = 0xFFu8;
+        let mut cursor_pos = PhysicalPosition::new(0.0, 0.0);
 
-            if args.debug && frame_count % 60 == 0 {
-                let serial = gb.mmu.take_serial();
-                if !serial.is_empty() {
-                    print!("[SERIAL] ");
-                    for b in &serial {
-                        if b.is_ascii_graphic() || *b == b' ' {
-                            print!("{}", *b as char);
-                        } else {
-                            print!("\\x{:02X}", b);
+        event_loop.run(move |event, target, control_flow| {
+            *control_flow = ControlFlow::Poll;
+            match &event {
+                Event::WindowEvent {
+                    window_id,
+                    event: win_event,
+                    ..
+                } => {
+                    if let Some(win) = windows.get_mut(window_id) {
+                        platform.handle_event(imgui.io_mut(), &win.win, &event);
+                        if ui_state.show_context
+                            && imgui.io().want_capture_mouse
+                            && matches!(win_event, WindowEvent::MouseInput { .. })
+                        {
+                            return;
+                        }
+                        match win_event {
+                            WindowEvent::CloseRequested => {
+                                if matches!(win.kind, WindowKind::Main) {
+                                    // Flush any pending cartridge RAM before quitting.
+                                    gb.mmu.save_cart_ram();
+
+                                    // Tell winit to end the loop and let `event_loop.run` return.
+                                    *control_flow = ControlFlow::Exit;
+
+                                    // Nothing else to process.
+                                    #[allow(clippy::needless_return)]
+                                    return;
+                                } else {
+                                    // Non-main editor/aux window – just close it.
+                                    windows.remove(window_id);
+                                }
+                            }
+                            WindowEvent::Resized(size) => {
+                                resize_pixels(&mut win.pixels, *size);
+                            }
+                            WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                                resize_pixels(&mut win.pixels, **new_inner_size);
+                            }
+                            WindowEvent::CursorMoved { position, .. }
+                                if matches!(win.kind, WindowKind::Main) =>
+                            {
+                                cursor_pos = *position;
+                            }
+                            WindowEvent::MouseInput {
+                                state: ElementState::Pressed,
+                                button: MouseButton::Right,
+                                ..
+                            } if matches!(win.kind, WindowKind::Main) => {
+                                if !ui_state.paused && cursor_in_screen(&win.win, cursor_pos) {
+                                    ui_state.paused = true;
+                                    ui_state.show_context = true;
+                                    ui_state.ctx_pos = [cursor_pos.x as f32, cursor_pos.y as f32];
+                                }
+                            }
+                            WindowEvent::MouseInput {
+                                state: ElementState::Pressed,
+                                button: MouseButton::Left,
+                                ..
+                            } if matches!(win.kind, WindowKind::Main) => {
+                                // If the context menu is open and ImGui wants the mouse,
+                                // let the menu handle the click without closing it.
+                                if ui_state.show_context && imgui.io().want_capture_mouse {
+                                    // Menu click: handled by ImGui.
+                                } else if cursor_in_screen(&win.win, cursor_pos) {
+                                    // Clicking the bare Game Boy screen closes the menu and resumes.
+                                    ui_state.paused = false;
+                                    ui_state.show_context = false;
+                                }
+                            }
+                            WindowEvent::KeyboardInput { input, .. }
+                                if matches!(win.kind, WindowKind::Main) =>
+                            {
+                                if !(ui_state.paused || imgui.io().want_text_input) {
+                                    if let Some(key) = input.virtual_keycode {
+                                        let pressed = input.state == ElementState::Pressed;
+                                        let mask = if key == VirtualKeyCode::Space {
+                                            speed.fast = pressed;
+                                            speed.factor = if speed.fast { FF_MULT } else { 1.0 };
+                                            if let Ok(mut apu) = gb.mmu.apu.lock() {
+                                                apu.set_speed(speed.factor);
+                                            }
+                                            None
+                                        } else {
+                                            match key {
+                                                VirtualKeyCode::Right => Some(0x01),
+                                                VirtualKeyCode::Left => Some(0x02),
+                                                VirtualKeyCode::Up => Some(0x04),
+                                                VirtualKeyCode::Down => Some(0x08),
+                                                VirtualKeyCode::S => Some(0x10),
+                                                VirtualKeyCode::A => Some(0x20),
+                                                VirtualKeyCode::LShift | VirtualKeyCode::RShift => {
+                                                    Some(0x40)
+                                                }
+                                                VirtualKeyCode::Return => Some(0x80),
+                                                VirtualKeyCode::Escape => {
+                                                    if pressed {
+                                                        *control_flow = ControlFlow::Exit;
+                                                    }
+                                                    None
+                                                }
+                                                _ => None,
+                                            }
+                                        };
+                                        if let Some(mask) = mask {
+                                            if pressed {
+                                                state &= !mask;
+                                            } else {
+                                                state |= mask;
+                                            }
+                                            gb.mmu.input.update_state(state, &mut gb.mmu.if_reg);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    println!();
                 }
+                Event::RedrawRequested(window_id) => {
+                    if let Some(win) = windows.get_mut(window_id) {
+                        platform.prepare_frame(imgui.io_mut(), &win.win).unwrap();
+                        let ui = imgui.frame();
 
-                println!("{}", gb.cpu.debug_state());
+                        match win.kind {
+                            WindowKind::Main => {
+                                build_ui(&mut ui_state, ui, &mut gb, target, &mut platform);
+                                draw_game_screen(&mut win.pixels, &frame);
+                            }
+                            WindowKind::Debugger => draw_debugger(&mut win.pixels, &mut gb, ui),
+                            WindowKind::VramViewer => draw_vram(win, &mut gb, ui),
+                        }
+
+                        platform.prepare_render(ui, &win.win);
+                        let draw_data = imgui.render();
+
+                        let render_result =
+                            win.pixels.render_with(|encoder, render_target, context| {
+                                context.scaling_renderer.render(encoder, render_target);
+
+                                if draw_data.total_vtx_count > 0 {
+                                    let mut rpass =
+                                        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                            label: Some("imgui_pass"),
+                                            color_attachments: &[Some(
+                                                wgpu::RenderPassColorAttachment {
+                                                    view: render_target,
+                                                    resolve_target: None,
+                                                    ops: wgpu::Operations {
+                                                        load: wgpu::LoadOp::Load,
+                                                        store: true,
+                                                    },
+                                                },
+                                            )],
+                                            depth_stencil_attachment: None,
+                                        });
+
+                                    let surface_size = win.win.inner_size();
+                                    rpass.set_scissor_rect(
+                                        0,
+                                        0,
+                                        surface_size.width,
+                                        surface_size.height,
+                                    );
+
+                                    win.renderer
+                                        .render(
+                                            draw_data,
+                                            win.pixels.queue(),
+                                            win.pixels.device(),
+                                            &mut rpass,
+                                        )
+                                        .expect("imgui render failed");
+                                }
+                                Ok(())
+                            });
+                        if render_result.is_err() {
+                            *control_flow = ControlFlow::Exit;
+                        }
+                    }
+
+                    if ui_state.spawn_debugger
+                        && !windows
+                            .values()
+                            .any(|w| matches!(w.kind, WindowKind::Debugger))
+                    {
+                        spawn_debugger_window(target, &mut platform, &mut imgui, &mut windows);
+                        ui_state.paused = true;
+                        ui_state.spawn_debugger = false;
+                    }
+                    if ui_state.spawn_vram
+                        && !windows
+                            .values()
+                            .any(|w| matches!(w.kind, WindowKind::VramViewer))
+                    {
+                        spawn_vram_window(target, &mut platform, &mut imgui, &mut windows);
+                        ui_state.paused = true;
+                        ui_state.spawn_vram = false;
+                    }
+                }
+                Event::MainEventsCleared => {
+                    if !ui_state.paused {
+                        emulate_until(&mut gb, speed, control_flow);
+                    }
+
+                    if gb.mmu.ppu.frame_ready() {
+                        frame.copy_from_slice(gb.mmu.ppu.framebuffer());
+                        gb.mmu.ppu.clear_frame_flag();
+                    }
+
+                    for win in windows.values() {
+                        win.win.request_redraw();
+                    }
+
+                    if args.debug && frame_count % 60 == 0 {
+                        let serial = gb.mmu.take_serial();
+                        if !serial.is_empty() {
+                            print!("[SERIAL] ");
+                            for b in &serial {
+                                if b.is_ascii_graphic() || *b == b' ' {
+                                    print!("{}", *b as char);
+                                } else {
+                                    print!("\\x{:02X}", b);
+                                }
+                            }
+                            println!();
+                        }
+
+                        println!("{}", gb.cpu.debug_state());
+                    }
+
+                    frame_count += 1;
+                }
+                Event::LoopDestroyed => {
+                    // Extra safety: if we ever reach here without having saved yet.
+                    gb.mmu.save_cart_ram();
+                }
+                _ => {}
             }
-
-            frame_count += 1;
-        }
+        });
     } else {
         let frame_limit = args.frames;
         let cycle_limit = args.cycles;
@@ -238,6 +698,4 @@ fn main() {
             }
         }
     }
-
-    gb.mmu.save_cart_ram();
 }

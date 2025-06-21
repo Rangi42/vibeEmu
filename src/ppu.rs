@@ -77,9 +77,10 @@ pub struct Ppu {
     /// Indicates a completed frame is available in `framebuffer`
     frame_ready: bool,
     prev_stat_irq: u8,
+    frame_counter: u64,
 }
 
-/// Default DMG palette colors in 0x00RRGGBB order for `minifb`.
+/// Default DMG palette colors in 0x00RRGGBB order for the `pixels` crate.
 const DMG_PALETTE: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
 
 #[derive(Copy, Clone, Default)]
@@ -125,6 +126,7 @@ impl Ppu {
             sprite_count: 0,
             frame_ready: false,
             prev_stat_irq: 0,
+            frame_counter: 0,
         }
     }
 
@@ -227,6 +229,34 @@ impl Ppu {
     /// Clears the frame ready flag after a frame has been consumed.
     pub fn clear_frame_flag(&mut self) {
         self.frame_ready = false;
+    }
+
+    /// Returns the number of frames that have been completed since power on.
+    pub fn frames(&self) -> u64 {
+        self.frame_counter
+    }
+
+    /// Returns true if the PPU is running in Game Boy Color mode.
+    pub fn is_cgb(&self) -> bool {
+        self.cgb
+    }
+
+    /// Get a CGB background palette color as 0x00RRGGBB.
+    pub fn bg_palette_color(&self, palette: usize, color_id: usize) -> u32 {
+        let off = palette * 8 + color_id * 2;
+        Self::decode_cgb_color(self.bgpd[off], self.bgpd[off + 1])
+    }
+
+    /// Return a 0x00RRGGBB colour from **OBJ** palette RAM.
+    ///
+    /// * `palette` – CGB OBJ palette index (0-7)
+    /// * `color_id` – colour within that palette (0-3)
+    ///
+    /// This is identical to `bg_palette_color` but uses the object-palette
+    /// data (OBPD) instead of BGPD.
+    pub fn ob_palette_color(&self, palette: usize, color_id: usize) -> u32 {
+        let off = palette * 8 + color_id * 2;
+        Self::decode_cgb_color(self.obpd[off], self.obpd[off + 1])
     }
 
     pub fn read_reg(&mut self, addr: u16) -> u8 {
@@ -575,6 +605,7 @@ impl Ppu {
                             self.ly = 0;
                             self.frame_ready = false;
                             self.win_line_counter = 0;
+                            self.frame_counter = self.frame_counter.wrapping_add(1);
                             self.mode = MODE_OAM;
                             if self.stat & 0x20 != 0 {
                                 *if_reg |= 0x02;

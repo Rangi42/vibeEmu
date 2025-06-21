@@ -6,6 +6,7 @@ const CPU_CLOCK_HZ: u32 = 4_194_304;
 // 512 Hz frame sequencer tick (not doubled in CGB mode)
 const FRAME_SEQUENCER_PERIOD: u32 = 8192;
 const VOLUME_FACTOR: i16 = 64;
+pub const AUDIO_LATENCY_MS: u32 = 40;
 
 const POWER_ON_REGS: [u8; 0x30] = [
     0x80, 0xBF, 0xF3, 0xFF, 0xBF, 0xFF, 0x3F, 0x00, 0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF, 0xFF,
@@ -326,6 +327,7 @@ pub struct Apu {
     sample_timer: u32,
     sample_rate: u32,
     samples: VecDeque<i16>,
+    speed_factor: f32,
     hp_prev_input_left: f32,
     hp_prev_output_left: f32,
     hp_prev_input_right: f32,
@@ -335,6 +337,24 @@ pub struct Apu {
 }
 
 impl Apu {
+    // Keep <= 40 ms of stereo samples in the queue
+    const MAX_SAMPLES: usize = ((44100 * AUDIO_LATENCY_MS as usize) / 1000) * 2;
+
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed_factor = speed;
+    }
+
+    pub fn push_sample(&mut self, s: i16) {
+        if self.speed_factor != 1.0 {
+            return;
+        }
+        if self.samples.len() >= Self::MAX_SAMPLES {
+            let excess = self.samples.len() + 1 - Self::MAX_SAMPLES;
+            self.samples.drain(..excess);
+        }
+        self.samples.push_back(s);
+    }
+
     fn read_mask(addr: u16) -> u8 {
         match addr {
             0xFF10 => 0x80,
@@ -373,6 +393,7 @@ impl Apu {
         self.nr50 = 0;
         self.nr51 = 0;
         self.samples.clear();
+        self.speed_factor = 1.0;
         self.hp_prev_input_left = 0.0;
         self.hp_prev_output_left = 0.0;
         self.hp_prev_input_right = 0.0;
@@ -395,6 +416,7 @@ impl Apu {
             sample_timer: 0,
             sample_rate: 44100,
             samples: VecDeque::with_capacity(4096),
+            speed_factor: 1.0,
             hp_prev_input_left: 0.0,
             hp_prev_output_left: 0.0,
             hp_prev_input_right: 0.0,
@@ -649,8 +671,8 @@ impl Apu {
         while self.sample_timer >= cps {
             self.sample_timer -= cps;
             let (left, right) = self.mix_output();
-            self.samples.push_back(left);
-            self.samples.push_back(right);
+            self.push_sample(left);
+            self.push_sample(right);
         }
     }
 
@@ -723,12 +745,16 @@ impl Apu {
         self.sequencer.step
     }
 
-    pub fn start_stream(apu: Arc<Mutex<Self>>) -> cpal::Stream {
+    pub fn start_stream(apu: Arc<Mutex<Self>>) -> Option<cpal::Stream> {
         let host = cpal::default_host();
-        let device = host.default_output_device().expect("no output device");
-        let supported = device
-            .default_output_config()
-            .expect("no supported output config");
+        let device = host.default_output_device()?;
+        let supported = match device.default_output_config() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("no supported output config: {e}");
+                return None;
+            }
+        };
         let sample_format = supported.sample_format();
         let config: cpal::StreamConfig = supported.into();
         {
@@ -797,7 +823,7 @@ impl Apu {
         };
 
         stream.play().expect("failed to play stream");
-        stream
+        Some(stream)
     }
 }
 

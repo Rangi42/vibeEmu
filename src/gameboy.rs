@@ -18,6 +18,21 @@ impl GameBoy {
             cgb,
         }
     }
+
+    /// Reset the Game Boy to its initial power-on state while
+    /// preserving the loaded cartridge and boot ROM.
+    pub fn reset(&mut self) {
+        let cart = self.mmu.cart.take();
+        let boot = self.mmu.boot_rom.take();
+        self.cpu = Cpu::new_with_mode(self.cgb);
+        self.mmu = Mmu::new_with_mode(self.cgb);
+        if let Some(c) = cart {
+            self.mmu.load_cart(c);
+        }
+        if let Some(b) = boot {
+            self.mmu.load_boot_rom(b);
+        }
+    }
 }
 
 impl Default for GameBoy {
