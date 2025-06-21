@@ -247,6 +247,18 @@ impl Ppu {
         Self::decode_cgb_color(self.bgpd[off], self.bgpd[off + 1])
     }
 
+    /// Return a 0x00RRGGBB colour from **OBJ** palette RAM.
+    ///
+    /// * `palette` – CGB OBJ palette index (0-7)
+    /// * `color_id` – colour within that palette (0-3)
+    ///
+    /// This is identical to `bg_palette_color` but uses the object-palette
+    /// data (OBPD) instead of BGPD.
+    pub fn ob_palette_color(&self, palette: usize, color_id: usize) -> u32 {
+        let off = palette * 8 + color_id * 2;
+        Self::decode_cgb_color(self.obpd[off], self.obpd[off + 1])
+    }
+
     pub fn read_reg(&mut self, addr: u16) -> u8 {
         match addr {
             0xFF40 => self.lcdc,

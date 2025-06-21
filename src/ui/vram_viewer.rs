@@ -16,13 +16,16 @@ pub struct VramViewerWindow {
     current: VramTab,
     /* BG-map */
     bg_map_tex: Option<TextureId>,
+    oam_tex: Option<TextureId>,
     bg_map_buf: Vec<u8>,
+    oam_buf: Vec<u8>,
 
     /* Tiles */
     tiles_tex: Option<TextureId>,
     tiles_buf: Vec<u8>,
 
     last_frame: u64,
+    oam_last_frame: u64,
 }
 
 impl VramViewerWindow {
@@ -36,13 +39,18 @@ impl VramViewerWindow {
 
             /* BG-map */
             bg_map_tex: None,
+            oam_tex: None,
             bg_map_buf: vec![0; 256 * 256 * 4],
+            // 80 × (sprite_height max 16) = 80 × 16 × 4 bytes – will be
+            // resized at runtime if OBJ size flag changes.
+            oam_buf: Vec::new(),
 
             /* Tiles */
             tiles_tex: None,
             tiles_buf: vec![0; MAX_TILES_W * TILES_H * 4],
 
             last_frame: 0,
+            oam_last_frame: 0,
         }
     }
 
@@ -376,14 +384,144 @@ impl VramViewerWindow {
         texture.write(queue, buf, img_w as u32, img_h as u32);
         renderer.textures.insert(texture)
     }
+    // ──────────────────────────────────────────────────────────────────────────
+    // OBJ / OAM TAB
+    // ──────────────────────────────────────────────────────────────────────────
+    fn build_oam_texture(
+        &mut self,
+        ppu: &mut Ppu,
+        renderer: &mut Renderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> TextureId {
+        const COLS: usize = 10; // 10 sprites per row → 4 rows
+        const TOTAL: usize = 40;
+        const TILE_W: usize = 8;
+        const DMG_PALETTE: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
+
+        let cgb = ppu.is_cgb();
+        let lcdc = ppu.read_reg(0xFF40);
+        let sprite_h: usize = if lcdc & 0x04 != 0 { 16 } else { 8 };
+        let rows = TOTAL / COLS;
+        let img_w = COLS * TILE_W;
+        let img_h = rows * sprite_h;
+
+        let needed = img_w * img_h * 4;
+        if self.oam_buf.len() != needed {
+            self.oam_buf.resize(needed, 0);
+        }
+        let rgba = &mut self.oam_buf;
+        rgba.fill(0);
+
+        for i in 0..TOTAL {
+            let base = i * 4;
+            let mut tile_num = ppu.oam[base + 2];
+            let attr = ppu.oam[base + 3];
+
+            let pal_idx_cgb = (attr & 0x07) as usize;
+            let dmg_pal = if attr & 0x10 != 0 {
+                ppu.read_reg(0xFF49)
+            } else {
+                ppu.read_reg(0xFF48)
+            };
+            let bank = if cgb && attr & 0x08 != 0 { 1 } else { 0 };
+            let x_flip = attr & 0x20 != 0;
+            let y_flip = attr & 0x40 != 0;
+
+            if sprite_h == 16 {
+                tile_num &= 0xFE; // ignore LSB for 8×16 sprites
+            }
+
+            let tile_x = i % COLS;
+            let tile_y = i / COLS;
+
+            for row in 0..sprite_h {
+                // Handle Y-flip and second tile for 8×16 mode
+                let mut src_row = if y_flip { sprite_h - 1 - row } else { row };
+                let tile_offset = if sprite_h == 16 && src_row >= 8 {
+                    tile_num as usize + 1
+                } else {
+                    tile_num as usize
+                };
+                if sprite_h == 16 && src_row >= 8 {
+                    src_row -= 8;
+                }
+                let tile_addr = tile_offset * 16 + src_row * 2;
+
+                let lo = ppu.vram[bank][tile_addr];
+                let hi = ppu.vram[bank][tile_addr + 1];
+
+                for col in 0..TILE_W {
+                    let src_col = if x_flip { col } else { 7 - col };
+                    let bit = 7 - src_col;
+                    let color_id = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
+
+                    // Transparent?
+                    if color_id == 0 {
+                        continue;
+                    }
+
+                    let color = if cgb {
+                        ppu.ob_palette_color(pal_idx_cgb, color_id as usize)
+                    } else {
+                        let shade = (dmg_pal >> (color_id * 2)) & 0x03;
+                        DMG_PALETTE[shade as usize]
+                    };
+
+                    let x = tile_x * TILE_W + col;
+                    let y = tile_y * sprite_h + row;
+                    let off = (y * img_w + x) * 4;
+                    rgba[off] = ((color >> 16) & 0xFF) as u8;
+                    rgba[off + 1] = ((color >> 8) & 0xFF) as u8;
+                    rgba[off + 2] = (color & 0xFF) as u8;
+                    rgba[off + 3] = 0xFF;
+                }
+            }
+        }
+
+        let config = TextureConfig {
+            size: Extent3d {
+                width: img_w as u32,
+                height: img_h as u32,
+                depth_or_array_layers: 1,
+            },
+            label: Some("OAM"),
+            format: Some(TextureFormat::Rgba8UnormSrgb),
+            ..Default::default()
+        };
+        let texture = Texture::new(device, renderer, config);
+        texture.write(queue, rgba, img_w as u32, img_h as u32);
+        renderer.textures.insert(texture)
+    }
+
     fn draw_oam(
         &mut self,
-        _ui: &imgui::Ui,
-        _r: &mut Renderer,
-        _ppu: &mut Ppu,
-        _d: &wgpu::Device,
-        _q: &wgpu::Queue,
+        ui: &imgui::Ui,
+        renderer: &mut Renderer,
+        ppu: &mut Ppu,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
     ) {
+        let frame = ppu.frames();
+        if self.oam_tex.is_none() || frame != self.oam_last_frame {
+            self.oam_tex = Some(self.build_oam_texture(ppu, renderer, device, queue));
+            self.oam_last_frame = frame;
+        }
+
+        let tex_id = self.oam_tex.unwrap();
+        // Logical size of the generated bitmap – recompute every call
+        let sprite_h = if ppu.read_reg(0xFF40) & 0x04 != 0 {
+            16.0
+        } else {
+            8.0
+        };
+        let size = [80.0, 4.0 * sprite_h];
+
+        let avail = ui.content_region_avail();
+        let scale = (avail[0] / size[0]).min(4.0);
+        let draw_size = [size[0] * scale, size[1] * scale];
+
+        imgui::Image::new(tex_id, draw_size).build(ui);
     }
     fn draw_palettes(
         &mut self,
