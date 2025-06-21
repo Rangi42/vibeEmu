@@ -332,6 +332,8 @@ pub struct Apu {
     hp_prev_output_left: f32,
     hp_prev_input_right: f32,
     hp_prev_output_right: f32,
+    pcm12: u8,
+    pcm34: u8,
     regs: [u8; 0x30],
     wave_shadow: [u8; 0x10],
 }
@@ -398,6 +400,8 @@ impl Apu {
         self.hp_prev_output_left = 0.0;
         self.hp_prev_input_right = 0.0;
         self.hp_prev_output_right = 0.0;
+        self.pcm12 = 0;
+        self.pcm34 = 0;
     }
     pub fn new() -> Self {
         let mut apu = Self {
@@ -421,6 +425,8 @@ impl Apu {
             hp_prev_output_left: 0.0,
             hp_prev_input_right: 0.0,
             hp_prev_output_right: 0.0,
+            pcm12: 0,
+            pcm34: 0,
         };
 
         // Initialize channels to power-on register defaults
@@ -474,6 +480,17 @@ impl Apu {
 
         let idx = (addr - 0xFF10) as usize;
         self.regs[idx] | Apu::read_mask(addr)
+    }
+
+    pub fn read_pcm(&self, addr: u16) -> u8 {
+        if self.nr52 & 0x80 == 0 {
+            return 0xFF;
+        }
+        match addr {
+            0xFF76 => self.pcm12,
+            0xFF77 => self.pcm34,
+            _ => 0xFF,
+        }
     }
 
     pub fn write_reg(&mut self, addr: u16, val: u8) {
@@ -677,10 +694,18 @@ impl Apu {
     }
 
     fn mix_output(&mut self) -> (i16, i16) {
-        let ch1 = self.ch1.output() as i16 - 8;
-        let ch2 = self.ch2.output() as i16 - 8;
-        let ch3 = self.ch3.output() as i16 - 8;
-        let ch4 = self.ch4.output() as i16 - 8;
+        let out1 = self.ch1.output();
+        let out2 = self.ch2.output();
+        let out3 = self.ch3.output();
+        let out4 = self.ch4.output();
+
+        self.pcm12 = (out2 << 4) | out1;
+        self.pcm34 = (out4 << 4) | out3;
+
+        let ch1 = out1 as i16 - 8;
+        let ch2 = out2 as i16 - 8;
+        let ch3 = out3 as i16 - 8;
+        let ch4 = out4 as i16 - 8;
 
         let mut left = 0i16;
         let mut right = 0i16;
