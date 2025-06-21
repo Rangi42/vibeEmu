@@ -19,7 +19,7 @@ use pixels::{Pixels, SurfaceTexture};
 use rfd::FileDialog;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use winit::dpi::PhysicalPosition;
 use winit::{
     event::MouseButton,
@@ -29,6 +29,11 @@ use winit::{
 };
 
 const SCALE: u32 = 3;
+const GB_FPS: f64 = 59.7275;
+const FRAME_TIME: Duration = Duration::from_nanos((1e9_f64 / GB_FPS) as u64);
+const FF_MULT: f32 = 4.0;
+#[allow(static_mut_refs)]
+static mut NEXT_FRAME: Option<Instant> = None;
 
 #[derive(Default)]
 struct UiState {
@@ -37,6 +42,12 @@ struct UiState {
     ctx_pos: [f32; 2],
     spawn_debugger: bool,
     spawn_vram: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Speed {
+    factor: f32,
+    fast: bool,
 }
 
 use ui::window::resize_pixels;
@@ -139,6 +150,30 @@ fn spawn_vram_window(
 
     let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, imgui);
     windows.insert(ui_win.win.id(), ui_win);
+}
+
+#[allow(static_mut_refs)]
+fn emulate_until(gb: &mut gameboy::GameBoy, speed: Speed, control_flow: &mut ControlFlow) {
+    let target = unsafe { NEXT_FRAME.get_or_insert_with(|| Instant::now() + FRAME_TIME) };
+
+    if let Ok(mut apu) = gb.mmu.apu.lock() {
+        apu.set_speed(speed.factor);
+    }
+
+    while !gb.mmu.ppu.frame_ready() {
+        gb.cpu.step(&mut gb.mmu);
+    }
+
+    if !speed.fast {
+        *control_flow = ControlFlow::WaitUntil(*target);
+        while Instant::now() < *target {
+            std::hint::spin_loop();
+        }
+        *target += FRAME_TIME;
+    } else {
+        *control_flow = ControlFlow::Poll;
+        *target = Instant::now();
+    }
 }
 
 fn draw_debugger(pixels: &mut Pixels, gb: &mut gameboy::GameBoy, ui: &imgui::Ui) {
@@ -336,6 +371,10 @@ fn main() {
     let mut frame = vec![0u32; 160 * 144];
     let mut frame_count = 0u64;
     let mut ui_state = UiState::default();
+    let mut speed = Speed {
+        factor: 1.0,
+        fast: false,
+    };
 
     if !args.headless {
         let event_loop = EventLoop::new();
@@ -440,24 +479,33 @@ fn main() {
                                 if !(ui_state.paused || imgui.io().want_text_input) {
                                     if let Some(key) = input.virtual_keycode {
                                         let pressed = input.state == ElementState::Pressed;
-                                        let mask = match key {
-                                            VirtualKeyCode::Right => Some(0x01),
-                                            VirtualKeyCode::Left => Some(0x02),
-                                            VirtualKeyCode::Up => Some(0x04),
-                                            VirtualKeyCode::Down => Some(0x08),
-                                            VirtualKeyCode::S => Some(0x10),
-                                            VirtualKeyCode::A => Some(0x20),
-                                            VirtualKeyCode::LShift | VirtualKeyCode::RShift => {
-                                                Some(0x40)
+                                        let mask = if key == VirtualKeyCode::Space {
+                                            speed.fast = pressed;
+                                            speed.factor = if speed.fast { FF_MULT } else { 1.0 };
+                                            if let Ok(mut apu) = gb.mmu.apu.lock() {
+                                                apu.set_speed(speed.factor);
                                             }
-                                            VirtualKeyCode::Return => Some(0x80),
-                                            VirtualKeyCode::Escape => {
-                                                if pressed {
-                                                    *control_flow = ControlFlow::Exit;
+                                            None
+                                        } else {
+                                            match key {
+                                                VirtualKeyCode::Right => Some(0x01),
+                                                VirtualKeyCode::Left => Some(0x02),
+                                                VirtualKeyCode::Up => Some(0x04),
+                                                VirtualKeyCode::Down => Some(0x08),
+                                                VirtualKeyCode::S => Some(0x10),
+                                                VirtualKeyCode::A => Some(0x20),
+                                                VirtualKeyCode::LShift | VirtualKeyCode::RShift => {
+                                                    Some(0x40)
                                                 }
-                                                None
+                                                VirtualKeyCode::Return => Some(0x80),
+                                                VirtualKeyCode::Escape => {
+                                                    if pressed {
+                                                        *control_flow = ControlFlow::Exit;
+                                                    }
+                                                    None
+                                                }
+                                                _ => None,
                                             }
-                                            _ => None,
                                         };
                                         if let Some(mask) = mask {
                                             if pressed {
@@ -557,9 +605,7 @@ fn main() {
                 }
                 Event::MainEventsCleared => {
                     if !ui_state.paused {
-                        while !gb.mmu.ppu.frame_ready() {
-                            gb.cpu.step(&mut gb.mmu);
-                        }
+                        emulate_until(&mut gb, speed, control_flow);
                     }
 
                     if gb.mmu.ppu.frame_ready() {
