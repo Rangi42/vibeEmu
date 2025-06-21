@@ -24,8 +24,13 @@ pub struct VramViewerWindow {
     tiles_tex: Option<TextureId>,
     tiles_buf: Vec<u8>,
 
+    /* Palettes */
+    palettes_tex: Option<TextureId>,
+    palettes_buf: Vec<u8>,
+
     last_frame: u64,
     oam_last_frame: u64,
+    palettes_last_frame: u64,
 }
 
 impl VramViewerWindow {
@@ -49,8 +54,13 @@ impl VramViewerWindow {
             tiles_tex: None,
             tiles_buf: vec![0; MAX_TILES_W * TILES_H * 4],
 
+            /* Palettes — 32 × 128 px, 4 RGBA bytes each */
+            palettes_tex: None,
+            palettes_buf: vec![0; 32 * 128 * 4],
+
             last_frame: 0,
             oam_last_frame: 0,
+            palettes_last_frame: 0,
         }
     }
 
@@ -525,11 +535,116 @@ impl VramViewerWindow {
     }
     fn draw_palettes(
         &mut self,
-        _ui: &imgui::Ui,
-        _r: &mut Renderer,
-        _ppu: &mut Ppu,
-        _d: &wgpu::Device,
-        _q: &wgpu::Queue,
+        ui: &imgui::Ui,
+        renderer: &mut Renderer,
+        ppu: &mut Ppu,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
     ) {
+        let frame = ppu.frames();
+        if self.palettes_tex.is_none() || frame != self.palettes_last_frame {
+            self.palettes_tex = Some(self.build_palettes_texture(ppu, renderer, device, queue));
+            self.palettes_last_frame = frame;
+        }
+
+        let tex_id = self.palettes_tex.unwrap();
+        let size = [32.0, 128.0];
+        let avail = ui.content_region_avail();
+        let scale = (avail[0] / size[0]).clamp(1.0, 4.0);
+        let draw_size = [size[0] * scale, size[1] * scale];
+        let cursor = ui.cursor_screen_pos();
+
+        imgui::Image::new(tex_id, draw_size).build(ui);
+
+        let draw_list = ui.get_window_draw_list();
+        for row in 0..16 {
+            let label = if row < 8 {
+                format!("BG{}", row)
+            } else {
+                format!("OBJ{}", row - 8)
+            };
+            let pos = [
+                cursor[0] + draw_size[0] + 6.0,
+                cursor[1] + row as f32 * 8.0 * scale + 2.0,
+            ];
+            draw_list.add_text(pos, imgui::ImColor32::from_rgb(255, 255, 255), label);
+        }
+    }
+
+    fn build_palettes_texture(
+        &mut self,
+        ppu: &mut Ppu,
+        renderer: &mut Renderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> TextureId {
+        const SWATCH: usize = 8;
+        const COLORS: usize = 4;
+        const PALETTES: usize = 16;
+        const IMG_W: usize = SWATCH * COLORS;
+        const IMG_H: usize = SWATCH * PALETTES;
+        const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
+
+        let buf = &mut self.palettes_buf[..IMG_W * IMG_H * 4];
+        buf.fill(0);
+
+        let cgb = ppu.is_cgb();
+        for row in 0..PALETTES {
+            let (is_bg, pal_idx) = if row < 8 {
+                (true, row)
+            } else {
+                (false, row - 8)
+            };
+            for col in 0..COLORS {
+                let rgb = if cgb {
+                    if is_bg {
+                        ppu.bg_palette_color(pal_idx, col)
+                    } else {
+                        ppu.ob_palette_color(pal_idx, col)
+                    }
+                } else {
+                    let reg = if is_bg {
+                        ppu.read_reg(0xFF47)
+                    } else if pal_idx == 0 {
+                        ppu.read_reg(0xFF48)
+                    } else {
+                        ppu.read_reg(0xFF49)
+                    };
+                    let shade = ((reg >> (col * 2)) & 0x03) as usize;
+                    DMG_COLORS[shade]
+                };
+
+                let r = ((rgb >> 16) & 0xFF) as u8;
+                let g = ((rgb >> 8) & 0xFF) as u8;
+                let b = (rgb & 0xFF) as u8;
+
+                let x0 = col * SWATCH;
+                let y0 = row * SWATCH;
+                for y in 0..SWATCH {
+                    for x in 0..SWATCH {
+                        let off = ((y0 + y) * IMG_W + (x0 + x)) * 4;
+                        buf[off] = r;
+                        buf[off + 1] = g;
+                        buf[off + 2] = b;
+                        buf[off + 3] = 0xFF;
+                    }
+                }
+            }
+        }
+
+        let config = TextureConfig {
+            size: Extent3d {
+                width: IMG_W as u32,
+                height: IMG_H as u32,
+                depth_or_array_layers: 1,
+            },
+            label: Some("Palettes"),
+            format: Some(TextureFormat::Rgba8UnormSrgb),
+            ..Default::default()
+        };
+
+        let texture = Texture::new(device, renderer, config);
+        texture.write(queue, buf, IMG_W as u32, IMG_H as u32);
+        renderer.textures.insert(texture)
     }
 }
