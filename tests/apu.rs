@@ -121,30 +121,31 @@ fn pcm_register_open_bus() {
 fn pcm_register_sample_values() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80); // enable
-
-    apu.write_reg(0xFF11, 0xC0); // duty 75%, length=0
-    apu.write_reg(0xFF12, 0xF0); // envelope volume=15
-    apu.write_reg(0xFF13, 0);
+    // ch1 low, ch2 high so PCM12 should be 0xF0
+    apu.write_reg(0xFF11, 0x00); // duty 12.5%
+    apu.write_reg(0xFF12, 0xF0); // max volume
     apu.write_reg(0xFF14, 0x80); // trigger
 
     apu.write_reg(0xFF16, 0xC0); // duty 75%
     apu.write_reg(0xFF17, 0xF0);
-    apu.write_reg(0xFF18, 0);
-    apu.write_reg(0xFF19, 0x80);
+    apu.write_reg(0xFF19, 0x80); // trigger
 
-    assert_eq!(apu.read_pcm(0xFF76), 0xFF);
+    apu.step(100);
+
+    assert_eq!(apu.read_pcm(0xFF76), 0xF0);
 }
 #[test]
 fn pcm_mmu_mapping() {
     let mut mmu = Mmu::new_with_mode(true);
     mmu.write_byte(0xFF26, 0x80);
-    mmu.write_byte(0xFF11, 0xC0);
+    mmu.write_byte(0xFF11, 0x00); // duty 12.5%
     mmu.write_byte(0xFF12, 0xF0);
     mmu.write_byte(0xFF14, 0x80);
     mmu.write_byte(0xFF16, 0xC0);
     mmu.write_byte(0xFF17, 0xF0);
     mmu.write_byte(0xFF19, 0x80);
-    assert_eq!(mmu.read_byte(0xFF76), 0xFF);
+    mmu.apu.lock().unwrap().step(100);
+    assert_eq!(mmu.read_byte(0xFF76), 0xF0);
     let mut dmg = Mmu::new();
     assert_eq!(dmg.read_byte(0xFF76), 0xFF);
 }
