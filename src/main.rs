@@ -395,7 +395,11 @@ fn main() {
                                 button: MouseButton::Left,
                                 ..
                             } if matches!(win.kind, WindowKind::Main) => {
-                                ui_state.paused = false;
+                                if cursor_in_screen(&win.win, cursor_pos) {
+                                    // Always resume emulation and close the contextual menu on left-click
+                                    ui_state.paused = false;
+                                    ui_state.show_context = false;
+                                }
                             }
                             WindowEvent::KeyboardInput { input, .. }
                                 if matches!(win.kind, WindowKind::Main) =>
