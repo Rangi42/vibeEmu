@@ -364,6 +364,12 @@ fn main() {
                 } => {
                     if let Some(win) = windows.get_mut(window_id) {
                         platform.handle_event(imgui.io_mut(), &win.win, &event);
+                        if ui_state.show_context
+                            && imgui.io().want_capture_mouse
+                            && matches!(win_event, WindowEvent::MouseInput { .. })
+                        {
+                            return;
+                        }
                         match win_event {
                             WindowEvent::CloseRequested => {
                                 windows.remove(window_id);
@@ -395,8 +401,12 @@ fn main() {
                                 button: MouseButton::Left,
                                 ..
                             } if matches!(win.kind, WindowKind::Main) => {
-                                if cursor_in_screen(&win.win, cursor_pos) {
-                                    // Always resume emulation and close the contextual menu on left-click
+                                // If the context menu is open and ImGui wants the mouse,
+                                // let the menu handle the click without closing it.
+                                if ui_state.show_context && imgui.io().want_capture_mouse {
+                                    // Menu click: handled by ImGui.
+                                } else if cursor_in_screen(&win.win, cursor_pos) {
+                                    // Clicking the bare Game Boy screen closes the menu and resumes.
                                     ui_state.paused = false;
                                     ui_state.show_context = false;
                                 }
