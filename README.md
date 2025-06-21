@@ -2,9 +2,14 @@
 
 <img src="gfx/vibeEmu_512px.png" alt="vibeEmu Logo" width="250" />
 
-vibeEmu is a Game Boy and Game Boy Color emulator written in Rust.  It now
-features a cycle‑accurate CPU, MMU, PPU and APU along with a `winit` + `pixels`
-frontend.  An ImGui powered debug UI exposes a register viewer and a VRAM
+> **AI is a tool, not a crutch.**  
+> *vibeEmu* is a personal research experiment in **vibe coding** – describing what you want in natural language and letting an asynchronous AI agent do most of the heavy lifting. The goal is to measure how far large‑language‑model assistance can take a programmer when building a cycle‑accurate Game Boy ⁄ Game Boy Color emulator in Rust, and where human expertise is still essential.
+
+This repository intentionally exposes both successes *and* failures so others can judge the approach. It is **not** production‑ready software and **not** an endorsement of replacing human engineers with AI.
+
+vibeEmu is a Game Boy and Game Boy Color emulator written in Rust.  It aims to
+feature a cycle‑accurate CPU, MMU, PPU and APU along with a `winit` + `pixels`
+frontend.  An ImGui powered debug UI will expose a register viewer and a VRAM
 viewer, making the emulator useful both for playing games and for studying how
 the hardware works.
 
@@ -68,7 +73,3 @@ Unit tests can be executed with:
 ```bash
 cargo test
 ```
-
-## Project roadmap
-
-A detailed checklist of planned tasks can be found in `TODO.md`.
