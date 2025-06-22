@@ -3,9 +3,10 @@ mod common;
 use vibeEmu::{cartridge::Cartridge, gameboy::GameBoy};
 const FIB_SEQ: [u8; 6] = [3, 5, 8, 13, 21, 34];
 fn run_mooneye_acceptance<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bool {
-    let mut gb = GameBoy::new();
-    let rom = std::fs::read(rom_path).expect("rom not found");
-    gb.mmu.load_cart(Cartridge::load(rom));
+    let rom = std::fs::read(&rom_path).expect("rom not found");
+    let cart = Cartridge::load(rom);
+    let mut gb = GameBoy::new_with_mode(cart.cgb);
+    gb.mmu.load_cart(cart);
     while gb.cpu.cycles < max_cycles {
         gb.cpu.step(&mut gb.mmu);
         if gb.mmu.serial.peek_output().len() >= 6 {
