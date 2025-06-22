@@ -235,7 +235,6 @@ fn same_suite__apu__channel_2__channel_2_align_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_align_cpu_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_align_cpu.gb"),
