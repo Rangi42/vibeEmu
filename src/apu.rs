@@ -467,7 +467,6 @@ impl Apu {
         self.hp_prev_output_right = 0.0;
         self.pcm12 = 0;
         self.pcm34 = 0;
-        self.cpu_cycles = 0;
     }
     pub fn new() -> Self {
         let mut apu = Self {
@@ -679,6 +678,8 @@ impl Apu {
                         self.ch1.out_stage1 = 0;
                         self.ch2.out_latched = 0;
                         self.ch2.out_stage1 = 0;
+                        self.cpu_cycles = 0;
+                        self.sequencer.step = 0;
                     }
                     self.nr52 |= 0x80;
                 }
