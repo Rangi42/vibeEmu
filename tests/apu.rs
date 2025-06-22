@@ -130,7 +130,7 @@ fn pcm_register_sample_values() {
     apu.write_reg(0xFF17, 0xF0);
     apu.write_reg(0xFF19, 0x80); // trigger
 
-    apu.step(100);
+    apu.step(200);
 
     assert_eq!(apu.read_pcm(0xFF76), 0xF0);
 }
@@ -144,7 +144,7 @@ fn pcm_mmu_mapping() {
     mmu.write_byte(0xFF16, 0xC0);
     mmu.write_byte(0xFF17, 0xF0);
     mmu.write_byte(0xFF19, 0x80);
-    mmu.apu.lock().unwrap().step(100);
+    mmu.apu.lock().unwrap().step(200);
     assert_eq!(mmu.read_byte(0xFF76), 0xF0);
     let mut dmg = Mmu::new();
     assert_eq!(dmg.read_byte(0xFF76), 0xFF);

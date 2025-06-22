@@ -93,6 +93,7 @@ struct SquareChannel {
     timer: i32,
     envelope: Envelope,
     sweep: Option<Sweep>,
+    first_sample: bool,
 }
 
 impl SquareChannel {
@@ -124,8 +125,12 @@ impl SquareChannel {
         self.timer -= cycles;
     }
 
-    fn output(&self) -> u8 {
+    fn output(&mut self) -> u8 {
         if !self.enabled || !self.dac_enabled {
+            return 0;
+        }
+        if self.first_sample {
+            self.first_sample = false;
             return 0;
         }
         const DUTY_TABLE: [[u8; 8]; 4] = [
@@ -612,8 +617,11 @@ impl Apu {
             &mut self.ch2
         };
         ch.enabled = true;
+        let old_low = ch.timer & 0x3;
+        let period = ch.period();
+        ch.timer = (period & !0x3) | old_low;
         ch.duty_pos = 0;
-        ch.timer = ch.period();
+        ch.first_sample = true;
         ch.envelope.volume = ch.envelope.initial;
         if idx == 1 {
             if let Some(s) = ch.sweep.as_mut() {
