@@ -95,6 +95,8 @@ struct SquareChannel {
     envelope: Envelope,
     sweep: Option<Sweep>,
     first_sample: bool,
+    out_latched: u8,
+    out_stage1: u8,
 }
 
 impl SquareChannel {
@@ -131,7 +133,7 @@ impl SquareChannel {
         self.timer -= cycles;
     }
 
-    fn output(&mut self) -> u8 {
+    fn compute_output(&mut self) -> u8 {
         if !self.enabled || !self.dac_enabled {
             return 0;
         }
@@ -147,6 +149,20 @@ impl SquareChannel {
         ];
         let level = DUTY_TABLE[self.duty as usize][self.duty_pos as usize];
         level * self.envelope.volume
+    }
+
+    fn output(&mut self) -> u8 {
+        self.compute_output()
+    }
+
+    fn tick_1mhz(&mut self) {
+        let fresh = self.compute_output();
+        self.out_latched = self.out_stage1;
+        self.out_stage1 = fresh;
+    }
+
+    fn current_sample(&self) -> u8 {
+        self.out_latched
     }
 
     fn peek_sample(&self) -> u8 {
@@ -658,6 +674,12 @@ impl Apu {
                     self.nr52 &= !0x80;
                     self.power_off();
                 } else {
+                    if self.nr52 & 0x80 == 0 {
+                        self.ch1.out_latched = 0;
+                        self.ch1.out_stage1 = 0;
+                        self.ch2.out_latched = 0;
+                        self.ch2.out_stage1 = 0;
+                    }
                     self.nr52 |= 0x80;
                 }
                 let idx = (addr - 0xFF10) as usize;
@@ -762,6 +784,8 @@ impl Apu {
 
     /// Call once per M-cycle / machine step.
     pub fn tick(&mut self, div_prev: u16, div_now: u16, double_speed: bool) {
+        self.ch1.tick_1mhz();
+        self.ch2.tick_1mhz();
         // DIV bit 5 clocks the sequencer at 512 Hz (bit 6 when double-speed)
         let bit = if double_speed { 6 } else { 5 };
         let toggled = ((div_prev >> bit) & 1) != ((div_now >> bit) & 1);
@@ -780,8 +804,8 @@ impl Apu {
 
     /// Update FF76/FF77 to reflect the current channel outputs.
     fn refresh_pcm_regs(&mut self) {
-        let ch1 = self.ch1.peek_sample();
-        let ch2 = self.ch2.peek_sample();
+        let ch1 = self.ch1.current_sample();
+        let ch2 = self.ch2.current_sample();
         let ch3 = self.ch3.peek_sample();
         let ch4 = self.ch4.peek_sample();
         self.pcm12 = (ch2 << 4) | ch1;
@@ -806,8 +830,8 @@ impl Apu {
     }
 
     fn mix_output(&mut self) -> (i16, i16) {
-        let out1 = self.ch1.output();
-        let out2 = self.ch2.output();
+        let out1 = self.ch1.current_sample();
+        let out2 = self.ch2.current_sample();
         let out3 = self.ch3.output();
         let out4 = self.ch4.output();
 
