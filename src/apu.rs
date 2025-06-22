@@ -703,7 +703,7 @@ impl Apu {
         ch.enabled = true;
         let div_phase = (self.cpu_cycles & 0x3) as i32;
         let period = ch.period();
-        let delay = 4 - div_phase;
+        let delay = 18 - div_phase;
         ch.timer = ((period + delay) & !0x3) | div_phase;
         ch.pending_reset = true;
         ch.first_sample = true;
