@@ -328,7 +328,7 @@ pub struct Apu {
     nr51: u8,
     nr52: u8,
     sequencer: FrameSequencer,
-    seq_counter: u32,
+    div_counter: u16,
     sample_timer: u32,
     sample_rate: u32,
     samples: VecDeque<i16>,
@@ -421,7 +421,7 @@ impl Apu {
             nr51: 0xF3,
             nr52: 0xF1,
             sequencer: FrameSequencer::new(),
-            seq_counter: 0,
+            div_counter: 0,
             sample_timer: 0,
             sample_rate: 44100,
             samples: VecDeque::with_capacity(4096),
@@ -530,7 +530,12 @@ impl Apu {
             }
             0xFF13 => self.ch1.frequency = (self.ch1.frequency & 0x700) | val as u16,
             0xFF14 => {
+                let prev = self.ch1.length_enable;
                 self.ch1.length_enable = val & 0x40 != 0;
+                if !prev && self.ch1.length_enable {
+                    let next_step = (self.sequencer.step + 1) & 7;
+                    Apu::maybe_extra_len_clock(&mut self.ch1, next_step);
+                }
                 self.ch1.frequency = (self.ch1.frequency & 0xFF) | (((val & 0x07) as u16) << 8);
                 if val & 0x80 != 0 {
                     self.trigger_square(1);
@@ -549,7 +554,12 @@ impl Apu {
             }
             0xFF18 => self.ch2.frequency = (self.ch2.frequency & 0x700) | val as u16,
             0xFF19 => {
+                let prev = self.ch2.length_enable;
                 self.ch2.length_enable = val & 0x40 != 0;
+                if !prev && self.ch2.length_enable {
+                    let next_step = (self.sequencer.step + 1) & 7;
+                    Apu::maybe_extra_len_clock(&mut self.ch2, next_step);
+                }
                 self.ch2.frequency = (self.ch2.frequency & 0xFF) | (((val & 0x07) as u16) << 8);
                 if val & 0x80 != 0 {
                     self.trigger_square(2);
@@ -584,7 +594,14 @@ impl Apu {
                 self.ch4.divisor = val & 0x07;
             }
             0xFF23 => {
+                let prev = self.ch4.length_enable;
                 self.ch4.length_enable = val & 0x40 != 0;
+                if !prev && self.ch4.length_enable {
+                    let next_step = (self.sequencer.step + 1) & 7;
+                    if !matches!(next_step, 0 | 2 | 4 | 6) && self.ch4.length > 0 {
+                        self.ch4.clock_length();
+                    }
+                }
                 if val & 0x80 != 0 {
                     self.trigger_noise();
                 }
@@ -641,6 +658,12 @@ impl Apu {
         if ch.length == 0 {
             ch.length = 64;
         }
+        if ch.length == 64 && ch.length_enable {
+            let upcoming = self.sequencer.step;
+            if matches!(upcoming, 0 | 2 | 4 | 6) {
+                ch.length = 63;
+            }
+        }
     }
 
     fn trigger_wave(&mut self) {
@@ -649,6 +672,12 @@ impl Apu {
         self.ch3.timer = self.ch3.period();
         if self.ch3.length == 0 {
             self.ch3.length = 256;
+        }
+        if self.ch3.length == 256 && self.ch3.length_enable {
+            let upcoming = self.sequencer.step;
+            if matches!(upcoming, 0 | 2 | 4 | 6) {
+                self.ch3.length = 255;
+            }
         }
     }
 
@@ -659,6 +688,12 @@ impl Apu {
         self.ch4.envelope.volume = self.ch4.envelope.initial;
         if self.ch4.length == 0 {
             self.ch4.length = 64;
+        }
+        if self.ch4.length == 64 && self.ch4.length_enable {
+            let upcoming = self.sequencer.step;
+            if matches!(upcoming, 0 | 2 | 4 | 6) {
+                self.ch4.length = 63;
+            }
         }
     }
 
@@ -679,19 +714,36 @@ impl Apu {
         }
     }
 
-    pub fn step(&mut self, cycles: u16) {
-        let cycles = cycles as u32;
-        self.seq_counter += cycles;
-        while self.seq_counter >= FRAME_SEQUENCER_PERIOD {
-            self.seq_counter -= FRAME_SEQUENCER_PERIOD;
+    /// Call once per M-cycle / machine step.
+    pub fn tick(&mut self, div_prev: u16, div_now: u16, double_speed: bool) {
+        let bit = if double_speed { 5 } else { 4 };
+        let edge_fall = ((div_prev >> bit) & 1) == 1 && ((div_now >> bit) & 1) == 0;
+        if edge_fall {
             let step = self.sequencer.advance();
             self.clock_frame_sequencer(step);
         }
-        self.ch1.step(cycles);
-        self.ch2.step(cycles);
-        self.ch3.step(cycles, &self.wave_ram);
-        self.ch4.step(cycles);
-        self.sample_timer += cycles;
+    }
+
+    fn maybe_extra_len_clock(ch: &mut SquareChannel, upcoming_step: u8) {
+        if !matches!(upcoming_step, 0 | 2 | 4 | 6) && ch.length > 0 {
+            ch.clock_length();
+        }
+    }
+
+    pub fn step(&mut self, cycles: u16) {
+        for _ in 0..cycles {
+            let prev = self.div_counter;
+            self.div_counter = self.div_counter.wrapping_add(1);
+            let prev_div = prev >> 8;
+            let now_div = self.div_counter >> 8;
+            self.tick(prev_div, now_div, false);
+        }
+        let cycles32 = cycles as u32;
+        self.ch1.step(cycles32);
+        self.ch2.step(cycles32);
+        self.ch3.step(cycles32, &self.wave_ram);
+        self.ch4.step(cycles32);
+        self.sample_timer += cycles32;
         let cps = CPU_CLOCK_HZ / self.sample_rate;
         while self.sample_timer >= cps {
             self.sample_timer -= cps;
