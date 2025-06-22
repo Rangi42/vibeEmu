@@ -3,9 +3,10 @@ mod common;
 use vibeEmu::{cartridge::Cartridge, gameboy::GameBoy};
 const FIB_SEQ: [u8; 6] = [3, 5, 8, 13, 21, 34];
 fn run_same_suite<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bool {
-    let mut gb = GameBoy::new();
-    let rom = std::fs::read(rom_path).expect("rom not found");
-    gb.mmu.load_cart(Cartridge::load(rom));
+    let rom = std::fs::read(&rom_path).expect("rom not found");
+    let cart = Cartridge::load(rom);
+    let mut gb = GameBoy::new_with_mode(cart.cgb);
+    gb.mmu.load_cart(cart);
     while gb.cpu.cycles < max_cycles {
         gb.cpu.step(&mut gb.mmu);
         if gb.mmu.serial.peek_output().len() >= 6 {
@@ -17,7 +18,6 @@ fn run_same_suite<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bo
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_align_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_align.gb"),
@@ -227,7 +227,6 @@ fn same_suite__apu__channel_1__channel_1_volume_div_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_align_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_align.gb"),
@@ -487,7 +486,6 @@ fn same_suite__apu__channel_3__channel_3_shift_skip_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_stop_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_stop_delay.gb"),
@@ -596,7 +594,6 @@ fn same_suite__apu__channel_4__channel_4_frequency_alignment_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr.gb"),
@@ -606,7 +603,6 @@ fn same_suite__apu__channel_4__channel_4_lfsr_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr15_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr15.gb"),
@@ -616,7 +612,6 @@ fn same_suite__apu__channel_4__channel_4_lfsr15_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr_15_7_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr_15_7.gb"),
@@ -626,7 +621,6 @@ fn same_suite__apu__channel_4__channel_4_lfsr_15_7_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr_7_15_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr_7_15.gb"),
@@ -716,7 +710,6 @@ fn same_suite__apu__div_write_trigger_volume_10_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__dma__gbc_dma_cont_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/dma/gbc_dma_cont.gb"),
