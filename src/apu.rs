@@ -7,6 +7,8 @@ const CPU_CLOCK_HZ: u32 = 4_194_304;
 const FRAME_SEQUENCER_PERIOD: u32 = 8192;
 const VOLUME_FACTOR: i16 = 64;
 pub const AUDIO_LATENCY_MS: u32 = 40;
+const TRIGGER_PIPELINE_LATENCY: i32 = 2; // cycles
+const ALIGN_TO_NEXT_DIV_EDGE: i32 = 16; // cycles when div_phase == 0
 
 const POWER_ON_REGS: [u8; 0x30] = [
     0x80, 0xBF, 0xF3, 0xFF, 0xBF, 0xFF, 0x3F, 0x00, 0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF, 0xFF,
@@ -704,7 +706,7 @@ impl Apu {
         ch.enabled = true;
         let div_phase = (self.cpu_cycles & 0x3) as i32;
         let period = ch.period();
-        let delay = 18 - div_phase;
+        let delay = TRIGGER_PIPELINE_LATENCY + ALIGN_TO_NEXT_DIV_EDGE - div_phase;
         ch.timer = ((period + delay) & !0x3) | div_phase;
         ch.pending_reset = true;
         ch.first_sample = true;
