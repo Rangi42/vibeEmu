@@ -164,7 +164,7 @@ fn pcm_register_sample_values() {
     apu.write_reg(0xFF19, 0x80); // trigger
 
     let mut div = 0u16;
-    for _ in 0..200 {
+    for _ in 0..8300 {
         let p = div;
         div = div.wrapping_add(1);
         apu.tick(p >> 8, div >> 8, false);
@@ -186,7 +186,7 @@ fn pcm_mmu_mapping() {
     {
         let mut apu = mmu.apu.lock().unwrap();
         let mut div = 0u16;
-        for _ in 0..200 {
+        for _ in 0..8300 {
             let p = div;
             div = div.wrapping_add(1);
             apu.tick(p >> 8, div >> 8, false);

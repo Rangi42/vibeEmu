@@ -89,6 +89,7 @@ struct SquareChannel {
     length_enable: bool,
     duty: u8,
     duty_pos: u8,
+    pending_reset: bool,
     frequency: u16,
     timer: i32,
     envelope: Envelope,
@@ -120,7 +121,12 @@ impl SquareChannel {
         while self.timer <= cycles {
             cycles -= self.timer;
             self.timer = self.period();
-            self.duty_pos = (self.duty_pos + 1) & 7;
+            if self.pending_reset {
+                self.pending_reset = false;
+                self.duty_pos = 0;
+            } else {
+                self.duty_pos = (self.duty_pos + 1) & 7;
+            }
         }
         self.timer -= cycles;
     }
@@ -144,7 +150,7 @@ impl SquareChannel {
     }
 
     fn peek_sample(&self) -> u8 {
-        if !self.enabled || !self.dac_enabled {
+        if !self.enabled || !self.dac_enabled || self.pending_reset || self.first_sample {
             return 0;
         }
         const DUTY_TABLE: [[u8; 8]; 4] = [
@@ -378,6 +384,7 @@ pub struct Apu {
     pcm34: u8,
     regs: [u8; 0x30],
     wave_shadow: [u8; 0x10],
+    cpu_cycles: u64,
 }
 
 impl Apu {
@@ -444,6 +451,7 @@ impl Apu {
         self.hp_prev_output_right = 0.0;
         self.pcm12 = 0;
         self.pcm34 = 0;
+        self.cpu_cycles = 0;
     }
     pub fn new() -> Self {
         let mut apu = Self {
@@ -468,6 +476,7 @@ impl Apu {
             hp_prev_output_right: 0.0,
             pcm12: 0,
             pcm34: 0,
+            cpu_cycles: 0,
         };
 
         // Initialize channels to power-on register defaults
@@ -670,10 +679,11 @@ impl Apu {
             &mut self.ch2
         };
         ch.enabled = true;
-        let old_low = ch.timer & 0x3;
+        let div_phase = (self.cpu_cycles & 0x3) as i32;
         let period = ch.period();
-        ch.timer = (period & !0x3) | old_low;
-        ch.duty_pos = 0;
+        let delay = 4 - div_phase;
+        ch.timer = ((period + delay) & !0x3) | div_phase;
+        ch.pending_reset = true;
         ch.first_sample = true;
         ch.envelope.volume = ch.envelope.initial;
         if idx == 1 {
@@ -780,6 +790,7 @@ impl Apu {
 
     pub fn step(&mut self, cycles: u16) {
         let cycles32 = cycles as u32;
+        self.cpu_cycles = self.cpu_cycles.wrapping_add(cycles as u64);
         self.ch1.step(cycles32);
         self.ch2.step(cycles32);
         self.ch3.step(cycles32, &self.wave_ram);
