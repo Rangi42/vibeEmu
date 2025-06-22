@@ -143,6 +143,20 @@ impl SquareChannel {
         level * self.envelope.volume
     }
 
+    fn peek_sample(&self) -> u8 {
+        if !self.enabled || !self.dac_enabled {
+            return 0;
+        }
+        const DUTY_TABLE: [[u8; 8]; 4] = [
+            [0, 1, 0, 0, 0, 0, 0, 0],
+            [0, 1, 1, 0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 0, 0, 0],
+            [1, 0, 0, 1, 1, 1, 1, 1],
+        ];
+        let level = DUTY_TABLE[self.duty as usize][self.duty_pos as usize];
+        level * self.envelope.volume
+    }
+
     fn clock_length(&mut self) {
         if self.length_enable && self.length > 0 {
             self.length -= 1;
@@ -238,6 +252,19 @@ impl WaveChannel {
             _ => 0,
         }
     }
+
+    fn peek_sample(&self) -> u8 {
+        if !self.enabled || !self.dac_enabled {
+            return 0;
+        }
+        match self.volume {
+            0 => 0,
+            1 => self.last_sample,
+            2 => self.last_sample >> 1,
+            3 => self.last_sample >> 2,
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -282,6 +309,17 @@ impl NoiseChannel {
     }
 
     fn output(&self) -> u8 {
+        if !self.enabled || !self.dac_enabled {
+            return 0;
+        }
+        if self.lfsr & 1 == 0 {
+            self.envelope.volume
+        } else {
+            0
+        }
+    }
+
+    fn peek_sample(&self) -> u8 {
         if !self.enabled || !self.dac_enabled {
             return 0;
         }
@@ -721,12 +759,23 @@ impl Apu {
             let step = self.sequencer.advance();
             self.clock_frame_sequencer(step);
         }
+        self.refresh_pcm_regs();
     }
 
     fn maybe_extra_len_clock(ch: &mut SquareChannel, upcoming_step: u8) {
         if !matches!(upcoming_step, 0 | 2 | 4 | 6) && ch.length > 0 {
             ch.clock_length();
         }
+    }
+
+    /// Update FF76/FF77 to reflect the current channel outputs.
+    fn refresh_pcm_regs(&mut self) {
+        let ch1 = self.ch1.peek_sample();
+        let ch2 = self.ch2.peek_sample();
+        let ch3 = self.ch3.peek_sample();
+        let ch4 = self.ch4.peek_sample();
+        self.pcm12 = (ch2 << 4) | ch1;
+        self.pcm34 = (ch4 << 4) | ch3;
     }
 
     pub fn step(&mut self, cycles: u16) {
@@ -750,9 +799,6 @@ impl Apu {
         let out2 = self.ch2.output();
         let out3 = self.ch3.output();
         let out4 = self.ch4.output();
-
-        self.pcm12 = (out2 << 4) | out1;
-        self.pcm34 = (out4 << 4) | out3;
 
         let ch1 = out1 as i16 - 8;
         let ch2 = out2 as i16 - 8;
