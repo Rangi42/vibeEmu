@@ -328,7 +328,6 @@ pub struct Apu {
     nr51: u8,
     nr52: u8,
     sequencer: FrameSequencer,
-    div_counter: u16,
     sample_timer: u32,
     sample_rate: u32,
     samples: VecDeque<i16>,
@@ -421,7 +420,6 @@ impl Apu {
             nr51: 0xF3,
             nr52: 0xF1,
             sequencer: FrameSequencer::new(),
-            div_counter: 0,
             sample_timer: 0,
             sample_rate: 44100,
             samples: VecDeque::with_capacity(4096),
@@ -716,9 +714,10 @@ impl Apu {
 
     /// Call once per M-cycle / machine step.
     pub fn tick(&mut self, div_prev: u16, div_now: u16, double_speed: bool) {
-        let bit = if double_speed { 5 } else { 4 };
-        let edge_fall = ((div_prev >> bit) & 1) == 1 && ((div_now >> bit) & 1) == 0;
-        if edge_fall {
+        // DIV bit 5 clocks the sequencer at 512 Hz (bit 6 when double-speed)
+        let bit = if double_speed { 6 } else { 5 };
+        let toggled = ((div_prev >> bit) & 1) != ((div_now >> bit) & 1);
+        if toggled {
             let step = self.sequencer.advance();
             self.clock_frame_sequencer(step);
         }
@@ -731,13 +730,6 @@ impl Apu {
     }
 
     pub fn step(&mut self, cycles: u16) {
-        for _ in 0..cycles {
-            let prev = self.div_counter;
-            self.div_counter = self.div_counter.wrapping_add(1);
-            let prev_div = prev >> 8;
-            let now_div = self.div_counter >> 8;
-            self.tick(prev_div, now_div, false);
-        }
         let cycles32 = cycles as u32;
         self.ch1.step(cycles32);
         self.ch2.step(cycles32);

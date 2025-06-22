@@ -4,10 +4,21 @@ use vibeEmu::mmu::Mmu;
 #[test]
 fn frame_sequencer_tick() {
     let mut apu = Apu::new();
+    let mut div = 0u16;
     assert_eq!(apu.sequencer_step(), 0);
-    apu.step(8192);
+    for _ in 0..8192 {
+        let prev = div;
+        div = div.wrapping_add(1);
+        apu.tick(prev >> 8, div >> 8, false);
+        apu.step(1);
+    }
     assert_eq!(apu.sequencer_step(), 1);
-    apu.step(8192 * 7);
+    for _ in 0..(8192 * 7) {
+        let prev = div;
+        div = div.wrapping_add(1);
+        apu.tick(prev >> 8, div >> 8, false);
+        apu.step(1);
+    }
     assert_eq!(apu.sequencer_step(), 0);
 }
 
@@ -23,8 +34,14 @@ fn sample_generation() {
     apu.write_reg(0xFF18, 0); // freq low
     apu.write_reg(0xFF19, 0x80); // trigger
     // step enough cycles for a few samples
+    let mut div = 0u16;
     for _ in 0..10 {
-        apu.step(95);
+        for _ in 0..95 {
+            let prev = div;
+            div = div.wrapping_add(1);
+            apu.tick(prev >> 8, div >> 8, false);
+            apu.step(1);
+        }
     }
     assert!(apu.pop_sample().is_some());
 }
@@ -103,9 +120,25 @@ fn sweep_trigger_and_step() {
     // immediately applied sweep -> freq should be 0x300
     assert_eq!(apu.ch1_frequency(), 0x300);
     // advance until the sequencer clocks sweep (step 2)
-    apu.step(8192); // advance to step 1
-    apu.step(8192); // advance to step 2
-    apu.step(8192); // advance to step 3 (sweep clocked on previous step)
+    let mut div = 0u16;
+    for _ in 0..8192 {
+        let p = div;
+        div = div.wrapping_add(1);
+        apu.tick(p >> 8, div >> 8, false);
+        apu.step(1);
+    } // step 1
+    for _ in 0..8192 {
+        let p = div;
+        div = div.wrapping_add(1);
+        apu.tick(p >> 8, div >> 8, false);
+        apu.step(1);
+    } // step 2
+    for _ in 0..8192 {
+        let p = div;
+        div = div.wrapping_add(1);
+        apu.tick(p >> 8, div >> 8, false);
+        apu.step(1);
+    } // step 3 (sweep clocked on previous step)
     assert_eq!(apu.ch1_frequency(), 0x480);
 }
 
@@ -130,7 +163,13 @@ fn pcm_register_sample_values() {
     apu.write_reg(0xFF17, 0xF0);
     apu.write_reg(0xFF19, 0x80); // trigger
 
-    apu.step(200);
+    let mut div = 0u16;
+    for _ in 0..200 {
+        let p = div;
+        div = div.wrapping_add(1);
+        apu.tick(p >> 8, div >> 8, false);
+        apu.step(1);
+    }
 
     assert_eq!(apu.read_pcm(0xFF76), 0xF0);
 }
@@ -144,7 +183,16 @@ fn pcm_mmu_mapping() {
     mmu.write_byte(0xFF16, 0xC0);
     mmu.write_byte(0xFF17, 0xF0);
     mmu.write_byte(0xFF19, 0x80);
-    mmu.apu.lock().unwrap().step(200);
+    {
+        let mut apu = mmu.apu.lock().unwrap();
+        let mut div = 0u16;
+        for _ in 0..200 {
+            let p = div;
+            div = div.wrapping_add(1);
+            apu.tick(p >> 8, div >> 8, false);
+            apu.step(1);
+        }
+    }
     assert_eq!(mmu.read_byte(0xFF76), 0xF0);
     let mut dmg = Mmu::new();
     assert_eq!(dmg.read_byte(0xFF76), 0xFF);
