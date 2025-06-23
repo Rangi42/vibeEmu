@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod apu;
+mod audio;
 mod cartridge;
 mod cpu;
 mod gameboy;
@@ -378,7 +379,7 @@ fn main() {
     let _stream = if args.headless {
         None
     } else {
-        apu::Apu::start_stream(Arc::clone(&gb.mmu.apu))
+        audio::start_stream(Arc::clone(&gb.mmu.apu))
     };
 
     let mut frame = vec![0u32; 160 * 144];
