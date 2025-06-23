@@ -1,12 +1,12 @@
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 
 const CPU_CLOCK_HZ: u32 = 4_194_304;
 // 512 Hz frame sequencer tick (not doubled in CGB mode)
 const FRAME_SEQUENCER_PERIOD: u32 = 8192;
 const VOLUME_FACTOR: i16 = 64;
 pub const AUDIO_LATENCY_MS: u32 = 40;
+const TRIGGER_PIPELINE_LATENCY: i32 = 2; // cycles
+const ALIGN_TO_NEXT_DIV_EDGE: i32 = 16; // cycles when div_phase == 0
 
 const POWER_ON_REGS: [u8; 0x30] = [
     0x80, 0xBF, 0xF3, 0xFF, 0xBF, 0xFF, 0x3F, 0x00, 0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF, 0xFF,
@@ -89,10 +89,14 @@ struct SquareChannel {
     length_enable: bool,
     duty: u8,
     duty_pos: u8,
+    pending_reset: bool,
     frequency: u16,
     timer: i32,
     envelope: Envelope,
     sweep: Option<Sweep>,
+    first_sample: bool,
+    out_latched: u8,
+    out_stage1: u8,
 }
 
 impl SquareChannel {
@@ -119,13 +123,22 @@ impl SquareChannel {
         while self.timer <= cycles {
             cycles -= self.timer;
             self.timer = self.period();
-            self.duty_pos = (self.duty_pos + 1) & 7;
+            if self.pending_reset {
+                self.pending_reset = false;
+                self.duty_pos = 0;
+            } else {
+                self.duty_pos = (self.duty_pos + 1) & 7;
+            }
         }
         self.timer -= cycles;
     }
 
-    fn output(&self) -> u8 {
+    fn compute_output(&mut self) -> u8 {
         if !self.enabled || !self.dac_enabled {
+            return 0;
+        }
+        if self.first_sample {
+            self.first_sample = false;
             return 0;
         }
         const DUTY_TABLE: [[u8; 8]; 4] = [
@@ -133,6 +146,34 @@ impl SquareChannel {
             [0, 1, 1, 0, 0, 0, 0, 0], // 25%
             [0, 1, 1, 1, 1, 0, 0, 0], // 50%
             [1, 0, 0, 1, 1, 1, 1, 1], // 75%
+        ];
+        let level = DUTY_TABLE[self.duty as usize][self.duty_pos as usize];
+        level * self.envelope.volume
+    }
+
+    fn output(&mut self) -> u8 {
+        self.compute_output()
+    }
+
+    fn tick_1mhz(&mut self) {
+        let fresh = self.compute_output();
+        self.out_latched = self.out_stage1;
+        self.out_stage1 = fresh;
+    }
+
+    fn current_sample(&self) -> u8 {
+        self.out_latched
+    }
+
+    fn peek_sample(&self) -> u8 {
+        if !self.enabled || !self.dac_enabled || self.pending_reset || self.first_sample {
+            return 0;
+        }
+        const DUTY_TABLE: [[u8; 8]; 4] = [
+            [0, 1, 0, 0, 0, 0, 0, 0],
+            [0, 1, 1, 0, 0, 0, 0, 0],
+            [0, 1, 1, 1, 1, 0, 0, 0],
+            [1, 0, 0, 1, 1, 1, 1, 1],
         ];
         let level = DUTY_TABLE[self.duty as usize][self.duty_pos as usize];
         level * self.envelope.volume
@@ -233,6 +274,19 @@ impl WaveChannel {
             _ => 0,
         }
     }
+
+    fn peek_sample(&self) -> u8 {
+        if !self.enabled || !self.dac_enabled {
+            return 0;
+        }
+        match self.volume {
+            0 => 0,
+            1 => self.last_sample,
+            2 => self.last_sample >> 1,
+            3 => self.last_sample >> 2,
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -287,6 +341,17 @@ impl NoiseChannel {
         }
     }
 
+    fn peek_sample(&self) -> u8 {
+        if !self.enabled || !self.dac_enabled {
+            return 0;
+        }
+        if self.lfsr & 1 == 0 {
+            self.envelope.volume
+        } else {
+            0
+        }
+    }
+
     fn clock_length(&mut self) {
         if self.length_enable && self.length > 0 {
             self.length -= 1;
@@ -323,7 +388,6 @@ pub struct Apu {
     nr51: u8,
     nr52: u8,
     sequencer: FrameSequencer,
-    seq_counter: u32,
     sample_timer: u32,
     sample_rate: u32,
     samples: VecDeque<i16>,
@@ -336,6 +400,7 @@ pub struct Apu {
     pcm34: u8,
     regs: [u8; 0x30],
     wave_shadow: [u8; 0x10],
+    cpu_cycles: u64,
 }
 
 impl Apu {
@@ -416,7 +481,6 @@ impl Apu {
             nr51: 0xF3,
             nr52: 0xF1,
             sequencer: FrameSequencer::new(),
-            seq_counter: 0,
             sample_timer: 0,
             sample_rate: 44100,
             samples: VecDeque::with_capacity(4096),
@@ -427,6 +491,7 @@ impl Apu {
             hp_prev_output_right: 0.0,
             pcm12: 0,
             pcm34: 0,
+            cpu_cycles: 0,
         };
 
         // Initialize channels to power-on register defaults
@@ -525,7 +590,12 @@ impl Apu {
             }
             0xFF13 => self.ch1.frequency = (self.ch1.frequency & 0x700) | val as u16,
             0xFF14 => {
+                let prev = self.ch1.length_enable;
                 self.ch1.length_enable = val & 0x40 != 0;
+                if !prev && self.ch1.length_enable {
+                    let next_step = (self.sequencer.step + 1) & 7;
+                    Apu::maybe_extra_len_clock(&mut self.ch1, next_step);
+                }
                 self.ch1.frequency = (self.ch1.frequency & 0xFF) | (((val & 0x07) as u16) << 8);
                 if val & 0x80 != 0 {
                     self.trigger_square(1);
@@ -544,7 +614,12 @@ impl Apu {
             }
             0xFF18 => self.ch2.frequency = (self.ch2.frequency & 0x700) | val as u16,
             0xFF19 => {
+                let prev = self.ch2.length_enable;
                 self.ch2.length_enable = val & 0x40 != 0;
+                if !prev && self.ch2.length_enable {
+                    let next_step = (self.sequencer.step + 1) & 7;
+                    Apu::maybe_extra_len_clock(&mut self.ch2, next_step);
+                }
                 self.ch2.frequency = (self.ch2.frequency & 0xFF) | (((val & 0x07) as u16) << 8);
                 if val & 0x80 != 0 {
                     self.trigger_square(2);
@@ -579,7 +654,14 @@ impl Apu {
                 self.ch4.divisor = val & 0x07;
             }
             0xFF23 => {
+                let prev = self.ch4.length_enable;
                 self.ch4.length_enable = val & 0x40 != 0;
+                if !prev && self.ch4.length_enable {
+                    let next_step = (self.sequencer.step + 1) & 7;
+                    if !matches!(next_step, 0 | 2 | 4 | 6) && self.ch4.length > 0 {
+                        self.ch4.clock_length();
+                    }
+                }
                 if val & 0x80 != 0 {
                     self.trigger_noise();
                 }
@@ -591,6 +673,14 @@ impl Apu {
                     self.nr52 &= !0x80;
                     self.power_off();
                 } else {
+                    if self.nr52 & 0x80 == 0 {
+                        self.ch1.out_latched = 0;
+                        self.ch1.out_stage1 = 0;
+                        self.ch2.out_latched = 0;
+                        self.ch2.out_stage1 = 0;
+                        self.cpu_cycles = 0;
+                        self.sequencer.step = 0;
+                    }
                     self.nr52 |= 0x80;
                 }
                 let idx = (addr - 0xFF10) as usize;
@@ -612,8 +702,12 @@ impl Apu {
             &mut self.ch2
         };
         ch.enabled = true;
-        ch.duty_pos = 0;
-        ch.timer = ch.period();
+        let div_phase = (self.cpu_cycles & 0x3) as i32;
+        let period = ch.period();
+        let delay = TRIGGER_PIPELINE_LATENCY + ALIGN_TO_NEXT_DIV_EDGE - div_phase;
+        ch.timer = ((period + delay) & !0x3) | div_phase;
+        ch.pending_reset = true;
+        ch.first_sample = true;
         ch.envelope.volume = ch.envelope.initial;
         if idx == 1 {
             if let Some(s) = ch.sweep.as_mut() {
@@ -633,6 +727,12 @@ impl Apu {
         if ch.length == 0 {
             ch.length = 64;
         }
+        if ch.length == 64 && ch.length_enable {
+            let upcoming = self.sequencer.step;
+            if matches!(upcoming, 0 | 2 | 4 | 6) {
+                ch.length = 63;
+            }
+        }
     }
 
     fn trigger_wave(&mut self) {
@@ -641,6 +741,12 @@ impl Apu {
         self.ch3.timer = self.ch3.period();
         if self.ch3.length == 0 {
             self.ch3.length = 256;
+        }
+        if self.ch3.length == 256 && self.ch3.length_enable {
+            let upcoming = self.sequencer.step;
+            if matches!(upcoming, 0 | 2 | 4 | 6) {
+                self.ch3.length = 255;
+            }
         }
     }
 
@@ -651,6 +757,12 @@ impl Apu {
         self.ch4.envelope.volume = self.ch4.envelope.initial;
         if self.ch4.length == 0 {
             self.ch4.length = 64;
+        }
+        if self.ch4.length == 64 && self.ch4.length_enable {
+            let upcoming = self.sequencer.step;
+            if matches!(upcoming, 0 | 2 | 4 | 6) {
+                self.ch4.length = 63;
+            }
         }
     }
 
@@ -671,19 +783,44 @@ impl Apu {
         }
     }
 
-    pub fn step(&mut self, cycles: u16) {
-        let cycles = cycles as u32;
-        self.seq_counter += cycles;
-        while self.seq_counter >= FRAME_SEQUENCER_PERIOD {
-            self.seq_counter -= FRAME_SEQUENCER_PERIOD;
+    /// Call once per M-cycle / machine step.
+    pub fn tick(&mut self, div_prev: u16, div_now: u16, double_speed: bool) {
+        self.ch1.tick_1mhz();
+        self.ch2.tick_1mhz();
+        // DIV bit 5 clocks the sequencer at 512 Hz (bit 6 when double-speed)
+        let bit = if double_speed { 6 } else { 5 };
+        let toggled = ((div_prev >> bit) & 1) != ((div_now >> bit) & 1);
+        if toggled {
             let step = self.sequencer.advance();
             self.clock_frame_sequencer(step);
         }
-        self.ch1.step(cycles);
-        self.ch2.step(cycles);
-        self.ch3.step(cycles, &self.wave_ram);
-        self.ch4.step(cycles);
-        self.sample_timer += cycles;
+        self.refresh_pcm_regs();
+    }
+
+    fn maybe_extra_len_clock(ch: &mut SquareChannel, upcoming_step: u8) {
+        if !matches!(upcoming_step, 0 | 2 | 4 | 6) && ch.length > 0 {
+            ch.clock_length();
+        }
+    }
+
+    /// Update FF76/FF77 to reflect the current channel outputs.
+    fn refresh_pcm_regs(&mut self) {
+        let ch1 = self.ch1.current_sample();
+        let ch2 = self.ch2.current_sample();
+        let ch3 = self.ch3.peek_sample();
+        let ch4 = self.ch4.peek_sample();
+        self.pcm12 = (ch2 << 4) | ch1;
+        self.pcm34 = (ch4 << 4) | ch3;
+    }
+
+    pub fn step(&mut self, cycles: u16) {
+        let cycles32 = cycles as u32;
+        self.cpu_cycles = self.cpu_cycles.wrapping_add(cycles as u64);
+        self.ch1.step(cycles32);
+        self.ch2.step(cycles32);
+        self.ch3.step(cycles32, &self.wave_ram);
+        self.ch4.step(cycles32);
+        self.sample_timer += cycles32;
         let cps = CPU_CLOCK_HZ / self.sample_rate;
         while self.sample_timer >= cps {
             self.sample_timer -= cps;
@@ -694,13 +831,10 @@ impl Apu {
     }
 
     fn mix_output(&mut self) -> (i16, i16) {
-        let out1 = self.ch1.output();
-        let out2 = self.ch2.output();
+        let out1 = self.ch1.current_sample();
+        let out2 = self.ch2.current_sample();
         let out3 = self.ch3.output();
         let out4 = self.ch4.output();
-
-        self.pcm12 = (out2 << 4) | out1;
-        self.pcm34 = (out4 << 4) | out3;
 
         let ch1 = out1 as i16 - 8;
         let ch2 = out2 as i16 - 8;
@@ -762,93 +896,16 @@ impl Apu {
         self.ch1.frequency
     }
 
+    pub fn set_sample_rate(&mut self, rate: u32) {
+        self.sample_rate = rate;
+    }
+
     pub fn pop_sample(&mut self) -> Option<i16> {
         self.samples.pop_front()
     }
 
     pub fn sequencer_step(&self) -> u8 {
         self.sequencer.step
-    }
-
-    pub fn start_stream(apu: Arc<Mutex<Self>>) -> Option<cpal::Stream> {
-        let host = cpal::default_host();
-        let device = host.default_output_device()?;
-        let supported = match device.default_output_config() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("no supported output config: {e}");
-                return None;
-            }
-        };
-        let sample_format = supported.sample_format();
-        let config: cpal::StreamConfig = supported.into();
-        {
-            let mut a = apu.lock().unwrap();
-            a.sample_rate = config.sample_rate.0;
-        }
-        let channels = config.channels as usize;
-        let err_fn = |err| eprintln!("cpal stream error: {err}");
-
-        let stream = match sample_format {
-            cpal::SampleFormat::I16 => device
-                .build_output_stream(
-                    &config,
-                    move |data: &mut [i16], _| {
-                        let mut apu = apu.lock().unwrap();
-                        for frame in data.chunks_mut(channels) {
-                            let left = apu.pop_sample().unwrap_or(0);
-                            let right = apu.pop_sample().unwrap_or(0);
-                            frame[0] = left;
-                            if channels > 1 {
-                                frame[1] = right;
-                            }
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
-                .unwrap(),
-            cpal::SampleFormat::U16 => device
-                .build_output_stream(
-                    &config,
-                    move |data: &mut [u16], _| {
-                        let mut apu = apu.lock().unwrap();
-                        for frame in data.chunks_mut(channels) {
-                            let left = apu.pop_sample().unwrap_or(0);
-                            let right = apu.pop_sample().unwrap_or(0);
-                            frame[0] = (left as i32 + 32768) as u16;
-                            if channels > 1 {
-                                frame[1] = (right as i32 + 32768) as u16;
-                            }
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
-                .unwrap(),
-            cpal::SampleFormat::F32 => device
-                .build_output_stream(
-                    &config,
-                    move |data: &mut [f32], _| {
-                        let mut apu = apu.lock().unwrap();
-                        for frame in data.chunks_mut(channels) {
-                            let left = apu.pop_sample().unwrap_or(0) as f32 / 32768.0;
-                            let right = apu.pop_sample().unwrap_or(0) as f32 / 32768.0;
-                            frame[0] = left;
-                            if channels > 1 {
-                                frame[1] = right;
-                            }
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
-                .unwrap(),
-            _ => panic!("Unsupported sample format"),
-        };
-
-        stream.play().expect("failed to play stream");
-        Some(stream)
     }
 }
 
