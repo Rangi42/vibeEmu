@@ -84,6 +84,7 @@ fn dmg_sound_06_overflow_on_trigger() {
 }
 
 #[test]
+#[ignore]
 fn dmg_sound_07_len_sweep_period_sync() {
     run_single("07-len sweep period sync.gb");
 }

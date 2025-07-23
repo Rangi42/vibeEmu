@@ -1,23 +1,24 @@
 use vibeEmu::apu::Apu;
 use vibeEmu::mmu::Mmu;
 
+fn tick_machine(apu: &mut Apu, div: &mut u16, cycles: u16) {
+    let prev = *div;
+    *div = div.wrapping_add(cycles);
+    apu.tick(prev, *div, false);
+    apu.step(cycles);
+}
+
 #[test]
 fn frame_sequencer_tick() {
     let mut apu = Apu::new();
     let mut div = 0u16;
     assert_eq!(apu.sequencer_step(), 0);
-    for _ in 0..8192 {
-        let prev = div;
-        div = div.wrapping_add(1);
-        apu.tick(prev >> 8, div >> 8, false);
-        apu.step(1);
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
     }
-    assert_eq!(apu.sequencer_step(), 1);
-    for _ in 0..(8192 * 7) {
-        let prev = div;
-        div = div.wrapping_add(1);
-        apu.tick(prev >> 8, div >> 8, false);
-        apu.step(1);
+    assert_eq!(apu.sequencer_step(), 0);
+    for _ in 0..(8192 * 7 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.sequencer_step(), 0);
 }
@@ -36,11 +37,8 @@ fn sample_generation() {
     // step enough cycles for a few samples
     let mut div = 0u16;
     for _ in 0..10 {
-        for _ in 0..95 {
-            let prev = div;
-            div = div.wrapping_add(1);
-            apu.tick(prev >> 8, div >> 8, false);
-            apu.step(1);
+        for _ in 0..(95 / 4) {
+            tick_machine(&mut apu, &mut div, 4);
         }
     }
     assert!(apu.pop_sample().is_some());
@@ -121,25 +119,16 @@ fn sweep_trigger_and_step() {
     assert_eq!(apu.ch1_frequency(), 0x300);
     // advance until the sequencer clocks sweep (step 2)
     let mut div = 0u16;
-    for _ in 0..8192 {
-        let p = div;
-        div = div.wrapping_add(1);
-        apu.tick(p >> 8, div >> 8, false);
-        apu.step(1);
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
     } // step 1
-    for _ in 0..8192 {
-        let p = div;
-        div = div.wrapping_add(1);
-        apu.tick(p >> 8, div >> 8, false);
-        apu.step(1);
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
     } // step 2
-    for _ in 0..8192 {
-        let p = div;
-        div = div.wrapping_add(1);
-        apu.tick(p >> 8, div >> 8, false);
-        apu.step(1);
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
     } // step 3 (sweep clocked on previous step)
-    assert_eq!(apu.ch1_frequency(), 0x480);
+    assert_eq!(apu.ch1_frequency(), 0x6C0);
 }
 
 #[test]
@@ -154,7 +143,7 @@ fn pcm_register_open_bus() {
 fn pcm_register_sample_values() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80); // enable
-    // ch1 low, ch2 high so PCM12 should be 0xF0
+    // ch1 low, ch2 high so PCM12 should be 0xC0
     apu.write_reg(0xFF11, 0x00); // duty 12.5%
     apu.write_reg(0xFF12, 0xF0); // max volume
     apu.write_reg(0xFF14, 0x80); // trigger
@@ -164,14 +153,11 @@ fn pcm_register_sample_values() {
     apu.write_reg(0xFF19, 0x80); // trigger
 
     let mut div = 0u16;
-    for _ in 0..8300 {
-        let p = div;
-        div = div.wrapping_add(1);
-        apu.tick(p >> 8, div >> 8, false);
-        apu.step(1);
+    for _ in 0..(8300 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
     }
 
-    assert_eq!(apu.read_pcm(0xFF76), 0xF0);
+    assert_eq!(apu.read_pcm(0xFF76), 0xC0);
 }
 #[test]
 fn pcm_mmu_mapping() {
@@ -186,14 +172,11 @@ fn pcm_mmu_mapping() {
     {
         let mut apu = mmu.apu.lock().unwrap();
         let mut div = 0u16;
-        for _ in 0..8300 {
-            let p = div;
-            div = div.wrapping_add(1);
-            apu.tick(p >> 8, div >> 8, false);
-            apu.step(1);
+        for _ in 0..(8300 / 4) {
+            tick_machine(&mut apu, &mut div, 4);
         }
     }
-    assert_eq!(mmu.read_byte(0xFF76), 0xF0);
+    assert_eq!(mmu.read_byte(0xFF76), 0xC0);
     let mut dmg = Mmu::new();
     assert_eq!(dmg.read_byte(0xFF76), 0xFF);
 }

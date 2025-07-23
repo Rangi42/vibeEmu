@@ -5,8 +5,8 @@ const CPU_CLOCK_HZ: u32 = 4_194_304;
 const FRAME_SEQUENCER_PERIOD: u32 = 8192;
 const VOLUME_FACTOR: i16 = 64;
 pub const AUDIO_LATENCY_MS: u32 = 40;
-const TRIGGER_PIPELINE_LATENCY: i32 = 2; // cycles
-const ALIGN_TO_NEXT_DIV_EDGE: i32 = 16; // cycles when div_phase == 0
+// Audio sample pipeline delay is computed dynamically when a channel is
+// triggered.  See `trigger_square` for details.
 
 const POWER_ON_REGS: [u8; 0x30] = [
     0x80, 0xBF, 0xF3, 0xFF, 0xBF, 0xFF, 0x3F, 0x00, 0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF, 0xFF,
@@ -701,13 +701,19 @@ impl Apu {
         } else {
             &mut self.ch2
         };
-        ch.enabled = true;
-        let div_phase = (self.cpu_cycles & 0x3) as i32;
-        let period = ch.period();
-        let delay = TRIGGER_PIPELINE_LATENCY + ALIGN_TO_NEXT_DIV_EDGE - div_phase;
-        ch.timer = ((period + delay) & !0x3) | div_phase;
+        // Compute the delay until the first duty step using the current
+        // low-frequency divider (the lower two bits of the CPU cycle counter).
+        // The Game Boy's APU runs at 1 MHz while the CPU runs at 4 MHz, so
+        // each tick here corresponds to one CPU cycle.
+        let sample_length = (2048 - ch.frequency) as i32; // half-wave in 1 MHz ticks
+        let lf_div = (self.cpu_cycles & 0x3) as i32; // current 1 MHz phase
+        let delay_ticks = if ch.enabled { 4 - lf_div } else { 6 - lf_div };
+        // Total countdown (in CPU cycles) until the first duty step.
+        let countdown = sample_length * 2 + delay_ticks;
+        ch.timer = countdown;
         ch.pending_reset = true;
         ch.first_sample = true;
+        ch.enabled = true;
         ch.envelope.volume = ch.envelope.initial;
         if idx == 1 {
             if let Some(s) = ch.sweep.as_mut() {
@@ -783,18 +789,30 @@ impl Apu {
         }
     }
 
-    /// Call once per M-cycle / machine step.
-    pub fn tick(&mut self, div_prev: u16, div_now: u16, double_speed: bool) {
-        self.ch1.tick_1mhz();
-        self.ch2.tick_1mhz();
-        // DIV bit 5 clocks the sequencer at 512 Hz (bit 6 when double-speed)
-        let bit = if double_speed { 6 } else { 5 };
-        let toggled = ((div_prev >> bit) & 1) != ((div_now >> bit) & 1);
-        if toggled {
-            let step = self.sequencer.advance();
-            self.clock_frame_sequencer(step);
+    /// Tick the APU once per CPU cycle. `div_prev` is the DIV value at the
+    /// beginning of the current machine step. In normal speed a machine step
+    /// spans four CPU cycles; in double-speed it spans two.
+    pub fn tick(&mut self, div_prev: u16, _div_now: u16, double_speed: bool) {
+        let cycles = if double_speed { 2 } else { 4 };
+        for i in 0..cycles {
+            // Advance the 1 MHz sample pipeline for both square channels.
+            self.ch1.tick_1mhz();
+            self.ch2.tick_1mhz();
+
+            // Determine if the frame sequencer should step. The sequencer is
+            // clocked by DIV bit 5 (or bit 6 when in double speed). We derive
+            // intermediate DIV values by incrementing `div_prev`.
+            let prev = div_prev.wrapping_add(i as u16);
+            let curr = div_prev.wrapping_add((i + 1) as u16);
+            let bit = if double_speed { 6 } else { 5 };
+            if ((prev >> bit) & 1) != ((curr >> bit) & 1) {
+                let step = self.sequencer.advance();
+                self.clock_frame_sequencer(step);
+            }
+
+            // Update PCM12/PCM34 after each 1 MHz tick.
+            self.refresh_pcm_regs();
         }
-        self.refresh_pcm_regs();
     }
 
     fn maybe_extra_len_clock(ch: &mut SquareChannel, upcoming_step: u8) {
@@ -814,19 +832,20 @@ impl Apu {
     }
 
     pub fn step(&mut self, cycles: u16) {
-        let cycles32 = cycles as u32;
-        self.cpu_cycles = self.cpu_cycles.wrapping_add(cycles as u64);
-        self.ch1.step(cycles32);
-        self.ch2.step(cycles32);
-        self.ch3.step(cycles32, &self.wave_ram);
-        self.ch4.step(cycles32);
-        self.sample_timer += cycles32;
         let cps = CPU_CLOCK_HZ / self.sample_rate;
-        while self.sample_timer >= cps {
-            self.sample_timer -= cps;
-            let (left, right) = self.mix_output();
-            self.push_sample(left);
-            self.push_sample(right);
+        for _ in 0..cycles {
+            self.cpu_cycles = self.cpu_cycles.wrapping_add(1);
+            self.ch1.step(1);
+            self.ch2.step(1);
+            self.ch3.step(1, &self.wave_ram);
+            self.ch4.step(1);
+            self.sample_timer += 1;
+            if self.sample_timer >= cps {
+                self.sample_timer -= cps;
+                let (left, right) = self.mix_output();
+                self.push_sample(left);
+                self.push_sample(right);
+            }
         }
     }
 
