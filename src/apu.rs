@@ -734,8 +734,10 @@ impl Apu {
         if self.double_speed && lf_div == 0 {
             delay_cycles += 3;
         }
-        ch.timer = sample_length * 2 + delay_cycles;
-        ch.pending_reset = false;
+        let new_timer = sample_length * 2 + delay_cycles;
+        let low_phase = (self.lf_div_counter & 0x3) as i32;
+        ch.timer = (new_timer & !0x3) | low_phase;
+        ch.pending_reset = true;
         ch.first_sample = true;
         ch.enabled = true;
         ch.envelope.volume = ch.envelope.initial;
@@ -839,8 +841,8 @@ impl Apu {
 
             // Update PCM12/PCM34 after each 1 MHz tick.
             self.refresh_pcm_regs();
+            self.lf_div_counter = self.lf_div_counter.wrapping_add(1);
         }
-        self.lf_div_counter = self.lf_div_counter.wrapping_add(ticks as u64);
         // cpu_cycles remains a CPU cycle counter for timers and IRQs.
         self.cpu_cycles = self.cpu_cycles.wrapping_add(1);
     }
