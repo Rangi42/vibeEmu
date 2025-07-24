@@ -401,6 +401,11 @@ pub struct Apu {
     regs: [u8; 0x30],
     wave_shadow: [u8; 0x10],
     cpu_cycles: u64,
+    /// Counts 1 MHz ticks; the low two bits determine the phase of the
+    /// square channels' low-frequency divider.
+    lf_div_counter: u64,
+    /// True when the CPU is in double-speed mode (KEY1 bit 0 set and prepared).
+    double_speed: bool,
 }
 
 impl Apu {
@@ -467,6 +472,8 @@ impl Apu {
         self.hp_prev_output_right = 0.0;
         self.pcm12 = 0;
         self.pcm34 = 0;
+        self.lf_div_counter = 0;
+        self.double_speed = false;
     }
     pub fn new() -> Self {
         let mut apu = Self {
@@ -492,6 +499,8 @@ impl Apu {
             pcm12: 0,
             pcm34: 0,
             cpu_cycles: 0,
+            lf_div_counter: 0,
+            double_speed: false,
         };
 
         // Initialize channels to power-on register defaults
@@ -679,6 +688,8 @@ impl Apu {
                         self.ch2.out_latched = 0;
                         self.ch2.out_stage1 = 0;
                         self.cpu_cycles = 0;
+                        self.lf_div_counter = 0;
+                        self.double_speed = false;
                         self.sequencer.step = 0;
                     }
                     self.nr52 |= 0x80;
@@ -701,17 +712,27 @@ impl Apu {
         } else {
             &mut self.ch2
         };
-        // Compute the delay until the first duty step using the current
-        // low-frequency divider (the lower two bits of the CPU cycle counter).
-        // The Game Boy's APU runs at 1 MHz while the CPU runs at 4 MHz, so
-        // each tick here corresponds to one CPU cycle.
-        let sample_length = (2048 - ch.frequency) as i32; // half-wave in 1 MHz ticks
-        let lf_div = (self.cpu_cycles & 0x3) as i32; // current 1 MHz phase
-        let delay_ticks = if ch.enabled { 4 - lf_div } else { 6 - lf_div };
-        // Total countdown (in CPU cycles) until the first duty step.
-        let countdown = sample_length * 2 + delay_ticks;
-        ch.timer = countdown;
-        ch.pending_reset = true;
+        // Compute the delay until the first duty step using the 1 MHz divider
+        // instead of the CPU cycle counter. This keeps the phase consistent
+        // regardless of CPU speed.
+        let sample_length = (2048 - ch.frequency) as i32;
+        let lf_div = (self.lf_div_counter & 0x3) as i32;
+        // Base delay depends on whether the channel was previously enabled and
+        // on the current CPU speed.
+        let base = if self.double_speed {
+            if ch.enabled { 19 } else { 21 }
+        } else if ch.enabled {
+            40
+        } else {
+            42
+        };
+        let mut delay_ticks = base - lf_div;
+        let min_delay = sample_length * 2;
+        if delay_ticks < min_delay {
+            delay_ticks = min_delay;
+        }
+        ch.timer = sample_length * 2 + delay_ticks;
+        ch.pending_reset = false;
         ch.first_sample = true;
         ch.enabled = true;
         ch.envelope.volume = ch.envelope.initial;
@@ -793,8 +814,11 @@ impl Apu {
     /// beginning of the current machine step. In normal speed a machine step
     /// spans four CPU cycles; in double-speed it spans two.
     pub fn tick(&mut self, div_prev: u16, _div_now: u16, double_speed: bool) {
-        let cycles = if double_speed { 2 } else { 4 };
-        for i in 0..cycles {
+        // Store the current CPU speed so trigger_square can select the
+        // correct initial delay when a channel is triggered.
+        self.double_speed = double_speed;
+        let ticks = if double_speed { 2 } else { 4 };
+        for i in 0..ticks {
             // Advance the 1 MHz sample pipeline for both square channels.
             self.ch1.tick_1mhz();
             self.ch2.tick_1mhz();
@@ -813,6 +837,9 @@ impl Apu {
             // Update PCM12/PCM34 after each 1 MHz tick.
             self.refresh_pcm_regs();
         }
+        self.lf_div_counter = self.lf_div_counter.wrapping_add(ticks as u64);
+        // cpu_cycles remains a CPU cycle counter for timers and IRQs.
+        self.cpu_cycles = self.cpu_cycles.wrapping_add(1);
     }
 
     fn maybe_extra_len_clock(ch: &mut SquareChannel, upcoming_step: u8) {
