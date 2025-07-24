@@ -472,8 +472,6 @@ impl Apu {
         self.hp_prev_output_right = 0.0;
         self.pcm12 = 0;
         self.pcm34 = 0;
-        self.lf_div_counter = 0;
-        self.double_speed = false;
     }
     pub fn new() -> Self {
         let mut apu = Self {
@@ -688,8 +686,6 @@ impl Apu {
                         self.ch2.out_latched = 0;
                         self.ch2.out_stage1 = 0;
                         self.cpu_cycles = 0;
-                        self.lf_div_counter = 0;
-                        self.double_speed = false;
                         self.sequencer.step = 0;
                     }
                     self.nr52 |= 0x80;
@@ -731,12 +727,9 @@ impl Apu {
         if delay_cycles < min_delay {
             delay_cycles = min_delay;
         }
-        if self.double_speed && lf_div == 0 {
-            delay_cycles += 3;
-        }
         let new_timer = sample_length * 2 + delay_cycles;
         let low_phase = (self.lf_div_counter & 0x3) as i32;
-        ch.timer = (new_timer & !0x3) | low_phase;
+        ch.timer = (new_timer & !0x3) | low_phase + 1;
         ch.pending_reset = true;
         ch.first_sample = true;
         ch.enabled = true;
