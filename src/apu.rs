@@ -726,12 +726,15 @@ impl Apu {
         } else {
             42
         };
-        let mut delay_ticks = base - lf_div;
+        let mut delay_cycles = base - lf_div;
         let min_delay = sample_length * 2;
-        if delay_ticks < min_delay {
-            delay_ticks = min_delay;
+        if delay_cycles < min_delay {
+            delay_cycles = min_delay;
         }
-        ch.timer = sample_length * 2 + delay_ticks;
+        if self.double_speed && lf_div == 0 {
+            delay_cycles += 3;
+        }
+        ch.timer = sample_length * 2 + delay_cycles;
         ch.pending_reset = false;
         ch.first_sample = true;
         ch.enabled = true;
