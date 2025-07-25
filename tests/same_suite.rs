@@ -17,34 +17,107 @@ fn run_same_suite<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bo
     out.len() >= 6 && out[0..6] == FIB_SEQ
 }
 
+fn run_same_suite_gb<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> GameBoy {
+    let rom = std::fs::read(&rom_path).expect("rom not found");
+    let cart = Cartridge::load(rom);
+    let mut gb = GameBoy::new_with_mode(cart.cgb);
+    gb.mmu.load_cart(cart);
+    while gb.cpu.cycles < max_cycles {
+        gb.cpu.step(&mut gb.mmu);
+        if gb.mmu.serial.peek_output().len() >= 6 {
+            break;
+        }
+    }
+    gb
+}
+
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_align_gb() {
-    let passed = run_same_suite(
+    const EXPECTED: [u8; 48] = [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x08,
+        0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x08,
+        0x08, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08,
+        0x08, 0x08, 0x08,
+    ];
+    let mut gb = run_same_suite_gb(
         common::rom_path("same-suite/apu/channel_1/channel_1_align.gb"),
         20_000_000,
     );
-    assert!(passed, "test failed");
+    let mut results = [0u8; EXPECTED.len()];
+    for i in 0..EXPECTED.len() {
+        results[i] = gb.mmu.read_byte(0xC000 + i as u16);
+    }
+    if results != EXPECTED {
+        println!("correct: {:02X?}", EXPECTED);
+        println!("actual : {:02X?}", results);
+        let matches = results
+            .iter()
+            .zip(EXPECTED.iter())
+            .filter(|(a, b)| a == b)
+            .count();
+        let percent = matches as f32 / EXPECTED.len() as f32 * 100.0;
+        println!("match {:.2}%", percent);
+        panic!("test failed");
+    }
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_align_cpu_gb() {
-    let passed = run_same_suite(
+    const EXPECTED: [u8; 48] = [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x08,
+        0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08,
+        0x08, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x08, 0x08, 0x08,
+    ];
+    let mut gb = run_same_suite_gb(
         common::rom_path("same-suite/apu/channel_1/channel_1_align_cpu.gb"),
         20_000_000,
     );
-    assert!(passed, "test failed");
+    let mut results = [0u8; EXPECTED.len()];
+    for i in 0..EXPECTED.len() {
+        results[i] = gb.mmu.read_byte(0xC000 + i as u16);
+    }
+    if results != EXPECTED {
+        println!("correct: {:02X?}", EXPECTED);
+        println!("actual : {:02X?}", results);
+        let matches = results
+            .iter()
+            .zip(EXPECTED.iter())
+            .filter(|(a, b)| a == b)
+            .count();
+        let percent = matches as f32 / EXPECTED.len() as f32 * 100.0;
+        println!("match {:.2}%", percent);
+        panic!("test failed");
+    }
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_delay_gb() {
-    let passed = run_same_suite(
+    const EXPECTED: [u8; 32] = [
+        0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+        0x00, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+        0x00, 0x00,
+    ];
+    let mut gb = run_same_suite_gb(
         common::rom_path("same-suite/apu/channel_1/channel_1_delay.gb"),
         20_000_000,
     );
-    assert!(passed, "test failed");
+    let mut results = [0u8; EXPECTED.len()];
+    for i in 0..EXPECTED.len() {
+        results[i] = gb.mmu.read_byte(0xC000 + i as u16);
+    }
+    if results != EXPECTED {
+        println!("correct: {:02X?}", EXPECTED);
+        println!("actual : {:02X?}", results);
+        let matches = results
+            .iter()
+            .zip(EXPECTED.iter())
+            .filter(|(a, b)| a == b)
+            .count();
+        let percent = matches as f32 / EXPECTED.len() as f32 * 100.0;
+        println!("match {:.2}%", percent);
+        panic!("test failed");
+    }
 }
 
 #[test]
