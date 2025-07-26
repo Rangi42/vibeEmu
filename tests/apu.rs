@@ -139,6 +139,79 @@ fn sweep_trigger_and_step() {
 }
 
 #[test]
+fn sweep_disabled_when_period_zero() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable
+    apu.write_reg(0xFF10, 0x11); // period=1, shift=1
+    apu.write_reg(0xFF12, 0xF0); // DAC on
+    apu.write_reg(0xFF13, 0x00);
+    apu.write_reg(0xFF14, 0x82); // trigger with freq=0x200
+    assert_eq!(apu.ch1_frequency(), 0x300);
+    // disable sweep by setting period to 0
+    apu.write_reg(0xFF10, 0x01);
+    let mut div = 0u16;
+    for _ in 0..64 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.ch1_frequency(), 0x300);
+}
+
+#[test]
+fn sweep_subtraction_mode() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF10, 0x19); // period=1, negate, shift=1
+    apu.write_reg(0xFF12, 0xF0);
+    apu.write_reg(0xFF13, 0x00);
+    apu.write_reg(0xFF14, 0x82); // freq=0x200, trigger
+    assert_eq!(apu.ch1_frequency(), 0x100);
+    let mut div = 0u16;
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.ch1_frequency(), 0x80);
+}
+
+#[test]
+fn sweep_overflow_with_period_zero_disables_channel() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF10, 0x01); // period=0, shift=1 (addition)
+    apu.write_reg(0xFF12, 0xF0);
+    apu.write_reg(0xFF13, 0xF8); // freq high to overflow
+    apu.write_reg(0xFF14, 0x87); // high bits=7, trigger
+    // overflow should disable channel immediately
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x00);
+}
+
+#[test]
+fn sweep_updates_frequency_registers() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF10, 0x11); // period=1, shift=1
+    apu.write_reg(0xFF12, 0xF0);
+    apu.write_reg(0xFF13, 0x00);
+    apu.write_reg(0xFF14, 0x82); // trigger
+    let mut div = 0u16;
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.ch1_frequency(), 0x480);
+}
+
+#[test]
 #[ignore]
 fn pcm_register_open_bus() {
     let mut apu = Apu::new();
