@@ -572,3 +572,157 @@ fn nr14_trigger_resets_length_and_volume() {
     assert_eq!(apu.ch1_length(), 64); // length reloaded
     assert_eq!(apu.ch1_volume(), 0x5); // envelope reset
 }
+
+#[test]
+fn nr21_write_sets_duty_and_length() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    let val = 0xCA; // duty 3, length 0x0A
+    apu.write_reg(0xFF16, val);
+    assert_eq!(apu.ch2_duty(), 3);
+    assert_eq!(apu.ch2_length(), 64 - (val & 0x3F));
+    assert_eq!(apu.read_reg(0xFF16), val | 0x3F);
+}
+
+#[test]
+fn nr21_length_counter_expires() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF16, 0x3F); // length = 1
+    apu.write_reg(0xFF17, 0xF0); // DAC on
+    apu.write_reg(0xFF19, 0x80); // trigger, length disabled
+    assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x02);
+
+    let mut div = 0u16;
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+
+    apu.write_reg(0xFF19, 0x40); // enable length
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x00);
+}
+
+#[test]
+fn nr22_zero_turns_off_dac() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF17, 0xF0);
+    apu.write_reg(0xFF19, 0x80); // trigger
+    assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x02);
+    apu.write_reg(0xFF17, 0x00); // turn DAC off
+    assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x00);
+}
+
+#[test]
+fn nr22_write_requires_retrigger() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF17, 0xF0); // initial volume 15
+    apu.write_reg(0xFF19, 0x80); // trigger
+    assert_eq!(apu.ch2_volume(), 0xF);
+    apu.write_reg(0xFF17, 0x50); // new envelope while active
+    assert_eq!(apu.ch2_volume(), 0xF);
+    apu.write_reg(0xFF19, 0x80); // retrigger
+    assert_eq!(apu.ch2_volume(), 0x5);
+}
+
+#[test]
+fn nr22_register_unchanged_after_envelope() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF16, 0x00);
+    apu.write_reg(0xFF17, 0x8A); // init 8, increase, pace=2
+    apu.write_reg(0xFF19, 0x80); // trigger
+    let mut div = 0u16;
+    for _ in 0..(65536 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF17), 0x8A);
+    assert_ne!(apu.ch2_volume(), 8);
+}
+
+#[test]
+fn nr23_write_sets_frequency_low_bits_and_is_write_only() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF18, 0x34);
+    apu.write_reg(0xFF19, 0x82);
+    assert_eq!(apu.ch2_frequency(), 0x234);
+    assert_eq!(apu.read_reg(0xFF18), 0xFF);
+}
+
+#[test]
+fn nr23_period_change_delayed_until_sample_end() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF16, 0x00);
+    apu.write_reg(0xFF17, 0xF0);
+    apu.write_reg(0xFF18, 0x00);
+    apu.write_reg(0xFF19, 0x85); // freq=0x500 trigger
+
+    let mut div = 0u16;
+    for _ in 0..10 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    let timer_before = apu.ch2_timer();
+
+    apu.write_reg(0xFF18, 0x40); // new low bits -> freq 0x540
+    assert_eq!(apu.ch2_frequency(), 0x540);
+    assert_eq!(apu.ch2_timer(), timer_before);
+
+    for _ in 0..(timer_before + 10) {
+        tick_machine(&mut apu, &mut div, 1);
+    }
+    let timer_after = apu.ch2_timer();
+    let expected = (2048 - 0x540) * 4;
+    assert!(timer_after <= expected + 16 && timer_after + 16 >= expected);
+}
+
+#[test]
+fn nr24_write_sets_frequency_high_bits_and_is_write_only() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF18, 0xAA);
+    apu.write_reg(0xFF19, 0x05);
+    assert_eq!(apu.ch2_frequency(), 0x5AA);
+    assert_eq!(apu.read_reg(0xFF19), 0xBF);
+}
+
+#[test]
+fn nr24_length_enable_read_write() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF19, 0x40); // set length enable
+    assert_eq!(apu.read_reg(0xFF19), 0xFF);
+    apu.write_reg(0xFF19, 0x00); // clear length enable
+    assert_eq!(apu.read_reg(0xFF19), 0xBF);
+}
+
+#[test]
+fn nr24_trigger_resets_length_and_volume() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF16, 0x3F); // length = 1
+    apu.write_reg(0xFF17, 0xF0); // volume 15
+    apu.write_reg(0xFF19, 0x80); // trigger with length disabled
+
+    let mut div = 0u16;
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+
+    apu.write_reg(0xFF17, 0x50); // new envelope params
+    apu.write_reg(0xFF19, 0x40); // enable length
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x00);
+
+    apu.write_reg(0xFF19, 0x80); // retrigger
+    assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x02);
+    assert_eq!(apu.ch2_length(), 64);
+    assert_eq!(apu.ch2_volume(), 0x5);
+}

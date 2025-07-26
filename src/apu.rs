@@ -635,7 +635,13 @@ impl Apu {
                 self.ch2.length = 64 - (val & 0x3F);
             }
             0xFF17 => {
-                self.ch2.envelope.reset(val);
+                if self.ch2.enabled {
+                    self.ch2.envelope.initial = val >> 4;
+                    self.ch2.envelope.period = val & 0x07;
+                    self.ch2.envelope.add = val & 0x08 != 0;
+                } else {
+                    self.ch2.envelope.reset(val);
+                }
                 self.ch2.dac_enabled = val & 0xF0 != 0;
                 if !self.ch2.dac_enabled {
                     self.ch2.enabled = false;
@@ -1004,6 +1010,29 @@ impl Apu {
 
     pub fn ch1_timer(&self) -> i32 {
         self.ch1.timer
+    }
+
+    pub fn ch2_frequency(&self) -> u16 {
+        self.ch2.frequency
+    }
+
+    /// Current duty setting for channel 2.
+    pub fn ch2_duty(&self) -> u8 {
+        self.ch2.duty
+    }
+
+    /// Current length counter value for channel 2.
+    pub fn ch2_length(&self) -> u8 {
+        self.ch2.length
+    }
+
+    /// Current envelope volume for channel 2.
+    pub fn ch2_volume(&self) -> u8 {
+        self.ch2.envelope.volume
+    }
+
+    pub fn ch2_timer(&self) -> i32 {
+        self.ch2.timer
     }
 }
 
