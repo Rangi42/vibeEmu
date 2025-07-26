@@ -190,3 +190,69 @@ fn pcm_mmu_mapping() {
     let mut dmg = Mmu::new();
     assert_eq!(dmg.read_byte(0xFF76), 0xFF);
 }
+#[test]
+fn nr52_power_toggle() {
+    let mut apu = Apu::new();
+    // default power state should be on
+    assert_eq!(apu.read_reg(0xFF26) & 0x80, 0x80);
+    // power off
+    apu.write_reg(0xFF26, 0x00);
+    assert_eq!(apu.read_reg(0xFF26), 0x70);
+    // power back on
+    apu.write_reg(0xFF26, 0x80);
+    assert_eq!(apu.read_reg(0xFF26), 0xF0);
+    // writing channel bits should not change status
+    apu.write_reg(0xFF26, 0x8F);
+    assert_eq!(apu.read_reg(0xFF26), 0xF0);
+}
+
+#[test]
+fn nr52_clears_registers_when_off() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // ensure enabled
+    apu.write_reg(0xFF12, 0xF0);
+    assert_eq!(apu.read_reg(0xFF12) & 0xF0, 0xF0);
+    // power off clears registers
+    apu.write_reg(0xFF26, 0x00);
+    assert_eq!(apu.read_reg(0xFF12), 0x00);
+    // writes ignored while off
+    apu.write_reg(0xFF12, 0xF0);
+    assert_eq!(apu.read_reg(0xFF12), 0x00);
+    // power on again keeps cleared value
+    apu.write_reg(0xFF26, 0x80);
+    assert_eq!(apu.read_reg(0xFF12), 0x00);
+}
+
+#[test]
+fn nr52_channel_status_bits() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    assert_eq!(apu.read_reg(0xFF26) & 0x0F, 0x00);
+    // trigger channel 1
+    apu.write_reg(0xFF12, 0xF0);
+    apu.write_reg(0xFF14, 0x80);
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x01);
+    // trigger channel 2
+    apu.write_reg(0xFF17, 0xF0);
+    apu.write_reg(0xFF19, 0x80);
+    assert_eq!(apu.read_reg(0xFF26) & 0x03, 0x03);
+    // trigger channel 3
+    apu.write_reg(0xFF1A, 0x80);
+    apu.write_reg(0xFF1E, 0x80);
+    assert_eq!(apu.read_reg(0xFF26) & 0x07, 0x07);
+    // trigger channel 4
+    apu.write_reg(0xFF21, 0xF0);
+    apu.write_reg(0xFF23, 0x80);
+    assert_eq!(apu.read_reg(0xFF26) & 0x0F, 0x0F);
+}
+
+#[test]
+fn nr52_wave_ram_persist() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF30, 0x12);
+    apu.write_reg(0xFF26, 0x00);
+    assert_eq!(apu.read_reg(0xFF30), 0x12);
+    apu.write_reg(0xFF30, 0x34);
+    apu.write_reg(0xFF26, 0x80);
+    assert_eq!(apu.read_reg(0xFF30), 0x34);
+}
