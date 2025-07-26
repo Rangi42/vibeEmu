@@ -275,6 +275,24 @@ fn run_ch2_sample(pan: u8) -> (i16, i16) {
     (left, right)
 }
 
+fn run_ch2_sample_with_nr50(pan: u8, nr50: u8) -> (i16, i16) {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable
+    apu.write_reg(0xFF24, nr50); // master volume
+    apu.write_reg(0xFF25, pan); // panning
+    apu.write_reg(0xFF16, 0); // length
+    apu.write_reg(0xFF17, 0xF0); // envelope
+    apu.write_reg(0xFF18, 0); // freq low
+    apu.write_reg(0xFF19, 0x80); // trigger
+    let mut div = 0u16;
+    for _ in 0..25 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    let left = apu.pop_sample().unwrap();
+    let right = apu.pop_sample().unwrap();
+    (left, right)
+}
+
 #[test]
 fn nr51_ch2_left_only() {
     let (left, right) = run_ch2_sample(0x20);
@@ -301,4 +319,26 @@ fn nr51_ch2_off() {
     let (left, right) = run_ch2_sample(0x00);
     assert_eq!(left, 0);
     assert_eq!(right, 0);
+}
+
+#[test]
+fn nr50_volume_zero_not_muted() {
+    let (left, right) = run_ch2_sample_with_nr50(0x22, 0x00);
+    assert_ne!(left, 0);
+    assert_ne!(right, 0);
+}
+
+#[test]
+fn nr50_left_vs_right_volume() {
+    let (left, right) = run_ch2_sample_with_nr50(0x22, 0x70);
+    assert!(left.abs() > right.abs());
+    assert_ne!(right, 0);
+}
+
+#[test]
+fn nr50_vin_bits_ignored() {
+    let (l1, r1) = run_ch2_sample_with_nr50(0x22, 0x77);
+    let (l2, r2) = run_ch2_sample_with_nr50(0x22, 0xF7);
+    assert_eq!(l1, l2);
+    assert_eq!(r1, r2);
 }
