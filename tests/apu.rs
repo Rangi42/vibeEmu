@@ -726,3 +726,43 @@ fn nr24_trigger_resets_length_and_volume() {
     assert_eq!(apu.ch2_length(), 64);
     assert_eq!(apu.ch2_volume(), 0x5);
 }
+
+#[test]
+fn wave_channel_outputs_wave_ram_data() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    for i in 0..0x10 {
+        apu.write_reg(0xFF30 + i as u16, (i * 0x11) as u8);
+    }
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1C, 0x20); // full volume
+    apu.write_reg(0xFF1D, 0xFF);
+    apu.write_reg(0xFF1E, 0x87); // trigger with freq 2047
+    let mut div = 0u16;
+    let mut samples = [0u8; 8];
+    for i in 0..8 {
+        tick_machine(&mut apu, &mut div, 4);
+        samples[i] = apu.read_pcm(0xFF77) & 0x0F;
+    }
+    assert_eq!(samples, [0, 1, 2, 3, 4, 5, 6, 7]);
+}
+
+#[test]
+fn wave_channel_wraps_after_32_samples() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    for i in 0..0x10 {
+        apu.write_reg(0xFF30 + i as u16, (i * 0x11) as u8);
+    }
+    apu.write_reg(0xFF1A, 0x80);
+    apu.write_reg(0xFF1C, 0x20);
+    apu.write_reg(0xFF1D, 0xFF);
+    apu.write_reg(0xFF1E, 0x87);
+    let mut div = 0u16;
+    for _ in 0..32 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    tick_machine(&mut apu, &mut div, 4);
+    let sample = apu.read_pcm(0xFF77) & 0x0F;
+    assert_eq!(sample, 0);
+}
