@@ -602,7 +602,16 @@ impl Apu {
                 self.ch1.length = 64 - (val & 0x3F);
             }
             0xFF12 => {
-                self.ch1.envelope.reset(val);
+                if self.ch1.enabled {
+                    // When the channel is active, a write only updates the
+                    // stored parameters. The current envelope state is kept
+                    // until the next trigger.
+                    self.ch1.envelope.initial = val >> 4;
+                    self.ch1.envelope.period = val & 0x07;
+                    self.ch1.envelope.add = val & 0x08 != 0;
+                } else {
+                    self.ch1.envelope.reset(val);
+                }
                 self.ch1.dac_enabled = val & 0xF0 != 0;
                 if !self.ch1.dac_enabled {
                     self.ch1.enabled = false;
@@ -974,6 +983,11 @@ impl Apu {
     /// Current length counter value for channel 1.
     pub fn ch1_length(&self) -> u8 {
         self.ch1.length
+    }
+
+    /// Current envelope volume for channel 1.
+    pub fn ch1_volume(&self) -> u8 {
+        self.ch1.envelope.volume
     }
 
     pub fn set_sample_rate(&mut self, rate: u32) {
