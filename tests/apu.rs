@@ -525,3 +525,50 @@ fn nr13_period_change_delayed_until_sample_end() {
     let expected = (2048 - 0x540) * 4;
     assert!(timer_after <= expected + 16 && timer_after + 16 >= expected);
 }
+
+#[test]
+fn nr14_write_sets_frequency_high_bits_and_is_write_only() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF13, 0xAA); // low bits
+    apu.write_reg(0xFF14, 0x05); // high bits = 5, no trigger
+    assert_eq!(apu.ch1_frequency(), 0x5AA);
+    // period bits and trigger bit are write only
+    assert_eq!(apu.read_reg(0xFF14), 0xBF);
+}
+
+#[test]
+fn nr14_length_enable_read_write() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF14, 0x40); // set length enable
+    assert_eq!(apu.read_reg(0xFF14), 0xFF);
+    apu.write_reg(0xFF14, 0x00); // clear length enable
+    assert_eq!(apu.read_reg(0xFF14), 0xBF);
+}
+
+#[test]
+fn nr14_trigger_resets_length_and_volume() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF11, 0x3F); // length = 1
+    apu.write_reg(0xFF12, 0xF0); // volume 15
+    apu.write_reg(0xFF14, 0x80); // trigger with length disabled
+
+    let mut div = 0u16;
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+
+    apu.write_reg(0xFF12, 0x50); // new envelope params while active
+    apu.write_reg(0xFF14, 0x40); // enable length
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x00); // channel disabled
+
+    apu.write_reg(0xFF14, 0x80); // retrigger
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x01); // channel enabled
+    assert_eq!(apu.ch1_length(), 64); // length reloaded
+    assert_eq!(apu.ch1_volume(), 0x5); // envelope reset
+}
