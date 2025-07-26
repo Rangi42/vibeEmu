@@ -670,7 +670,14 @@ impl Apu {
             0xFF1C => self.ch3.volume = (val >> 5) & 0x03,
             0xFF1D => self.ch3.frequency = (self.ch3.frequency & 0x700) | val as u16,
             0xFF1E => {
+                let prev = self.ch3.length_enable;
                 self.ch3.length_enable = val & 0x40 != 0;
+                if !prev && self.ch3.length_enable {
+                    let next_step = (self.sequencer.step + 1) & 7;
+                    if !matches!(next_step, 0 | 2 | 4 | 6) && self.ch3.length > 0 {
+                        self.ch3.clock_length();
+                    }
+                }
                 self.ch3.frequency = (self.ch3.frequency & 0xFF) | (((val & 0x07) as u16) << 8);
                 if val & 0x80 != 0 {
                     self.trigger_wave();
@@ -1038,6 +1045,11 @@ impl Apu {
 
     pub fn ch2_timer(&self) -> i32 {
         self.ch2.timer
+    }
+
+    /// Current length counter value for channel 3.
+    pub fn ch3_length(&self) -> u16 {
+        self.ch3.length
     }
 }
 

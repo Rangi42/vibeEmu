@@ -777,3 +777,41 @@ fn nr30_dac_off_disables_channel() {
     apu.write_reg(0xFF1A, 0x00); // disable DAC
     assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x00);
 }
+
+#[test]
+fn nr31_write_sets_length() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // ensure enabled
+    apu.write_reg(0xFF1B, 0x20);
+    assert_eq!(apu.ch3_length(), 256 - 0x20);
+}
+
+#[test]
+fn nr31_write_ignored_when_disabled() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x00); // disable APU
+    let before = apu.ch3_length();
+    apu.write_reg(0xFF1B, 0x40);
+    assert_eq!(apu.ch3_length(), before);
+}
+
+#[test]
+fn nr31_length_counter_expires() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1B, 0xFF); // length = 1
+    apu.write_reg(0xFF1E, 0x80); // trigger, length disabled
+    assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x04);
+
+    let mut div = 0u16;
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+
+    apu.write_reg(0xFF1E, 0x40); // enable length
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x00);
+}
