@@ -447,3 +447,44 @@ fn nr11_length_counter_expires() {
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x00);
 }
+
+#[test]
+fn nr12_zero_turns_off_dac() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF12, 0xF0); // DAC on
+    apu.write_reg(0xFF14, 0x80); // trigger
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x01);
+    apu.write_reg(0xFF12, 0x00); // writing zero should disable DAC
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x00);
+}
+
+#[test]
+fn nr12_write_requires_retrigger() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF12, 0xF0); // initial volume 15
+    apu.write_reg(0xFF14, 0x80); // trigger
+    assert_eq!(apu.ch1_volume(), 0xF);
+    // write new envelope while channel active
+    apu.write_reg(0xFF12, 0x50); // initial volume 5
+    // volume should remain unchanged until retrigger
+    assert_eq!(apu.ch1_volume(), 0xF);
+    apu.write_reg(0xFF14, 0x80); // retrigger
+    assert_eq!(apu.ch1_volume(), 0x5);
+}
+
+#[test]
+fn nr12_register_unchanged_after_envelope() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF11, 0x00);
+    apu.write_reg(0xFF12, 0x8A); // init 8, increase, pace=2
+    apu.write_reg(0xFF14, 0x80); // trigger
+    let mut div = 0u16;
+    for _ in 0..(65536 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF12), 0x8A);
+    assert_ne!(apu.ch1_volume(), 8);
+}
