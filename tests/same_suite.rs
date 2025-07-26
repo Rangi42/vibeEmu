@@ -44,8 +44,8 @@ fn same_suite__apu__channel_1__channel_1_align_gb() {
         20_000_000,
     );
     let mut results = [0u8; EXPECTED.len()];
-    for i in 0..EXPECTED.len() {
-        results[i] = gb.mmu.read_byte(0xC000 + i as u16);
+    for (i, byte) in results.iter_mut().enumerate() {
+        *byte = gb.mmu.read_byte(0xC000 + i as u16);
     }
     if results != EXPECTED {
         println!("correct: {:02X?}", EXPECTED);
@@ -75,8 +75,8 @@ fn same_suite__apu__channel_1__channel_1_align_cpu_gb() {
         20_000_000,
     );
     let mut results = [0u8; EXPECTED.len()];
-    for i in 0..EXPECTED.len() {
-        results[i] = gb.mmu.read_byte(0xC000 + i as u16);
+    for (i, byte) in results.iter_mut().enumerate() {
+        *byte = gb.mmu.read_byte(0xC000 + i as u16);
     }
     if results != EXPECTED {
         println!("correct: {:02X?}", EXPECTED);
@@ -105,8 +105,8 @@ fn same_suite__apu__channel_1__channel_1_delay_gb() {
         20_000_000,
     );
     let mut results = [0u8; EXPECTED.len()];
-    for i in 0..EXPECTED.len() {
-        results[i] = gb.mmu.read_byte(0xC000 + i as u16);
+    for (i, byte) in results.iter_mut().enumerate() {
+        *byte = gb.mmu.read_byte(0xC000 + i as u16);
     }
     if results != EXPECTED {
         println!("correct: {:02X?}", EXPECTED);

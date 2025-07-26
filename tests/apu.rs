@@ -740,9 +740,9 @@ fn wave_channel_outputs_wave_ram_data() {
     apu.write_reg(0xFF1E, 0x87); // trigger with freq 2047
     let mut div = 0u16;
     let mut samples = [0u8; 8];
-    for i in 0..8 {
+    for sample in &mut samples {
         tick_machine(&mut apu, &mut div, 4);
-        samples[i] = apu.read_pcm(0xFF77) & 0x0F;
+        *sample = apu.read_pcm(0xFF77) & 0x0F;
     }
     assert_eq!(samples, [0, 1, 2, 3, 4, 5, 6, 7]);
 }
@@ -814,4 +814,32 @@ fn nr31_length_counter_expires() {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x00);
+}
+
+fn run_ch3_sample(nr32: u8) -> u8 {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    for addr in 0xFF30..=0xFF3F {
+        apu.write_reg(addr, 0xCC); // sample data
+    }
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1C, nr32); // volume
+    apu.write_reg(0xFF1D, 0xFF);
+    apu.write_reg(0xFF1E, 0x87); // trigger
+    let mut div = 0u16;
+    tick_machine(&mut apu, &mut div, 4);
+    tick_machine(&mut apu, &mut div, 4);
+    apu.read_pcm(0xFF77) & 0x0F
+}
+
+#[test]
+fn nr32_volume_control() {
+    let mute = run_ch3_sample(0x00);
+    let full = run_ch3_sample(0x20);
+    let half = run_ch3_sample(0x40);
+    let quarter = run_ch3_sample(0x60);
+    assert_eq!(mute, 0);
+    assert_eq!(full, 0xC);
+    assert_eq!(half, full >> 1);
+    assert_eq!(quarter, full >> 2);
 }
