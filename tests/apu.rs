@@ -766,3 +766,14 @@ fn wave_channel_wraps_after_32_samples() {
     let sample = apu.read_pcm(0xFF77) & 0x0F;
     assert_eq!(sample, 0);
 }
+
+#[test]
+fn nr30_dac_off_disables_channel() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF1A, 0x80); // enable DAC
+    apu.write_reg(0xFF1E, 0x80); // trigger channel 3
+    assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x04);
+    apu.write_reg(0xFF1A, 0x00); // disable DAC
+    assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x00);
+}

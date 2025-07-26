@@ -660,7 +660,12 @@ impl Apu {
                     self.trigger_square(2);
                 }
             }
-            0xFF1A => self.ch3.dac_enabled = val & 0x80 != 0,
+            0xFF1A => {
+                self.ch3.dac_enabled = val & 0x80 != 0;
+                if !self.ch3.dac_enabled {
+                    self.ch3.enabled = false;
+                }
+            }
             0xFF1B => self.ch3.length = 256 - val as u16,
             0xFF1C => self.ch3.volume = (val >> 5) & 0x03,
             0xFF1D => self.ch3.frequency = (self.ch3.frequency & 0x700) | val as u16,
