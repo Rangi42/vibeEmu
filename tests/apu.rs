@@ -740,9 +740,9 @@ fn wave_channel_outputs_wave_ram_data() {
     apu.write_reg(0xFF1E, 0x87); // trigger with freq 2047
     let mut div = 0u16;
     let mut samples = [0u8; 8];
-    for i in 0..8 {
+    for sample in &mut samples {
         tick_machine(&mut apu, &mut div, 4);
-        samples[i] = apu.read_pcm(0xFF77) & 0x0F;
+        *sample = apu.read_pcm(0xFF77) & 0x0F;
     }
     assert_eq!(samples, [0, 1, 2, 3, 4, 5, 6, 7]);
 }
