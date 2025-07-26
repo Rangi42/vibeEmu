@@ -415,3 +415,35 @@ fn nr50_vin_bits_ignored() {
     assert_eq!(l1, l2);
     assert_eq!(r1, r2);
 }
+
+#[test]
+fn nr11_write_sets_duty_and_length() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    let val = 0xCA; // duty 3, length 0x0A
+    apu.write_reg(0xFF11, val);
+    assert_eq!(apu.ch1_duty(), 3);
+    assert_eq!(apu.ch1_length(), 64 - (val & 0x3F));
+    assert_eq!(apu.read_reg(0xFF11), val | 0x3F);
+}
+
+#[test]
+fn nr11_length_counter_expires() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF11, 0x3F); // length = 1
+    apu.write_reg(0xFF12, 0xF0); // DAC on
+    apu.write_reg(0xFF14, 0x80); // trigger, length disabled
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x01);
+
+    let mut div = 0u16;
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+
+    apu.write_reg(0xFF14, 0x40); // enable length
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x00);
+}

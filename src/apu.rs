@@ -966,6 +966,16 @@ impl Apu {
         self.ch1.frequency
     }
 
+    /// Current duty setting for channel 1.
+    pub fn ch1_duty(&self) -> u8 {
+        self.ch1.duty
+    }
+
+    /// Current length counter value for channel 1.
+    pub fn ch1_length(&self) -> u8 {
+        self.ch1.length
+    }
+
     pub fn set_sample_rate(&mut self, rate: u32) {
         self.sample_rate = rate;
     }
