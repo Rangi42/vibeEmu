@@ -488,3 +488,40 @@ fn nr12_register_unchanged_after_envelope() {
     assert_eq!(apu.read_reg(0xFF12), 0x8A);
     assert_ne!(apu.ch1_volume(), 8);
 }
+
+#[test]
+fn nr13_write_sets_frequency_low_bits_and_is_write_only() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF13, 0x34); // write low bits
+    apu.write_reg(0xFF14, 0x82); // set high bits=2 and trigger
+    assert_eq!(apu.ch1_frequency(), 0x234);
+    assert_eq!(apu.read_reg(0xFF13), 0xFF); // NR13 is write-only
+}
+
+#[test]
+fn nr13_period_change_delayed_until_sample_end() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF11, 0x00);
+    apu.write_reg(0xFF12, 0xF0);
+    apu.write_reg(0xFF13, 0x00);
+    apu.write_reg(0xFF14, 0x85); // freq=0x500 trigger
+
+    let mut div = 0u16;
+    for _ in 0..10 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    let timer_before = apu.ch1_timer();
+
+    apu.write_reg(0xFF13, 0x40); // set new low bits -> freq 0x540
+    assert_eq!(apu.ch1_frequency(), 0x540);
+    assert_eq!(apu.ch1_timer(), timer_before); // timer unchanged immediately
+
+    for _ in 0..(timer_before + 10) {
+        tick_machine(&mut apu, &mut div, 1);
+    }
+    let timer_after = apu.ch1_timer();
+    let expected = (2048 - 0x540) * 4;
+    assert!(timer_after <= expected + 16 && timer_after + 16 >= expected);
+}
