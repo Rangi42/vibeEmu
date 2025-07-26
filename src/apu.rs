@@ -1001,6 +1001,10 @@ impl Apu {
     pub fn sequencer_step(&self) -> u8 {
         self.sequencer.step
     }
+
+    pub fn ch1_timer(&self) -> i32 {
+        self.ch1.timer
+    }
 }
 
 impl Default for Apu {
