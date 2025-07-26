@@ -256,3 +256,49 @@ fn nr52_wave_ram_persist() {
     apu.write_reg(0xFF26, 0x80);
     assert_eq!(apu.read_reg(0xFF30), 0x34);
 }
+
+fn run_ch2_sample(pan: u8) -> (i16, i16) {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable
+    apu.write_reg(0xFF24, 0x77); // max volume
+    apu.write_reg(0xFF25, pan); // panning
+    apu.write_reg(0xFF16, 0); // length
+    apu.write_reg(0xFF17, 0xF0); // envelope
+    apu.write_reg(0xFF18, 0); // freq low
+    apu.write_reg(0xFF19, 0x80); // trigger
+    let mut div = 0u16;
+    for _ in 0..25 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    let left = apu.pop_sample().unwrap();
+    let right = apu.pop_sample().unwrap();
+    (left, right)
+}
+
+#[test]
+fn nr51_ch2_left_only() {
+    let (left, right) = run_ch2_sample(0x20);
+    assert_ne!(left, 0);
+    assert_eq!(right, 0);
+}
+
+#[test]
+fn nr51_ch2_right_only() {
+    let (left, right) = run_ch2_sample(0x02);
+    assert_eq!(left, 0);
+    assert_ne!(right, 0);
+}
+
+#[test]
+fn nr51_ch2_center() {
+    let (left, right) = run_ch2_sample(0x22);
+    assert_ne!(left, 0);
+    assert_eq!(left, right);
+}
+
+#[test]
+fn nr51_ch2_off() {
+    let (left, right) = run_ch2_sample(0x00);
+    assert_eq!(left, 0);
+    assert_eq!(right, 0);
+}
