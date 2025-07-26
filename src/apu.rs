@@ -69,9 +69,22 @@ impl Sweep {
     }
 
     fn set_params(&mut self, val: u8) {
-        self.period = (val >> 4) & 0x07;
+        let new_period = (val >> 4) & 0x07;
         self.negate = val & 0x08 != 0;
         self.shift = val & 0x07;
+
+        // Writing a pace of 0 disables further sweep iterations immediately.
+        // When the period changes from 0 to a non-zero value, the timer is
+        // reloaded so that iterations resume without waiting for the next
+        // trigger or sweep step.
+        if new_period == 0 {
+            self.enabled = false;
+        } else if self.period == 0 {
+            self.timer = new_period;
+            self.enabled = self.shift != 0 || new_period != 0;
+        }
+
+        self.period = new_period;
     }
 
     fn reload(&mut self, freq: u16) {
@@ -734,6 +747,7 @@ impl Apu {
         ch.first_sample = true;
         ch.enabled = true;
         ch.envelope.volume = ch.envelope.initial;
+        let mut freq_updated = false;
         if idx == 1 {
             if let Some(s) = ch.sweep.as_mut() {
                 s.reload(ch.frequency);
@@ -745,6 +759,7 @@ impl Apu {
                     } else {
                         s.shadow = new_freq;
                         ch.frequency = new_freq;
+                        freq_updated = true;
                     }
                 }
             }
@@ -757,6 +772,9 @@ impl Apu {
             if matches!(upcoming, 0 | 2 | 4 | 6) {
                 ch.length = 63;
             }
+        }
+        if idx == 1 && freq_updated {
+            self.update_ch1_freq_regs();
         }
     }
 
@@ -800,6 +818,7 @@ impl Apu {
         }
         if step == 2 || step == 6 {
             self.ch1.clock_sweep();
+            self.update_ch1_freq_regs();
         }
         if step == 7 {
             self.ch1.envelope.clock();
@@ -854,6 +873,13 @@ impl Apu {
         let ch4 = self.ch4.peek_sample();
         self.pcm12 = (ch2 << 4) | ch1;
         self.pcm34 = (ch4 << 4) | ch3;
+    }
+
+    /// Mirror the current channel 1 frequency into NR13/NR14.
+    fn update_ch1_freq_regs(&mut self) {
+        let freq = self.ch1.frequency;
+        self.regs[0x03] = (freq & 0xFF) as u8;
+        self.regs[0x04] = (self.regs[0x04] & !0x07) | ((freq >> 8) as u8 & 0x07);
     }
 
     pub fn step(&mut self, cycles: u16) {
