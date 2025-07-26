@@ -729,7 +729,7 @@ impl Apu {
         }
         let new_timer = sample_length * 2 + delay_cycles;
         let low_phase = (self.lf_div_counter & 0x3) as i32;
-        ch.timer = (new_timer & !0x3) | low_phase + 1;
+        ch.timer = ((new_timer & !0x3) | low_phase) + 1;
         ch.pending_reset = true;
         ch.first_sample = true;
         ch.enabled = true;
