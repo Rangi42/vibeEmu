@@ -1171,4 +1171,29 @@ mod tests {
         assert!(second.0 < first.0);
         assert!(second.1 < first.1);
     }
+
+    #[test]
+    fn dc_filter_converges_to_zero() {
+        let mut apu = Apu::new();
+        let mut out = (0i16, 0i16);
+        for _ in 0..8192 {
+            out = apu.dc_block(1000, 1000);
+        }
+        assert!(out.0.abs() < 10);
+        assert!(out.1.abs() < 10);
+    }
+
+    #[test]
+    fn dc_filter_channels_independent() {
+        let mut apu = Apu::new();
+        let mut last_left = 0i16;
+        let mut last_right = 0i16;
+        for _ in 0..8 {
+            let (l, r) = apu.dc_block(1000, 0);
+            last_left = l;
+            last_right = r;
+        }
+        assert!(last_left > 0);
+        assert_eq!(last_right, 0);
+    }
 }
