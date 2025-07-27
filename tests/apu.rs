@@ -200,6 +200,56 @@ fn sweep_updates_frequency_registers() {
 }
 
 #[test]
+fn sweep_trigger_sets_shadow_and_timer() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable
+    apu.write_reg(0xFF10, 0x30); // period=3, shift=0
+    apu.write_reg(0xFF12, 0xF0); // DAC on
+    apu.write_reg(0xFF13, 0x56);
+    apu.write_reg(0xFF14, 0x80); // trigger
+    assert_eq!(apu.ch1_sweep_shadow(), 0x056);
+    assert_eq!(apu.ch1_sweep_timer(), 3);
+    assert!(apu.ch1_sweep_enabled());
+}
+
+#[test]
+fn sweep_disabled_with_zero_params() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF10, 0x00); // period=0, shift=0
+    apu.write_reg(0xFF12, 0xF0);
+    apu.write_reg(0xFF13, 0x00);
+    apu.write_reg(0xFF14, 0x80); // trigger
+    assert_eq!(apu.ch1_sweep_timer(), 8);
+    assert!(!apu.ch1_sweep_enabled());
+}
+
+#[test]
+fn sweep_frequency_write_lost() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF10, 0x11); // period=1, shift=1
+    apu.write_reg(0xFF12, 0xF0);
+    apu.write_reg(0xFF13, 0x00);
+    apu.write_reg(0xFF14, 0x82); // trigger -> freq becomes 0x300
+    assert_eq!(apu.ch1_sweep_shadow(), 0x300);
+
+    // modify frequency while sweep active
+    apu.write_reg(0xFF13, 0x00); // low bits
+    apu.write_reg(0xFF14, 0x01); // high bits=1
+    assert_eq!(apu.ch1_frequency(), 0x100);
+    // shadow should remain unchanged
+    assert_eq!(apu.ch1_sweep_shadow(), 0x300);
+
+    let mut div = 0u16;
+    for _ in 0..(8192 * 3 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    // frequency should be updated from shadow register, not current value
+    assert_eq!(apu.ch1_frequency(), 0x480);
+}
+
+#[test]
 fn pcm_register_open_bus() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x00); // power off
