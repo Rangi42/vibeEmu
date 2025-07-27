@@ -924,3 +924,53 @@ fn nr34_trigger_resets_length() {
     assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x04);
     assert_eq!(apu.ch3_length(), 256);
 }
+#[test]
+fn nr34_trigger_reload_timer_and_freq() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1D, 0xAA); // low bits
+    apu.write_reg(0xFF1E, 0x85); // high bits=5, trigger
+    let expected = (2048 - 0x5AA) * 2;
+    assert_eq!(apu.ch3_frequency(), 0x5AA);
+    assert_eq!(apu.ch3_timer(), expected);
+
+    apu.write_reg(0xFF1D, 0x00); // new low bits
+    apu.write_reg(0xFF1E, 0x80); // high bits=0, trigger
+    let expected2 = (2048 - 0x000) * 2;
+    assert_eq!(apu.ch3_frequency(), 0x000);
+    assert_eq!(apu.ch3_timer(), expected2);
+}
+
+#[test]
+fn nr34_retrigger_resets_wave_position() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    for i in 0..0x10 {
+        apu.write_reg(0xFF30 + i as u16, (i * 0x11) as u8);
+    }
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1C, 0x20); // full volume
+    apu.write_reg(0xFF1D, 0xFF);
+    apu.write_reg(0xFF1E, 0x87); // trigger
+    let mut div = 0u16;
+    tick_machine(&mut apu, &mut div, 4); // discard initial old sample
+    let mut first = [0u8; 8];
+    for s in &mut first {
+        tick_machine(&mut apu, &mut div, 4);
+        *s = apu.read_pcm(0xFF77) & 0x0F;
+    }
+
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+
+    apu.write_reg(0xFF1E, 0x87); // retrigger
+    tick_machine(&mut apu, &mut div, 4); // discard old sample
+    let mut second = [0u8; 8];
+    for s in &mut second {
+        tick_machine(&mut apu, &mut div, 4);
+        *s = apu.read_pcm(0xFF77) & 0x0F;
+    }
+    assert_eq!(second, first);
+}
