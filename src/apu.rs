@@ -1051,6 +1051,16 @@ impl Apu {
     pub fn ch3_length(&self) -> u16 {
         self.ch3.length
     }
+
+    /// Current frequency setting for channel 3.
+    pub fn ch3_frequency(&self) -> u16 {
+        self.ch3.frequency
+    }
+
+    /// Current period timer for channel 3.
+    pub fn ch3_timer(&self) -> i32 {
+        self.ch3.timer
+    }
 }
 
 impl Default for Apu {

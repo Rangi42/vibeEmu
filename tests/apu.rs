@@ -843,3 +843,84 @@ fn nr32_volume_control() {
     assert_eq!(half, full >> 1);
     assert_eq!(quarter, full >> 2);
 }
+
+#[test]
+fn nr33_write_sets_frequency_low_bits_and_is_write_only() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF1D, 0x34); // write low bits
+    apu.write_reg(0xFF1E, 0x05); // high bits=5, no trigger
+    assert_eq!(apu.ch3_frequency(), 0x534);
+    assert_eq!(apu.read_reg(0xFF1D), 0xFF); // NR33 is write-only
+}
+
+#[test]
+fn nr33_period_change_delayed_until_sample_end() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1D, 0x00);
+    apu.write_reg(0xFF1E, 0x85); // freq=0x500 trigger
+
+    let mut div = 0u16;
+    for _ in 0..10 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    let timer_before = apu.ch3_timer();
+
+    apu.write_reg(0xFF1D, 0x40); // new low bits -> freq 0x540
+    assert_eq!(apu.ch3_frequency(), 0x540);
+    assert_eq!(apu.ch3_timer(), timer_before);
+
+    for _ in 0..(timer_before + 10) {
+        tick_machine(&mut apu, &mut div, 1);
+    }
+    let timer_after = apu.ch3_timer();
+    let expected = (2048 - 0x540) * 2;
+    eprintln!("timer_after={} expected={}", timer_after, expected);
+    assert!(timer_after <= expected + 16 && timer_after + 16 >= expected);
+}
+
+#[test]
+fn nr34_write_sets_frequency_high_bits_and_is_write_only() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF1D, 0xAA);
+    apu.write_reg(0xFF1E, 0x05); // high bits=5
+    assert_eq!(apu.ch3_frequency(), 0x5AA);
+    assert_eq!(apu.read_reg(0xFF1E), 0xBF);
+}
+
+#[test]
+fn nr34_length_enable_read_write() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF1E, 0x40); // set length enable
+    assert_eq!(apu.read_reg(0xFF1E), 0xFF);
+    apu.write_reg(0xFF1E, 0x00); // clear length enable
+    assert_eq!(apu.read_reg(0xFF1E), 0xBF);
+}
+
+#[test]
+fn nr34_trigger_resets_length() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1B, 0xFF); // length = 1
+    apu.write_reg(0xFF1E, 0x80); // trigger with length disabled
+
+    let mut div = 0u16;
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+
+    apu.write_reg(0xFF1E, 0x40); // enable length
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x00); // channel disabled
+
+    apu.write_reg(0xFF1E, 0x80); // retrigger
+    assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x04);
+    assert_eq!(apu.ch3_length(), 256);
+}
