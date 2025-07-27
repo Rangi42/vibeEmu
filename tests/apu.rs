@@ -961,7 +961,7 @@ fn nr34_trigger_reload_timer_and_freq() {
 
     apu.write_reg(0xFF1D, 0x00); // new low bits
     apu.write_reg(0xFF1E, 0x80); // high bits=0, trigger
-    let expected2 = (2048 - 0x000) * 2;
+    let expected2 = 2048 * 2;
     assert_eq!(apu.ch3_frequency(), 0x000);
     assert_eq!(apu.ch3_timer(), expected2);
 }
@@ -1021,7 +1021,7 @@ fn nr41_high_bits_ignored() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);
     apu.write_reg(0xFF20, 0xFF);
-    assert_eq!(apu.ch4_length(), 64 - (0xFF & 0x3F));
+    assert_eq!(apu.ch4_length(), 64 - 0x3F);
     assert_eq!(apu.read_reg(0xFF20), 0xFF);
 }
 
@@ -1174,4 +1174,54 @@ fn nr44_trigger_resets_length_and_volume() {
     assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x08);
     assert_eq!(apu.ch4_length(), 64);
     assert_eq!(apu.ch4_volume(), 0x5);
+}
+#[test]
+fn nr43_register_fields() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF22, 0x5F); // shift=5, width7=1, divisor=7
+    assert_eq!(apu.read_reg(0xFF22), 0x5F);
+    assert_eq!(apu.ch4_clock_shift(), 5);
+    assert!(apu.ch4_width7());
+    assert_eq!(apu.ch4_divisor(), 7);
+}
+
+#[test]
+fn nr43_lfsr_lockup_and_retrigger() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0xF0);
+    apu.write_reg(0xFF22, 0x00); // 15-bit mode
+    apu.write_reg(0xFF23, 0x80); // trigger
+    let mut div = 0u16;
+    for _ in 0..64 {
+        tick_machine(&mut apu, &mut div, 1);
+    }
+    assert_eq!(apu.ch4_lfsr() & 0x7F, 0x7F);
+    apu.write_reg(0xFF22, 0x08); // switch to width7
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x00);
+    apu.write_reg(0xFF23, 0x80); // retrigger
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x08);
+}
+
+#[test]
+fn nr43_output_depends_on_lfsr() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0xF0); // volume 15
+    apu.write_reg(0xFF22, 0x00); // period 8
+    apu.write_reg(0xFF23, 0x80); // trigger
+    let mut div = 0u16;
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 1);
+    }
+    let lfsr1 = apu.ch4_lfsr();
+    let sample1 = if lfsr1 & 1 == 0 { apu.ch4_volume() } else { 0 };
+    assert_eq!(sample1, 0);
+    for _ in 0..112 {
+        tick_machine(&mut apu, &mut div, 1);
+    }
+    let lfsr2 = apu.ch4_lfsr();
+    let sample2 = if lfsr2 & 1 == 0 { apu.ch4_volume() } else { 0 };
+    assert_eq!(sample2, 0xF);
 }
