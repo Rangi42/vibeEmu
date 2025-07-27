@@ -778,7 +778,7 @@ impl Apu {
         ch.timer = ((new_timer & !0x3) | low_phase) + 1;
         ch.pending_reset = true;
         ch.first_sample = true;
-        ch.enabled = true;
+        ch.enabled = ch.dac_enabled;
         ch.envelope.volume = ch.envelope.initial;
         let mut freq_updated = false;
         if idx == 1 {
@@ -812,7 +812,7 @@ impl Apu {
     }
 
     fn trigger_wave(&mut self) {
-        self.ch3.enabled = true;
+        self.ch3.enabled = self.ch3.dac_enabled;
         self.ch3.position = 0;
         self.ch3.timer = self.ch3.period();
         if self.ch3.length == 0 {
@@ -827,7 +827,7 @@ impl Apu {
     }
 
     fn trigger_noise(&mut self) {
-        self.ch4.enabled = true;
+        self.ch4.enabled = self.ch4.dac_enabled;
         self.ch4.lfsr = 0x7FFF;
         self.ch4.timer = self.ch4.period();
         self.ch4.envelope.volume = self.ch4.envelope.initial;
