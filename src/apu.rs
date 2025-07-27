@@ -879,12 +879,17 @@ impl Apu {
             self.ch2.tick_1mhz();
 
             // Determine if the frame sequencer should step. The sequencer is
-            // clocked by DIV bit 5 (or bit 6 when in double speed). We derive
-            // intermediate DIV values by incrementing `div_prev`.
+            // clocked by DIV bit 4 (bit 5 in double speed) on its falling edge.
+            // `div_prev` contains the internal 16-bit divider value; DIV's bit
+            // 4 corresponds to bit 12 of this counter. Likewise, in double
+            // speed mode bit 5 corresponds to bit 13. We derive intermediate
+            // DIV values by incrementing `div_prev`.
             let prev = div_prev.wrapping_add(i as u16);
             let curr = div_prev.wrapping_add((i + 1) as u16);
-            let bit = if double_speed { 6 } else { 5 };
-            if ((prev >> bit) & 1) != ((curr >> bit) & 1) {
+            let bit = if double_speed { 13 } else { 12 };
+            let prev_bit = (prev >> bit) & 1;
+            let curr_bit = (curr >> bit) & 1;
+            if prev_bit == 1 && curr_bit == 0 {
                 let step = self.sequencer.advance();
                 self.clock_frame_sequencer(step);
             }
