@@ -612,7 +612,7 @@ impl Apu {
                 } else {
                     self.ch1.envelope.reset(val);
                 }
-                self.ch1.dac_enabled = val & 0xF0 != 0;
+                self.ch1.dac_enabled = val & 0xF8 != 0;
                 if !self.ch1.dac_enabled {
                     self.ch1.enabled = false;
                 }
@@ -642,7 +642,7 @@ impl Apu {
                 } else {
                     self.ch2.envelope.reset(val);
                 }
-                self.ch2.dac_enabled = val & 0xF0 != 0;
+                self.ch2.dac_enabled = val & 0xF8 != 0;
                 if !self.ch2.dac_enabled {
                     self.ch2.enabled = false;
                 }
@@ -692,7 +692,7 @@ impl Apu {
                 } else {
                     self.ch4.envelope.reset(val);
                 }
-                self.ch4.dac_enabled = val & 0xF0 != 0;
+                self.ch4.dac_enabled = val & 0xF8 != 0;
                 if !self.ch4.dac_enabled {
                     self.ch4.enabled = false;
                 }
@@ -949,10 +949,10 @@ impl Apu {
         let out3 = self.ch3.output();
         let out4 = self.ch4.output();
 
-        let ch1 = out1 as i16 - 8;
-        let ch2 = out2 as i16 - 8;
-        let ch3 = out3 as i16 - 8;
-        let ch4 = out4 as i16 - 8;
+        let ch1 = 8 - out1 as i16;
+        let ch2 = 8 - out2 as i16;
+        let ch3 = 8 - out3 as i16;
+        let ch4 = 8 - out4 as i16;
 
         let mut left = 0i16;
         let mut right = 0i16;
@@ -1160,7 +1160,38 @@ mod tests {
 
         let (left, right) = apu.mix_output();
         assert_eq!(left, right);
-        assert_eq!(left, 28 * VOLUME_FACTOR);
+        assert_eq!(left, -28 * VOLUME_FACTOR);
+    }
+
+    #[test]
+    fn mix_output_negative_slope() {
+        let mut apu = Apu::new();
+        apu.nr50 = 0x00;
+        apu.nr51 = 0x11; // route ch1 to left and right
+        apu.ch1.enabled = true;
+        apu.ch1.dac_enabled = true;
+
+        apu.ch1.out_latched = 0;
+        let (left_pos, _) = apu.mix_output();
+
+        apu.ch1.out_latched = 15;
+        let (left_neg, _) = apu.mix_output();
+
+        assert!(left_pos > 0);
+        assert!(left_neg < 0);
+    }
+
+    #[test]
+    fn mix_output_zero_when_dac_off() {
+        let mut apu = Apu::new();
+        apu.nr50 = 0x00;
+        apu.nr51 = 0x11;
+        apu.ch1.enabled = true;
+        apu.ch1.dac_enabled = false;
+        apu.ch1.out_latched = 8;
+        let (left, right) = apu.mix_output();
+        assert_eq!(left, 0);
+        assert_eq!(right, 0);
     }
 
     #[test]
