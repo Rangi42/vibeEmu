@@ -640,7 +640,7 @@ fn main() {
                                 if b.is_ascii_graphic() || *b == b' ' {
                                     print!("{}", *b as char);
                                 } else {
-                                    print!("\\x{:02X}", b);
+                                    print!("\\x{b:02X}");
                                 }
                             }
                             println!();
@@ -690,7 +690,7 @@ fn main() {
                         if b.is_ascii_graphic() || *b == b' ' {
                             print!("{}", *b as char);
                         } else {
-                            print!("\\x{:02X}", b);
+                            print!("\\x{b:02X}");
                         }
                     }
                     println!();
