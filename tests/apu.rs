@@ -212,7 +212,6 @@ fn sweep_updates_frequency_registers() {
 }
 
 #[test]
-#[ignore]
 fn pcm_register_open_bus() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x00); // power off
@@ -221,7 +220,6 @@ fn pcm_register_open_bus() {
 }
 
 #[test]
-#[ignore]
 fn pcm_register_sample_values() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80); // enable
@@ -239,10 +237,9 @@ fn pcm_register_sample_values() {
         tick_machine(&mut apu, &mut div, 4);
     }
 
-    assert_eq!(apu.read_pcm(0xFF76), 0x0C);
+    assert_eq!(apu.read_pcm(0xFF76), 0xC0);
 }
 #[test]
-#[ignore]
 fn pcm_mmu_mapping() {
     let mut mmu = Mmu::new_with_mode(true);
     mmu.write_byte(0xFF26, 0x80);
@@ -259,9 +256,26 @@ fn pcm_mmu_mapping() {
             tick_machine(&mut apu, &mut div, 4);
         }
     }
-    assert_eq!(mmu.read_byte(0xFF76), 0x0C);
+    assert_eq!(mmu.read_byte(0xFF76), 0xC0);
     let mut dmg = Mmu::new();
     assert_eq!(dmg.read_byte(0xFF76), 0xFF);
+}
+
+#[test]
+fn pcm34_noise_output() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    // trigger noise channel with volume 15
+    apu.write_reg(0xFF21, 0xF0);
+    apu.write_reg(0xFF22, 0x00);
+    apu.write_reg(0xFF23, 0x80);
+
+    let mut div = 0u16;
+    for _ in 0..32 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+
+    assert_eq!(apu.read_pcm(0xFF77), 0xF0);
 }
 #[test]
 fn nr52_power_toggle() {
