@@ -1061,6 +1061,11 @@ impl Apu {
     pub fn ch3_timer(&self) -> i32 {
         self.ch3.timer
     }
+
+    /// Current playback position within wave RAM for channel 3.
+    pub fn ch3_position(&self) -> u8 {
+        self.ch3.position
+    }
 }
 
 impl Default for Apu {

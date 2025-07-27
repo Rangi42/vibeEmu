@@ -768,6 +768,30 @@ fn wave_channel_wraps_after_32_samples() {
 }
 
 #[test]
+fn wave_ram_accessible_with_dac_on_when_inactive() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF1A, 0x80); // DAC on but channel inactive
+    apu.write_reg(0xFF30, 0xAB);
+    assert_eq!(apu.read_reg(0xFF30), 0xAB);
+    apu.write_reg(0xFF30, 0xCD);
+    assert_eq!(apu.read_reg(0xFF30), 0xCD);
+}
+
+#[test]
+fn wave_channel_starts_at_index_one() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1D, 0xFF); // freq low
+    apu.write_reg(0xFF1E, 0x87); // trigger with high freq (period = 2 cycles)
+    assert_eq!(apu.ch3_position(), 0);
+    let mut div = 0u16;
+    tick_machine(&mut apu, &mut div, 2); // advance one sample
+    assert_eq!(apu.ch3_position(), 1);
+}
+
+#[test]
 fn nr30_dac_off_disables_channel() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80); // enable APU
