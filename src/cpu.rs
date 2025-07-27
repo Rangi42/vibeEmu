@@ -1390,7 +1390,7 @@ impl Cpu {
                     }
                     | if self.a < val { FLAG_C } else { 0 };
             }
-            _ => panic!("unhandled opcode {:02X}", opcode),
+            _ => panic!("unhandled opcode {opcode:02X}"),
         }
 
         if enable_after {
