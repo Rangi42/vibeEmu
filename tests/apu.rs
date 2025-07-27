@@ -1175,6 +1175,30 @@ fn nr44_trigger_resets_length_and_volume() {
     assert_eq!(apu.ch4_length(), 64);
     assert_eq!(apu.ch4_volume(), 0x5);
 }
+
+#[test]
+fn nr44_trigger_resets_lfsr_and_envelope_timer() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0xF0); // initial volume 15, period 0 => timer 8
+    apu.write_reg(0xFF22, 0x00);
+    apu.write_reg(0xFF23, 0x80); // trigger
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x08);
+    assert_eq!(apu.ch4_lfsr(), 0x7FFF);
+    assert_eq!(apu.ch4_envelope_timer(), 8);
+
+    let mut div = 0u16;
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_ne!(apu.ch4_lfsr(), 0x7FFF);
+    assert!(apu.ch4_envelope_timer() < 8);
+
+    apu.write_reg(0xFF23, 0x80); // retrigger
+    assert_eq!(apu.ch4_lfsr(), 0x7FFF);
+    assert_eq!(apu.ch4_envelope_timer(), 8);
+    assert_eq!(apu.ch4_volume(), 0xF);
+}
 #[test]
 fn nr43_register_fields() {
     let mut apu = Apu::new();

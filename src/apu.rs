@@ -831,6 +831,11 @@ impl Apu {
         self.ch4.lfsr = 0x7FFF;
         self.ch4.timer = self.ch4.period();
         self.ch4.envelope.volume = self.ch4.envelope.initial;
+        self.ch4.envelope.timer = if self.ch4.envelope.period == 0 {
+            8
+        } else {
+            self.ch4.envelope.period
+        };
         if self.ch4.length == 0 {
             self.ch4.length = 64;
         }
@@ -1081,6 +1086,11 @@ impl Apu {
     /// Current envelope volume for channel 4.
     pub fn ch4_volume(&self) -> u8 {
         self.ch4.envelope.volume
+    }
+
+    /// Current envelope timer for channel 4.
+    pub fn ch4_envelope_timer(&self) -> u8 {
+        self.ch4.envelope.timer
     }
 
     /// Current LFSR state for channel 4.
