@@ -559,7 +559,7 @@ impl VramViewerWindow {
         let draw_list = ui.get_window_draw_list();
         for row in 0..16 {
             let label = if row < 8 {
-                format!("BG{}", row)
+                format!("BG{row}")
             } else {
                 format!("OBJ{}", row - 8)
             };
