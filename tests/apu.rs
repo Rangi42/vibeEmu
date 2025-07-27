@@ -1009,6 +1009,23 @@ fn nr41_write_sets_length() {
 }
 
 #[test]
+fn nr41_zero_sets_full_length() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF20, 0x00);
+    assert_eq!(apu.ch4_length(), 64);
+}
+
+#[test]
+fn nr41_high_bits_ignored() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF20, 0xFF);
+    assert_eq!(apu.ch4_length(), 64 - (0xFF & 0x3F));
+    assert_eq!(apu.read_reg(0xFF20), 0xFF);
+}
+
+#[test]
 fn nr41_write_ignored_when_disabled() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x00);
