@@ -1040,6 +1040,21 @@ impl Apu {
         self.ch1.timer
     }
 
+    /// Current sweep shadow register value for channel 1.
+    pub fn ch1_sweep_shadow(&self) -> u16 {
+        self.ch1.sweep.as_ref().map(|s| s.shadow).unwrap_or(0)
+    }
+
+    /// Current sweep timer value for channel 1.
+    pub fn ch1_sweep_timer(&self) -> u8 {
+        self.ch1.sweep.as_ref().map(|s| s.timer).unwrap_or(0)
+    }
+
+    /// Whether channel 1 sweep is currently enabled.
+    pub fn ch1_sweep_enabled(&self) -> bool {
+        self.ch1.sweep.as_ref().map(|s| s.enabled).unwrap_or(false)
+    }
+
     pub fn ch2_frequency(&self) -> u16 {
         self.ch2.frequency
     }
