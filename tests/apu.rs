@@ -14,7 +14,7 @@ fn frame_sequencer_tick() {
     let mut apu = Apu::new();
     let mut div = 0u16;
     assert_eq!(apu.sequencer_step(), 0);
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(16 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.sequencer_step(), 0);
@@ -166,13 +166,7 @@ fn sweep_subtraction_mode() {
     apu.write_reg(0xFF14, 0x82); // freq=0x200, trigger
     assert_eq!(apu.ch1_frequency(), 0x100);
     let mut div = 0u16;
-    for _ in 0..8 {
-        tick_machine(&mut apu, &mut div, 4);
-    }
-    for _ in 0..8 {
-        tick_machine(&mut apu, &mut div, 4);
-    }
-    for _ in 0..8 {
+    for _ in 0..(8192 * 3 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.ch1_frequency(), 0x80);
@@ -199,13 +193,7 @@ fn sweep_updates_frequency_registers() {
     apu.write_reg(0xFF13, 0x00);
     apu.write_reg(0xFF14, 0x82); // trigger
     let mut div = 0u16;
-    for _ in 0..8 {
-        tick_machine(&mut apu, &mut div, 4);
-    }
-    for _ in 0..8 {
-        tick_machine(&mut apu, &mut div, 4);
-    }
-    for _ in 0..8 {
+    for _ in 0..(8192 * 3 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.ch1_frequency(), 0x480);
@@ -237,7 +225,7 @@ fn pcm_register_sample_values() {
         tick_machine(&mut apu, &mut div, 4);
     }
 
-    assert_eq!(apu.read_pcm(0xFF76), 0xC0);
+    assert_eq!(apu.read_pcm(0xFF76), 0xF0);
 }
 #[test]
 fn pcm_mmu_mapping() {
@@ -256,7 +244,7 @@ fn pcm_mmu_mapping() {
             tick_machine(&mut apu, &mut div, 4);
         }
     }
-    assert_eq!(mmu.read_byte(0xFF76), 0xC0);
+    assert_eq!(mmu.read_byte(0xFF76), 0xF0);
     let mut dmg = Mmu::new();
     assert_eq!(dmg.read_byte(0xFF76), 0xFF);
 }
@@ -456,7 +444,7 @@ fn nr11_length_counter_expires() {
     }
 
     apu.write_reg(0xFF14, 0x40); // enable length
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(2 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x00);
@@ -496,7 +484,7 @@ fn nr12_register_unchanged_after_envelope() {
     apu.write_reg(0xFF12, 0x8A); // init 8, increase, pace=2
     apu.write_reg(0xFF14, 0x80); // trigger
     let mut div = 0u16;
-    for _ in 0..(65536 / 4) {
+    for _ in 0..(196608 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF12), 0x8A);
@@ -576,7 +564,7 @@ fn nr14_trigger_resets_length_and_volume() {
 
     apu.write_reg(0xFF12, 0x50); // new envelope params while active
     apu.write_reg(0xFF14, 0x40); // enable length
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(2 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x00); // channel disabled
@@ -613,7 +601,7 @@ fn nr21_length_counter_expires() {
     }
 
     apu.write_reg(0xFF19, 0x40); // enable length
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(2 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x00);
@@ -651,7 +639,7 @@ fn nr22_register_unchanged_after_envelope() {
     apu.write_reg(0xFF17, 0x8A); // init 8, increase, pace=2
     apu.write_reg(0xFF19, 0x80); // trigger
     let mut div = 0u16;
-    for _ in 0..(65536 / 4) {
+    for _ in 0..(196608 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF17), 0x8A);
@@ -730,7 +718,7 @@ fn nr24_trigger_resets_length_and_volume() {
 
     apu.write_reg(0xFF17, 0x50); // new envelope params
     apu.write_reg(0xFF19, 0x40); // enable length
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(2 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x00);
@@ -848,7 +836,7 @@ fn nr31_length_counter_expires() {
     }
 
     apu.write_reg(0xFF1E, 0x40); // enable length
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(2 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x00);
@@ -953,7 +941,7 @@ fn nr34_trigger_resets_length() {
     }
 
     apu.write_reg(0xFF1E, 0x40); // enable length
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(2 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x04, 0x00); // channel disabled
@@ -1061,7 +1049,7 @@ fn nr41_length_counter_expires() {
         tick_machine(&mut apu, &mut div, 4);
     }
     apu.write_reg(0xFF23, 0x40);
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(2 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x00);
@@ -1099,7 +1087,7 @@ fn nr42_register_unchanged_after_envelope() {
     apu.write_reg(0xFF21, 0x8A);
     apu.write_reg(0xFF23, 0x80);
     let mut div = 0u16;
-    for _ in 0..(65536 / 4) {
+    for _ in 0..(196608 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF21), 0x8A);
@@ -1180,7 +1168,7 @@ fn nr44_trigger_resets_length_and_volume() {
     }
     apu.write_reg(0xFF21, 0x50);
     apu.write_reg(0xFF23, 0x40);
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(2 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x00);
@@ -1202,7 +1190,7 @@ fn nr44_trigger_resets_lfsr_and_envelope_timer() {
     assert_eq!(apu.ch4_envelope_timer(), 8);
 
     let mut div = 0u16;
-    for _ in 0..(8192 / 4) {
+    for _ in 0..(16 * 8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
     }
     assert_ne!(apu.ch4_lfsr(), 0x7FFF);
@@ -1262,4 +1250,54 @@ fn nr43_output_depends_on_lfsr() {
     let lfsr2 = apu.ch4_lfsr();
     let sample2 = if lfsr2 & 1 == 0 { apu.ch4_volume() } else { 0 };
     assert_eq!(sample2, 0xF);
+}
+
+#[test]
+fn div_apu_envelope_clock() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF16, 0x00); // length 64
+    apu.write_reg(0xFF17, 0xF1); // initial vol 15, decrease, period=1
+    apu.write_reg(0xFF19, 0x80); // trigger channel 2
+    let mut div = 0u16;
+    let initial = apu.ch2_volume();
+    for _ in 0..(8192 * 16 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.ch2_volume(), initial - 1);
+}
+
+#[test]
+fn div_apu_length_clock() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF16, 0x3E); // length=2
+    apu.write_reg(0xFF17, 0xF0); // DAC on
+    apu.write_reg(0xFF19, 0xC0); // length enable + trigger
+    let mut div = 0u16;
+    let initial = apu.ch2_length();
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.ch2_length(), initial - 1);
+}
+
+#[test]
+fn div_apu_sweep_clock() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF10, 0x11); // period=1, shift=1
+    apu.write_reg(0xFF12, 0xF0); // DAC on
+    apu.write_reg(0xFF13, 0x00);
+    apu.write_reg(0xFF14, 0x82); // trigger freq=0x200
+    assert_eq!(apu.ch1_frequency(), 0x300);
+    let mut div = 0u16;
+    for _ in 0..(8192 * 3 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.ch1_frequency(), 0x480);
+    for _ in 0..(8192 * 4 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.ch1_frequency(), 0x6C0);
 }
