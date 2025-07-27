@@ -998,3 +998,148 @@ fn nr34_retrigger_resets_wave_position() {
     }
     assert_eq!(second, first);
 }
+
+#[test]
+fn nr41_write_sets_length() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF20, 0x20);
+    assert_eq!(apu.ch4_length(), 64 - (0x20 & 0x3F));
+    assert_eq!(apu.read_reg(0xFF20), 0xFF);
+}
+
+#[test]
+fn nr41_write_ignored_when_disabled() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x00);
+    let before = apu.ch4_length();
+    apu.write_reg(0xFF20, 0x40);
+    assert_eq!(apu.ch4_length(), before);
+}
+
+#[test]
+fn nr41_length_counter_expires() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0xF0);
+    apu.write_reg(0xFF20, 0x3F);
+    apu.write_reg(0xFF23, 0x80);
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x08);
+    let mut div = 0u16;
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    apu.write_reg(0xFF23, 0x40);
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x00);
+}
+
+#[test]
+fn nr42_zero_turns_off_dac() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0xF0);
+    apu.write_reg(0xFF23, 0x80);
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x08);
+    apu.write_reg(0xFF21, 0x00);
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x00);
+}
+
+#[test]
+fn nr42_write_requires_retrigger() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0xF0);
+    apu.write_reg(0xFF23, 0x80);
+    assert_eq!(apu.ch4_volume(), 0xF);
+    apu.write_reg(0xFF21, 0x50);
+    assert_eq!(apu.ch4_volume(), 0xF);
+    apu.write_reg(0xFF23, 0x80);
+    assert_eq!(apu.ch4_volume(), 0x5);
+}
+
+#[test]
+fn nr42_register_unchanged_after_envelope() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF20, 0x00);
+    apu.write_reg(0xFF21, 0x8A);
+    apu.write_reg(0xFF23, 0x80);
+    let mut div = 0u16;
+    for _ in 0..(65536 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF21), 0x8A);
+    assert_ne!(apu.ch4_volume(), 8);
+}
+
+#[test]
+fn nr43_period_calculation() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0xF0);
+    apu.write_reg(0xFF22, 0x00);
+    apu.write_reg(0xFF23, 0x80);
+    assert_eq!(apu.ch4_timer(), 8);
+    apu.write_reg(0xFF22, 0x31);
+    apu.write_reg(0xFF23, 0x80);
+    assert_eq!(apu.ch4_timer(), 128);
+}
+
+#[test]
+fn nr43_width7_mode() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0xF0);
+    apu.write_reg(0xFF22, 0x00);
+    apu.write_reg(0xFF23, 0x80);
+    let mut div = 0u16;
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 1);
+    }
+    let lfsr15 = apu.ch4_lfsr();
+    assert_eq!(lfsr15, 0x3FFF);
+    apu.write_reg(0xFF22, 0x08);
+    apu.write_reg(0xFF23, 0x80);
+    div = 0;
+    for _ in 0..8 {
+        tick_machine(&mut apu, &mut div, 1);
+    }
+    let lfsr7 = apu.ch4_lfsr();
+    assert_eq!(lfsr7, 0x3FBF);
+}
+
+#[test]
+fn nr44_length_enable_read_write() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF23, 0x40);
+    assert_eq!(apu.read_reg(0xFF23), 0xFF);
+    apu.write_reg(0xFF23, 0x00);
+    assert_eq!(apu.read_reg(0xFF23), 0xBF);
+}
+
+#[test]
+fn nr44_trigger_resets_length_and_volume() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF20, 0x3F);
+    apu.write_reg(0xFF21, 0xF0);
+    apu.write_reg(0xFF23, 0x80);
+    let mut div = 0u16;
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    apu.write_reg(0xFF21, 0x50);
+    apu.write_reg(0xFF23, 0x40);
+    for _ in 0..(8192 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x00);
+    apu.write_reg(0xFF23, 0x80);
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x08);
+    assert_eq!(apu.ch4_length(), 64);
+    assert_eq!(apu.ch4_volume(), 0x5);
+}

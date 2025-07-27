@@ -685,7 +685,13 @@ impl Apu {
             }
             0xFF20 => self.ch4.length = 64 - (val & 0x3F),
             0xFF21 => {
-                self.ch4.envelope.reset(val);
+                if self.ch4.enabled {
+                    self.ch4.envelope.initial = val >> 4;
+                    self.ch4.envelope.period = val & 0x07;
+                    self.ch4.envelope.add = val & 0x08 != 0;
+                } else {
+                    self.ch4.envelope.reset(val);
+                }
                 self.ch4.dac_enabled = val & 0xF0 != 0;
                 if !self.ch4.dac_enabled {
                     self.ch4.enabled = false;
@@ -1065,6 +1071,41 @@ impl Apu {
     /// Current playback position within wave RAM for channel 3.
     pub fn ch3_position(&self) -> u8 {
         self.ch3.position
+    }
+
+    /// Current length counter value for channel 4.
+    pub fn ch4_length(&self) -> u8 {
+        self.ch4.length
+    }
+
+    /// Current envelope volume for channel 4.
+    pub fn ch4_volume(&self) -> u8 {
+        self.ch4.envelope.volume
+    }
+
+    /// Current LFSR state for channel 4.
+    pub fn ch4_lfsr(&self) -> u16 {
+        self.ch4.lfsr
+    }
+
+    /// Current period timer for channel 4.
+    pub fn ch4_timer(&self) -> i32 {
+        self.ch4.timer
+    }
+
+    /// Current clock shift setting for channel 4.
+    pub fn ch4_clock_shift(&self) -> u8 {
+        self.ch4.clock_shift
+    }
+
+    /// Current divisor ratio for channel 4.
+    pub fn ch4_divisor(&self) -> u8 {
+        self.ch4.divisor
+    }
+
+    /// Whether channel 4 is using width-7 mode.
+    pub fn ch4_width7(&self) -> bool {
+        self.ch4.width7
     }
 }
 
