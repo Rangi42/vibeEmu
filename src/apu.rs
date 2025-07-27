@@ -1124,3 +1124,46 @@ impl Default for Apu {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mix_output_combines_channels() {
+        let mut apu = Apu::new();
+        apu.nr50 = 0x00; // volume code 0 => factor 1
+        apu.nr51 = 0xFF; // route all channels to both outputs
+
+        apu.ch1.enabled = true;
+        apu.ch1.dac_enabled = true;
+        apu.ch1.out_latched = 15;
+
+        apu.ch2.enabled = true;
+        apu.ch2.dac_enabled = true;
+        apu.ch2.out_latched = 15;
+
+        apu.ch3.enabled = true;
+        apu.ch3.dac_enabled = true;
+        apu.ch3.last_sample = 15;
+        apu.ch3.volume = 1;
+
+        apu.ch4.enabled = true;
+        apu.ch4.dac_enabled = true;
+        apu.ch4.lfsr = 0;
+        apu.ch4.envelope.volume = 15;
+
+        let (left, right) = apu.mix_output();
+        assert_eq!(left, right);
+        assert_eq!(left, 28 * VOLUME_FACTOR);
+    }
+
+    #[test]
+    fn dc_filter_reduces_constant_input() {
+        let mut apu = Apu::new();
+        let first = apu.dc_block(1000, 1000);
+        let second = apu.dc_block(1000, 1000);
+        assert!(second.0 < first.0);
+        assert!(second.1 < first.1);
+    }
+}
