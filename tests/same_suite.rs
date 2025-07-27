@@ -74,7 +74,6 @@ fn same_suite__apu__channel_1__channel_1_align_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_align_cpu_gb() {
     const EXPECTED: [u8; 48] = [
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x08,
@@ -325,7 +324,6 @@ fn same_suite__apu__channel_2__channel_2_align_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_align_cpu_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_align_cpu.gb"),
@@ -575,7 +573,6 @@ fn same_suite__apu__channel_3__channel_3_shift_skip_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_stop_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_stop_delay.gb"),
@@ -595,7 +592,6 @@ fn same_suite__apu__channel_3__channel_3_stop_div_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_wave_ram_dac_on_rw_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_wave_ram_dac_on_rw.gb"),
@@ -805,7 +801,6 @@ fn same_suite__apu__div_write_trigger_volume_10_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__dma__gbc_dma_cont_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/dma/gbc_dma_cont.gb"),
