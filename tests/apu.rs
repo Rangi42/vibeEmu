@@ -1093,6 +1093,21 @@ fn nr42_register_unchanged_after_envelope() {
 }
 
 #[test]
+fn nr42_writes_ignored_when_disabled() {
+    let mut apu = Apu::new();
+    // disable the entire APU
+    apu.write_reg(0xFF26, 0x00);
+    // attempt to set envelope params while powered off
+    apu.write_reg(0xFF21, 0xF0);
+    // read value should remain the default power-on value
+    assert_eq!(apu.read_reg(0xFF21), 0x00);
+    // enable the APU and write again
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0xF0);
+    assert_eq!(apu.read_reg(0xFF21) & 0xF0, 0xF0);
+}
+
+#[test]
 fn nr43_period_calculation() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);
