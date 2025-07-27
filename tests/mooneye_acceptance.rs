@@ -689,7 +689,6 @@ fn timer__tim11_div_trigger_gb() {
 }
 
 #[test]
-#[ignore]
 fn timer__tima_reload_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/timer/tima_reload.gb"),
