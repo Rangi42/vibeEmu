@@ -322,6 +322,14 @@ fn nr52_channel_status_bits() {
 }
 
 #[test]
+fn nr52_bits_ignore_dac_only() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF17, 0x08); // enable DAC on channel 2 without trigger
+    assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x00);
+}
+
+#[test]
 fn nr52_wave_ram_persist() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF30, 0x12);
@@ -462,6 +470,15 @@ fn nr12_zero_turns_off_dac() {
 }
 
 #[test]
+fn nr12_bit3_enables_dac() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF12, 0x08); // volume 0, envelope add -> DAC should be on
+    apu.write_reg(0xFF14, 0x80); // trigger channel 1
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x01);
+}
+
+#[test]
 fn nr12_write_requires_retrigger() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);
@@ -489,6 +506,24 @@ fn nr12_register_unchanged_after_envelope() {
     }
     assert_eq!(apu.read_reg(0xFF12), 0x8A);
     assert_ne!(apu.ch1_volume(), 8);
+}
+
+#[test]
+fn envelope_zero_does_not_disable_channel() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF11, 0x00);
+    apu.write_reg(0xFF12, 0x11); // volume 1, decrease, period=1
+    apu.write_reg(0xFF14, 0x80); // trigger
+    let mut div = 0u16;
+    for _ in 0..(8192 * 16 / 4) {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.ch1_volume(), 0);
+    // Channel should still be on
+    assert_eq!(apu.read_reg(0xFF26) & 0x01, 0x01);
+    // Register should retain original value
+    assert_eq!(apu.read_reg(0xFF12), 0x11);
 }
 
 #[test]
@@ -616,6 +651,15 @@ fn nr22_zero_turns_off_dac() {
     assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x02);
     apu.write_reg(0xFF17, 0x00); // turn DAC off
     assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x00);
+}
+
+#[test]
+fn nr22_bit3_enables_dac() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF17, 0x08); // volume 0, envelope add
+    apu.write_reg(0xFF19, 0x80); // trigger channel 2
+    assert_eq!(apu.read_reg(0xFF26) & 0x02, 0x02);
 }
 
 #[test]
@@ -1064,6 +1108,15 @@ fn nr42_zero_turns_off_dac() {
     assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x08);
     apu.write_reg(0xFF21, 0x00);
     assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x00);
+}
+
+#[test]
+fn nr42_bit3_enables_dac() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80);
+    apu.write_reg(0xFF21, 0x08); // volume 0, envelope add
+    apu.write_reg(0xFF23, 0x80); // trigger noise
+    assert_eq!(apu.read_reg(0xFF26) & 0x08, 0x08);
 }
 
 #[test]
