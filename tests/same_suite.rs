@@ -132,7 +132,6 @@ fn same_suite__apu__channel_1__channel_1_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_duty_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_duty.gb"),
@@ -142,13 +141,40 @@ fn same_suite__apu__channel_1__channel_1_duty_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_duty_delay_gb() {
-    let passed = run_same_suite(
+    // Expected results (16 rows x 8 columns = 128 bytes)
+    const EXPECTED: [u8; 128] = [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+        0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+        0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+        0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x08, 0x08,
+        0x08, 0x08, 0x08, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x08, 0x08,
+        0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x08,
+        0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    let mut gb = run_same_suite_gb(
         common::rom_path("same-suite/apu/channel_1/channel_1_duty_delay.gb"),
         20_000_000,
     );
-    assert!(passed, "test failed");
+    let mut results = [0u8; EXPECTED.len()];
+    for (i, byte) in results.iter_mut().enumerate() {
+        *byte = gb.mmu.read_byte(0xC000 + i as u16);
+    }
+    if results != EXPECTED {
+        println!("correct: {:02X?}", EXPECTED);
+        println!("actual : {:02X?}", results);
+        let matches = results
+            .iter()
+            .zip(EXPECTED.iter())
+            .filter(|(a, b)| a == b)
+            .count();
+        let percent = matches as f32 / EXPECTED.len() as f32 * 100.0;
+        println!("match {:.2}%", percent);
+        panic!("test failed");
+    }
 }
 
 #[test]
@@ -162,7 +188,6 @@ fn same_suite__apu__channel_1__channel_1_extra_length_clocking_cgb0B_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_freq_change_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_freq_change.gb"),
@@ -172,7 +197,6 @@ fn same_suite__apu__channel_1__channel_1_freq_change_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_freq_change_timing_A_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_freq_change_timing-A.gb"),
@@ -202,7 +226,6 @@ fn same_suite__apu__channel_1__channel_1_freq_change_timing_cgbDE_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_nrx2_glitch_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_nrx2_glitch.gb"),
@@ -212,7 +235,6 @@ fn same_suite__apu__channel_1__channel_1_nrx2_glitch_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_nrx2_speed_change_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_nrx2_speed_change.gb"),
@@ -222,7 +244,6 @@ fn same_suite__apu__channel_1__channel_1_nrx2_speed_change_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_restart_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_restart.gb"),
@@ -232,7 +253,6 @@ fn same_suite__apu__channel_1__channel_1_restart_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_restart_nrx2_glitch_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_restart_nrx2_glitch.gb"),
@@ -252,7 +272,6 @@ fn same_suite__apu__channel_1__channel_1_stop_div_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_stop_restart_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_stop_restart.gb"),
@@ -292,7 +311,6 @@ fn same_suite__apu__channel_1__channel_1_sweep_restart_2_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_volume_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_volume.gb"),
@@ -302,7 +320,6 @@ fn same_suite__apu__channel_1__channel_1_volume_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_volume_div_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_volume_div.gb"),
@@ -339,7 +356,6 @@ fn same_suite__apu__channel_2__channel_2_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_duty_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_duty.gb"),
@@ -349,7 +365,6 @@ fn same_suite__apu__channel_2__channel_2_duty_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_duty_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_duty_delay.gb"),
@@ -369,7 +384,6 @@ fn same_suite__apu__channel_2__channel_2_extra_length_clocking_cgb0B_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_freq_change_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_freq_change.gb"),
@@ -379,7 +393,6 @@ fn same_suite__apu__channel_2__channel_2_freq_change_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_nrx2_glitch_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_nrx2_glitch.gb"),
@@ -389,7 +402,6 @@ fn same_suite__apu__channel_2__channel_2_nrx2_glitch_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_nrx2_speed_change_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_nrx2_speed_change.gb"),
@@ -399,7 +411,6 @@ fn same_suite__apu__channel_2__channel_2_nrx2_speed_change_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_restart_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_restart.gb"),
@@ -409,7 +420,6 @@ fn same_suite__apu__channel_2__channel_2_restart_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_restart_nrx2_glitch_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_restart_nrx2_glitch.gb"),
@@ -429,7 +439,6 @@ fn same_suite__apu__channel_2__channel_2_stop_div_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_stop_restart_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_stop_restart.gb"),
@@ -439,7 +448,6 @@ fn same_suite__apu__channel_2__channel_2_stop_restart_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_volume_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_volume.gb"),
@@ -449,7 +457,6 @@ fn same_suite__apu__channel_2__channel_2_volume_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_volume_div_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_volume_div.gb"),

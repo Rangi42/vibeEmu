@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Run cargo fmt on all workspace crates before committing. If formatting
+# changed files, stage them so the commit contains formatted code.
+
+# Exit on error
+set -e
+
+# Run cargo fmt
+cargo fmt --all
+
+# Add any changed files back to the index
+# Use git diff --name-only --diff-filter=ACM to list added/modified files
+changed_files=$(git diff --name-only --diff-filter=ACM)
+if [ -n "$changed_files" ]; then
+  echo "Staging formatted files..."
+  git add $changed_files
+fi
+
+# Allow commit to proceed
+exit 0

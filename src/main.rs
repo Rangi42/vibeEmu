@@ -5,6 +5,7 @@ mod audio;
 mod cartridge;
 mod cpu;
 mod gameboy;
+mod hardware;
 mod input;
 mod mmu;
 mod ppu;
@@ -12,6 +13,7 @@ mod serial;
 mod timer;
 mod ui;
 
+use crate::hardware::CgbRevision;
 use clap::Parser;
 use imgui::{ConfigFlags, Context as ImguiContext};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
@@ -354,7 +356,7 @@ fn main() {
     } else {
         cart.cgb
     };
-    let mut gb = gameboy::GameBoy::new_with_mode(cgb_mode);
+    let mut gb = gameboy::GameBoy::new_with_revision(cgb_mode, CgbRevision::default());
     gb.mmu.load_cart(cart);
 
     if let Some(path) = args.bootrom {

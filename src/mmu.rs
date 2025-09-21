@@ -1,4 +1,7 @@
-use crate::{apu::Apu, cartridge::Cartridge, input::Input, ppu::Ppu, serial::Serial, timer::Timer};
+use crate::{
+    apu::Apu, cartridge::Cartridge, hardware::CgbRevision, input::Input, ppu::Ppu, serial::Serial,
+    timer::Timer,
+};
 use std::sync::{Arc, Mutex};
 
 const WRAM_BANK_SIZE: usize = 0x1000;
@@ -50,10 +53,15 @@ pub struct Mmu {
     /// Remaining stall cycles after a General DMA
     gdma_cycles: u32,
     cgb_mode: bool,
+    cgb_revision: CgbRevision,
 }
 
 impl Mmu {
     pub fn new_with_mode(cgb: bool) -> Self {
+        Self::new_with_config(cgb, CgbRevision::default())
+    }
+
+    pub fn new_with_config(cgb: bool, revision: CgbRevision) -> Self {
         let mut timer = Timer::new();
         timer.div = 0xAB00;
 
@@ -71,7 +79,7 @@ impl Mmu {
             ie_reg: 0,
             serial: Serial::new(cgb),
             ppu,
-            apu: Arc::new(Mutex::new(Apu::new())),
+            apu: Arc::new(Mutex::new(Apu::new_with_config(cgb, revision))),
             timer,
             input: Input::new(),
             hdma: HdmaState {
@@ -89,6 +97,7 @@ impl Mmu {
             pending_delay: 0,
             gdma_cycles: 0,
             cgb_mode: cgb,
+            cgb_revision: revision,
         }
     }
 
@@ -424,8 +433,9 @@ impl Mmu {
         let curr_div = self.timer.div;
         {
             let mut apu = self.apu.lock().unwrap();
-            apu.tick(prev_div, curr_div, self.key1 & 0x80 != 0);
+            // Advance 2 MHz domain before 1 MHz staging to match APU internal ordering
             apu.step(hw_cycles);
+            apu.tick(prev_div, curr_div, self.key1 & 0x80 != 0);
         }
         let _ = self.ppu.step(hw_cycles, &mut self.if_reg);
     }

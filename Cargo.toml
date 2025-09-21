@@ -3,6 +3,10 @@ name = "vibeEmu"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+apu-trace = []
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 winit = { version = "0.30.12", features = ["rwh_05"] }
