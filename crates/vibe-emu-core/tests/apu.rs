@@ -61,7 +61,7 @@ fn writes_ignored_when_disabled() {
 #[test]
 #[ignore]
 fn read_mask_unused_bits() {
-    let apu = Apu::new();
+    let mut apu = Apu::new();
     assert_eq!(apu.read_reg(0xFF11), 0xBF);
 }
 
@@ -980,6 +980,93 @@ fn wave_channel_starts_at_index_one() {
 }
 
 #[test]
+fn wave_ram_locked_read_returns_latched_nibble_on_dmg() {
+    let mut apu = Apu::new();
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    let first_byte = 0x9C; // high nibble 9, low nibble C
+    apu.write_reg(0xFF30, first_byte);
+    for addr in 0xFF31..=0xFF3F {
+        apu.write_reg(addr, 0x00);
+    }
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1C, 0x20); // full volume
+    apu.write_reg(0xFF1D, 0xFF);
+    apu.write_reg(0xFF1E, 0x87); // trigger playback
+
+    let mut div = 0u16;
+    let mut latched = None;
+    for _ in 0..256 {
+        tick_machine(&mut apu, &mut div, 1);
+        let value = apu.read_reg(0xFF30);
+        if value != 0xFF {
+            latched = Some(value);
+            break;
+        }
+    }
+
+    let value = latched.expect("expected latched wave sample on DMG-compatible hardware");
+    assert_eq!(
+        value & 0x0F,
+        value >> 4,
+        "locked read should return repeated nibble"
+    );
+    let nibble = value & 0x0F;
+    assert!(
+        nibble == (first_byte >> 4) || nibble == (first_byte & 0x0F),
+        "latched nibble should match one of the waveform nibbles"
+    );
+}
+
+#[test]
+fn wave_ram_locked_read_returns_ff_on_cgb_e() {
+    let mut apu = Apu::new_with_config(true, CgbRevision::RevE);
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1C, 0x20);
+    apu.write_reg(0xFF1D, 0xFF);
+    apu.write_reg(0xFF1E, 0x87);
+
+    let mut div = 0u16;
+    for _ in 0..256 {
+        tick_machine(&mut apu, &mut div, 1);
+        assert_eq!(apu.read_reg(0xFF30), 0xFF);
+    }
+}
+
+#[test]
+fn wave_ram_locked_write_commits_after_byte_advance() {
+    let mut apu = Apu::new_with_config(true, CgbRevision::RevC);
+    apu.write_reg(0xFF26, 0x80); // enable APU
+    apu.write_reg(0xFF30, 0x21);
+    for addr in 0xFF31..=0xFF3F {
+        apu.write_reg(addr, 0x00);
+    }
+    apu.write_reg(0xFF1A, 0x80); // DAC on
+    apu.write_reg(0xFF1C, 0x20); // full volume
+    apu.write_reg(0xFF1D, 0xFF);
+    apu.write_reg(0xFF1E, 0x87); // trigger playback
+
+    let mut div = 0u16;
+    for _ in 0..16 {
+        tick_machine(&mut apu, &mut div, 1);
+    }
+
+    apu.write_reg(0xFF30, 0xF0); // locked write while channel active
+    let mask = apu.wave_pending_mask();
+    assert_ne!(mask, 0, "locked write should stage pending data");
+    let target = mask.trailing_zeros() as usize;
+    assert_eq!(apu.wave_shadow_byte(target), 0xF0);
+
+    for _ in 0..64 {
+        tick_machine(&mut apu, &mut div, 4);
+    }
+    assert_eq!(apu.wave_pending_mask(), 0);
+
+    apu.write_reg(0xFF1A, 0x00); // disable DAC to unlock wave RAM
+    assert_eq!(apu.read_reg(0xFF30 + target as u16), 0xF0);
+}
+
+#[test]
 #[ignore]
 fn nr30_dac_off_disables_channel() {
     let mut apu = Apu::new();
@@ -1572,8 +1659,19 @@ fn nr43_register_fields() {
     apu.write_reg(0xFF22, 0x5F); // shift=5, width7=1, divisor=7
     assert_eq!(apu.read_reg(0xFF22), 0x5F);
     assert_eq!(apu.ch4_clock_shift(), 5);
-    assert!(apu.ch4_width7());
+    assert!(apu.ch4_narrow());
     assert_eq!(apu.ch4_divisor(), 7);
+    assert_eq!(apu.ch4_reload_counter(), 3584);
+    assert_eq!(apu.ch4_counter(), 3584);
+    assert_eq!(apu.ch4_counter_countdown(), 3584);
+
+    apu.write_reg(0xFF22, 0x00); // shift=0, width7=0, divisor=0 -> period 8
+    assert_eq!(apu.ch4_clock_shift(), 0);
+    assert!(!apu.ch4_narrow());
+    assert_eq!(apu.ch4_divisor(), 0);
+    assert_eq!(apu.ch4_reload_counter(), 8);
+    assert_eq!(apu.ch4_counter(), 8);
+    assert_eq!(apu.ch4_counter_countdown(), 8);
 }
 
 #[test]

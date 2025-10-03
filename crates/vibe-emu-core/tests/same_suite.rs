@@ -466,7 +466,6 @@ fn same_suite__apu__channel_2__channel_2_volume_div_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_and_glitch_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_and_glitch.gb"),
@@ -476,7 +475,6 @@ fn same_suite__apu__channel_3__channel_3_and_glitch_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_delay.gb"),
@@ -506,7 +504,6 @@ fn same_suite__apu__channel_3__channel_3_extra_length_clocking_cgbB_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_first_sample_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_first_sample.gb"),
@@ -516,7 +513,6 @@ fn same_suite__apu__channel_3__channel_3_first_sample_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_freq_change_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_freq_change_delay.gb"),
@@ -526,13 +522,18 @@ fn same_suite__apu__channel_3__channel_3_freq_change_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_restart_delay_gb() {
-    let passed = run_same_suite(
+    let mut gb = run_same_suite_gb(
         common::rom_path("same-suite/apu/channel_3/channel_3_restart_delay.gb"),
         20_000_000,
     );
-    assert!(passed, "test failed");
+    let mut results = [0u8; 8];
+    for (i, byte) in results.iter_mut().enumerate() {
+        *byte = gb.mmu.read_byte(0xC000 + i as u16);
+    }
+    println!("restart_delay results: {:02X?}", results);
+    let expected = [0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0E, 0x0E, 0x0E];
+    assert_eq!(results, expected, "test failed");
 }
 
 #[test]
@@ -546,7 +547,6 @@ fn same_suite__apu__channel_3__channel_3_restart_during_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_restart_stop_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_restart_stop_delay.gb"),
@@ -556,7 +556,6 @@ fn same_suite__apu__channel_3__channel_3_restart_stop_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_shift_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_shift_delay.gb"),
@@ -566,7 +565,6 @@ fn same_suite__apu__channel_3__channel_3_shift_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_shift_skip_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_shift_skip_delay.gb"),
@@ -604,7 +602,6 @@ fn same_suite__apu__channel_3__channel_3_wave_ram_dac_on_rw_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_wave_ram_locked_write_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_wave_ram_locked_write.gb"),
@@ -624,13 +621,38 @@ fn same_suite__apu__channel_3__channel_3_wave_ram_sync_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_align_gb() {
-    let passed = run_same_suite(
+    const EXPECTED: [u8; 64] = [
+        // Row 0
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Row 1
+        0x00, 0x00, 0x00, 0x00, 0xF0, 0xF0, 0xF0, 0xF0, // Row 2
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Row 3
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0xF0, 0xF0, // Row 4
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Row 5
+        0x00, 0x00, 0x00, 0x00, 0xF0, 0xF0, 0xF0, 0xF0, // Row 6
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Row 7
+        0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0xF0, 0xF0,
+    ];
+    let mut gb = run_same_suite_gb(
         common::rom_path("same-suite/apu/channel_4/channel_4_align.gb"),
         20_000_000,
     );
-    assert!(passed, "test failed");
+    let mut results = [0u8; EXPECTED.len()];
+    for (i, byte) in results.iter_mut().enumerate() {
+        *byte = gb.mmu.read_byte(0xC000 + i as u16);
+    }
+    if results != EXPECTED {
+        println!("correct: {:02X?}", EXPECTED);
+        println!("actual : {:02X?}", results);
+        let matches = results
+            .iter()
+            .zip(EXPECTED.iter())
+            .filter(|(a, b)| a == b)
+            .count();
+        let percent = matches as f32 / EXPECTED.len() as f32 * 100.0;
+        println!("match {:.2}%", percent);
+        panic!("test failed");
+    }
 }
 
 #[test]

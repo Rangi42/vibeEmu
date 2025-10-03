@@ -99,7 +99,11 @@ impl Mmu {
             ie_reg: 0,
             serial: Serial::new(cgb, dmg_revision),
             ppu,
-            apu: Arc::new(Mutex::new(Apu::new_with_config(cgb, cgb_revision))),
+            apu: Arc::new(Mutex::new(Apu::new_with_revisions(
+                cgb,
+                dmg_revision,
+                cgb_revision,
+            ))),
             timer,
             input: Input::new(),
             hdma: HdmaState {

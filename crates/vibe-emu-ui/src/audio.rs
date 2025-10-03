@@ -31,8 +31,7 @@ pub fn start_stream(apu: Arc<Mutex<Apu>>) -> Option<cpal::Stream> {
                 move |data: &mut [i16], _| {
                     let mut apu = apu.lock().unwrap();
                     for frame in data.chunks_mut(channels) {
-                        let left = apu.pop_sample().unwrap_or(0);
-                        let right = apu.pop_sample().unwrap_or(0);
+                        let (left, right) = apu.pop_stereo().unwrap_or((0, 0));
                         frame[0] = left;
                         if channels > 1 {
                             frame[1] = right;
@@ -49,8 +48,7 @@ pub fn start_stream(apu: Arc<Mutex<Apu>>) -> Option<cpal::Stream> {
                 move |data: &mut [u16], _| {
                     let mut apu = apu.lock().unwrap();
                     for frame in data.chunks_mut(channels) {
-                        let left = apu.pop_sample().unwrap_or(0);
-                        let right = apu.pop_sample().unwrap_or(0);
+                        let (left, right) = apu.pop_stereo().unwrap_or((0, 0));
                         frame[0] = (left as i32 + 32768) as u16;
                         if channels > 1 {
                             frame[1] = (right as i32 + 32768) as u16;
@@ -67,8 +65,9 @@ pub fn start_stream(apu: Arc<Mutex<Apu>>) -> Option<cpal::Stream> {
                 move |data: &mut [f32], _| {
                     let mut apu = apu.lock().unwrap();
                     for frame in data.chunks_mut(channels) {
-                        let left = apu.pop_sample().unwrap_or(0) as f32 / 32768.0;
-                        let right = apu.pop_sample().unwrap_or(0) as f32 / 32768.0;
+                        let (left, right) = apu.pop_stereo().unwrap_or((0, 0));
+                        let left = left as f32 / 32768.0;
+                        let right = right as f32 / 32768.0;
                         frame[0] = left;
                         if channels > 1 {
                             frame[1] = right;

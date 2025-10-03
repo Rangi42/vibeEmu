@@ -105,3 +105,11 @@ If you are iterating on the frontend, run its tests with:
 ```bash
 cargo test -p vibe-emu-ui
 ```
+
+### Audio Snapshots
+
+Use the wave-channel helper to capture deterministic audio for regression checks:
+
+```bash
+cargo run -p vibe-emu-core --example dump_wav -- <rom> <out.wav> --seconds=3 --cgb
+```

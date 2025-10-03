@@ -91,7 +91,6 @@ fn dmg_sound_08_len_ctr_during_power() {
 }
 
 #[test]
-#[ignore]
 fn dmg_sound_09_wave_read_while_on() {
     run_single("09-wave read while on.gb");
 }
