@@ -656,7 +656,6 @@ fn same_suite__apu__channel_4__channel_4_align_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_delay.gb"),
@@ -666,7 +665,6 @@ fn same_suite__apu__channel_4__channel_4_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_equivalent_frequencies_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_equivalent_frequencies.gb"),
@@ -686,7 +684,6 @@ fn same_suite__apu__channel_4__channel_4_extra_length_clocking_cgb0B_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_freq_change_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_freq_change.gb"),
@@ -696,7 +693,6 @@ fn same_suite__apu__channel_4__channel_4_freq_change_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_frequency_alignment_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_frequency_alignment.gb"),
@@ -706,7 +702,6 @@ fn same_suite__apu__channel_4__channel_4_frequency_alignment_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr.gb"),
@@ -716,7 +711,6 @@ fn same_suite__apu__channel_4__channel_4_lfsr_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr15_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr15.gb"),
@@ -726,7 +720,6 @@ fn same_suite__apu__channel_4__channel_4_lfsr15_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr_15_7_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr_15_7.gb"),
@@ -736,7 +729,6 @@ fn same_suite__apu__channel_4__channel_4_lfsr_15_7_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr_7_15_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr_7_15.gb"),
@@ -746,7 +738,6 @@ fn same_suite__apu__channel_4__channel_4_lfsr_7_15_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr_restart_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr_restart.gb"),
@@ -756,7 +747,6 @@ fn same_suite__apu__channel_4__channel_4_lfsr_restart_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_lfsr_restart_fast_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_lfsr_restart_fast.gb"),
@@ -766,7 +756,6 @@ fn same_suite__apu__channel_4__channel_4_lfsr_restart_fast_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_volume_div_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_volume_div.gb"),
