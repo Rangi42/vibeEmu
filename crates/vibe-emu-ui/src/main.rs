@@ -6,6 +6,7 @@ mod ui;
 use clap::Parser;
 use imgui::{ConfigFlags, Context as ImguiContext};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
+use log::{error, info, warn};
 use pixels::{Pixels, SurfaceTexture};
 use rfd::FileDialog;
 use std::collections::HashMap;
@@ -78,7 +79,6 @@ struct Speed {
     fast: bool,
 }
 
-use ui::window::resize_pixels;
 use ui::window::{UiWindow, WindowKind};
 
 #[derive(Parser)]
@@ -151,8 +151,12 @@ fn spawn_debugger_window(
 
     platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
 
-    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, imgui);
-    windows.insert(ui_win.win.id(), ui_win);
+    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, (1, 1), imgui);
+    let id = ui_win.win.id();
+    windows.insert(id, ui_win);
+    if let Some(win) = windows.get_mut(&id) {
+        win.resize(win.win.inner_size());
+    }
 }
 
 fn spawn_vram_window(
@@ -174,12 +178,17 @@ fn spawn_vram_window(
 
     platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
 
-    let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, imgui);
-    windows.insert(ui_win.win.id(), ui_win);
+    let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, (1, 1), imgui);
+    let id = ui_win.win.id();
+    windows.insert(id, ui_win);
+    if let Some(win) = windows.get_mut(&id) {
+        win.resize(win.win.inner_size());
+    }
 }
 
 #[allow(static_mut_refs)]
 fn emulate_until(gb: &mut GameBoy, speed: Speed, event_loop: &ActiveEventLoop) {
+    let frame_start = Instant::now();
     let target = unsafe { NEXT_FRAME.get_or_insert_with(|| Instant::now() + FRAME_TIME) };
 
     if let Ok(mut apu) = gb.mmu.apu.lock() {
@@ -199,6 +208,27 @@ fn emulate_until(gb: &mut GameBoy, speed: Speed, event_loop: &ActiveEventLoop) {
     } else {
         event_loop.set_control_flow(ControlFlow::Poll);
         *target = Instant::now();
+    }
+
+    if !speed.fast {
+        let elapsed = frame_start.elapsed();
+        let warn_threshold = FRAME_TIME + FRAME_TIME / 2;
+        if elapsed > warn_threshold {
+            if let Ok(apu) = gb.mmu.apu.lock() {
+                warn!(
+                    "Frame emulation exceeded budget: {:?} vs {:?} (audio queue {} / {})",
+                    elapsed,
+                    FRAME_TIME,
+                    apu.queued_frames(),
+                    apu.max_queue_capacity()
+                );
+            } else {
+                warn!(
+                    "Frame emulation exceeded budget: {:?} vs {:?} (audio queue unavailable)",
+                    elapsed, FRAME_TIME
+                );
+            }
+        }
     }
 }
 
@@ -345,15 +375,30 @@ fn build_ui(
     }
 }
 
+fn configure_wgpu_backend() {
+    if std::env::var_os("WGPU_BACKEND").is_none() {
+        // Prefer DirectX on Windows to avoid buggy Vulkan/ANGLE present modes.
+        unsafe {
+            std::env::set_var("WGPU_BACKEND", "dx12");
+        }
+    }
+}
+
 fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
+
+    configure_wgpu_backend();
+
     let args = Args::parse();
 
-    println!("Starting emulator");
+    info!("Starting emulator");
 
     let rom_path = match args.rom {
         Some(p) => p,
         None => {
-            eprintln!("No ROM supplied");
+            error!("No ROM supplied");
             return;
         }
     };
@@ -361,7 +406,7 @@ fn main() {
     let cart = match Cartridge::from_file(&rom_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Failed to load ROM: {e}");
+            error!("Failed to load ROM: {e}");
             return;
         }
     };
@@ -379,11 +424,11 @@ fn main() {
     if let Some(path) = args.bootrom {
         match std::fs::read(&path) {
             Ok(data) => gb.mmu.load_boot_rom(data),
-            Err(e) => eprintln!("Failed to load boot ROM: {e}"),
+            Err(e) => warn!("Failed to load boot ROM: {e}"),
         }
     }
 
-    println!(
+    info!(
         "Emulator initialized in {} mode",
         if cgb_mode { "CGB" } else { "DMG" }
     );
@@ -391,7 +436,11 @@ fn main() {
     let _stream = if args.headless {
         None
     } else {
-        audio::start_stream(Arc::clone(&gb.mmu.apu))
+        let stream = audio::start_stream(Arc::clone(&gb.mmu.apu));
+        if stream.is_none() {
+            warn!("Audio output disabled; continuing without sound");
+        }
+        stream
     };
 
     let mut frame = vec![0u32; 160 * 144];
@@ -424,8 +473,12 @@ fn main() {
         platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
 
         let mut windows = HashMap::new();
-        let main_win = UiWindow::new(WindowKind::Main, window, pixels, &mut imgui);
-        windows.insert(main_win.win.id(), main_win);
+        let main_win = UiWindow::new(WindowKind::Main, window, pixels, (160, 144), &mut imgui);
+        let main_id = main_win.win.id();
+        windows.insert(main_id, main_win);
+        if let Some(win) = windows.get_mut(&main_id) {
+            win.resize(win.win.inner_size());
+        }
 
         let mut state = 0xFFu8;
         let mut cursor_pos = PhysicalPosition::new(0.0, 0.0);
@@ -465,12 +518,12 @@ fn main() {
                                 }
                             }
                             WindowEvent::Resized(size) => {
-                                resize_pixels(&mut win.pixels, *size);
+                                win.resize(*size);
                             }
                             WindowEvent::ScaleFactorChanged { .. } => {
                                 let size = win.win.inner_size();
                                 let _ = win.win.request_inner_size(size);
-                                resize_pixels(&mut win.pixels, size);
+                                win.resize(size);
                             }
                             WindowEvent::CursorMoved { position, .. }
                                 if matches!(win.kind, WindowKind::Main) =>

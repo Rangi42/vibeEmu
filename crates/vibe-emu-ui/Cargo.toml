@@ -15,3 +15,5 @@ imgui-wgpu = "0.24"
 cpal = "0.16"
 rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 png = "0.18"
+log = "0.4"
+env_logger = "0.11"
