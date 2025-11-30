@@ -1,6 +1,6 @@
 use crate::hardware::DmgRevision;
 
-pub trait LinkPort {
+pub trait LinkPort: Send {
     /// Transfer a byte over the link. Returns the byte received from the
     /// partner. Implementations may perform the transfer immediately.
     fn transfer(&mut self, byte: u8) -> u8;
@@ -34,7 +34,7 @@ pub struct Serial {
     sb: u8,
     sc: u8,
     pub(crate) out_buf: Vec<u8>,
-    port: Box<dyn LinkPort>,
+    port: Box<dyn LinkPort + Send>,
     transfer: Option<TransferState>,
     cgb_mode: bool,
     dmg_revision: DmgRevision,
@@ -87,7 +87,7 @@ impl Serial {
         }
     }
 
-    pub fn connect(&mut self, port: Box<dyn LinkPort>) {
+    pub fn connect(&mut self, port: Box<dyn LinkPort + Send>) {
         self.port = port;
     }
 

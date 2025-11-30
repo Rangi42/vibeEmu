@@ -12,7 +12,8 @@ use pixels::{Pixels, SurfaceTexture};
 use rfd::FileDialog;
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 use vibe_emu_core::{cartridge::Cartridge, gameboy::GameBoy, hardware::CgbRevision};
 use winit::dpi::PhysicalPosition;
@@ -65,8 +66,6 @@ const FF_MULT: f32 = 4.0;
 const AUDIO_WARMUP_TARGET_RATIO: f32 = 0.9;
 const AUDIO_WARMUP_CHECK_INTERVAL: u32 = 1024;
 const AUDIO_WARMUP_TIMEOUT_MS: u64 = 200;
-#[allow(static_mut_refs)]
-static mut NEXT_FRAME: Option<Instant> = None;
 
 #[derive(Default)]
 struct UiState {
@@ -87,6 +86,24 @@ enum UiAction {
 struct Speed {
     factor: f32,
     fast: bool,
+}
+
+#[derive(Clone, Copy)]
+enum EmuCommand {
+    SetPaused(bool),
+    SetSpeed(Speed),
+    UpdateInput(u8),
+    Shutdown,
+}
+
+enum UiToEmu {
+    Command(EmuCommand),
+    Action(UiAction),
+}
+
+enum EmuEvent {
+    Frame { frame: Vec<u32>, frame_index: u64 },
+    Serial { data: Vec<u8>, frame_index: u64 },
 }
 
 use ui::window::{UiWindow, WindowKind};
@@ -196,130 +213,240 @@ fn spawn_vram_window(
     }
 }
 
-#[allow(static_mut_refs)]
-fn emulate_until(gb: &mut GameBoy, speed: Speed, event_loop: &ActiveEventLoop) {
-    let frame_start = Instant::now();
-    let target = unsafe { NEXT_FRAME.get_or_insert_with(|| Instant::now() + FRAME_TIME) };
+fn run_emulator_thread(
+    gb: Arc<Mutex<GameBoy>>,
+    mut speed: Speed,
+    debug: bool,
+    rx: mpsc::Receiver<UiToEmu>,
+    tx: mpsc::Sender<EmuEvent>,
+) {
+    let mut paused = false;
+    let mut frame_count = 0u64;
+    let mut next_frame = Instant::now() + FRAME_TIME;
+    let mut audio_stream = None;
 
-    if let Ok(mut apu) = gb.mmu.apu.lock() {
-        apu.set_speed(speed.factor);
+    if let Ok(mut gb) = gb.lock() {
+        rebuild_audio_stream(&mut gb, speed, &mut audio_stream);
     }
 
-    while !gb.mmu.ppu.frame_ready() {
-        gb.cpu.step(&mut gb.mmu);
-    }
-
-    if !speed.fast {
-        event_loop.set_control_flow(ControlFlow::WaitUntil(*target));
-        while Instant::now() < *target {
-            std::hint::spin_loop();
-        }
-        *target += FRAME_TIME;
-    } else {
-        event_loop.set_control_flow(ControlFlow::Poll);
-        *target = Instant::now();
-    }
-
-    if !speed.fast {
-        let elapsed = frame_start.elapsed();
-        let warn_threshold = FRAME_TIME + FRAME_TIME / 2;
-        if elapsed > warn_threshold {
-            if let Ok(apu) = gb.mmu.apu.lock() {
-                warn!(
-                    "Frame emulation exceeded budget: {:?} vs {:?} (audio queue {} / {})",
-                    elapsed,
-                    FRAME_TIME,
-                    apu.queued_frames(),
-                    apu.max_queue_capacity()
-                );
-            } else {
-                warn!(
-                    "Frame emulation exceeded budget: {:?} vs {:?} (audio queue unavailable)",
-                    elapsed, FRAME_TIME
-                );
+    loop {
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                UiToEmu::Command(cmd) => match cmd {
+                    EmuCommand::SetPaused(p) => {
+                        paused = p;
+                        next_frame = Instant::now() + FRAME_TIME;
+                    }
+                    EmuCommand::SetSpeed(new_speed) => {
+                        speed = new_speed;
+                        next_frame = Instant::now() + FRAME_TIME;
+                        if let Ok(gb) = gb.lock() {
+                            if let Ok(mut apu) = gb.mmu.apu.lock() {
+                                apu.set_speed(speed.factor);
+                            }
+                        }
+                    }
+                    EmuCommand::UpdateInput(state) => {
+                        if let Ok(mut gb) = gb.lock() {
+                            let mmu = &mut gb.mmu;
+                            let if_reg = &mut mmu.if_reg;
+                            mmu.input.update_state(state, if_reg);
+                        }
+                    }
+                    EmuCommand::Shutdown => {
+                        if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.save_cart_ram();
+                        }
+                        return;
+                    }
+                },
+                UiToEmu::Action(action) => {
+                    if let Ok(mut gb) = gb.lock() {
+                        apply_ui_action(action, &mut gb, &mut audio_stream, speed);
+                        gb.mmu.ppu.clear_frame_flag();
+                        frame_count = 0;
+                        next_frame = Instant::now() + FRAME_TIME;
+                    }
+                }
             }
         }
+
+        if paused {
+            thread::sleep(Duration::from_millis(1));
+            continue;
+        }
+
+        let frame_start = Instant::now();
+        let mut frame_buf = None;
+        let mut serial = None;
+
+        if let Ok(mut gb) = gb.lock() {
+            if let Ok(mut apu) = gb.mmu.apu.lock() {
+                apu.set_speed(speed.factor);
+            }
+
+            {
+                let (cpu, mmu) = {
+                    let GameBoy { cpu, mmu, .. } = &mut *gb;
+                    (cpu, mmu)
+                };
+                while !mmu.ppu.frame_ready() {
+                    cpu.step(mmu);
+                }
+
+                frame_buf = Some(mmu.ppu.framebuffer().to_vec());
+                mmu.ppu.clear_frame_flag();
+            }
+
+            if !speed.fast {
+                let elapsed = frame_start.elapsed();
+                let warn_threshold = FRAME_TIME + FRAME_TIME / 2;
+                if elapsed > warn_threshold {
+                    if let Ok(apu) = gb.mmu.apu.lock() {
+                        warn!(
+                            "Frame emulation exceeded budget: {:?} vs {:?} (audio queue {} / {})",
+                            elapsed,
+                            FRAME_TIME,
+                            apu.queued_frames(),
+                            apu.max_queue_capacity()
+                        );
+                    } else {
+                        warn!(
+                            "Frame emulation exceeded budget: {:?} vs {:?} (audio queue unavailable)",
+                            elapsed, FRAME_TIME
+                        );
+                    }
+                }
+            }
+
+            if debug && frame_count.is_multiple_of(60) {
+                let out = gb.mmu.take_serial();
+                if !out.is_empty() {
+                    serial = Some(out);
+                }
+                println!("{}", gb.cpu.debug_state());
+            }
+        }
+
+        if let Some(frame) = frame_buf {
+            if tx
+                .send(EmuEvent::Frame {
+                    frame,
+                    frame_index: frame_count,
+                })
+                .is_err()
+            {
+                break;
+            }
+        }
+
+        if let Some(serial) = serial {
+            let _ = tx.send(EmuEvent::Serial {
+                data: serial,
+                frame_index: frame_count,
+            });
+        }
+
+        frame_count = frame_count.wrapping_add(1);
+
+        if !speed.fast {
+            let now = Instant::now();
+            if now < next_frame {
+                thread::sleep(next_frame - now);
+            }
+            next_frame += FRAME_TIME;
+        } else {
+            next_frame = Instant::now();
+        }
     }
 }
 
-fn draw_debugger(pixels: &mut Pixels, gb: &mut GameBoy, ui: &imgui::Ui) {
+fn draw_debugger(pixels: &mut Pixels, gb: &Arc<Mutex<GameBoy>>, ui: &imgui::Ui) {
     let _ = pixels.frame_mut();
-    if let Some(_table) = ui.begin_table("regs", 2) {
-        ui.table_next_row();
-        ui.table_next_column();
-        ui.text("A");
-        ui.table_next_column();
-        ui.text(format!("{:02X}", gb.cpu.a));
+    if let Ok(gb) = gb.try_lock() {
+        if let Some(_table) = ui.begin_table("regs", 2) {
+            ui.table_next_row();
+            ui.table_next_column();
+            ui.text("A");
+            ui.table_next_column();
+            ui.text(format!("{:02X}", gb.cpu.a));
 
-        ui.table_next_column();
-        ui.text("F");
-        ui.table_next_column();
-        ui.text(format!("{:02X}", gb.cpu.f));
+            ui.table_next_column();
+            ui.text("F");
+            ui.table_next_column();
+            ui.text(format!("{:02X}", gb.cpu.f));
 
-        ui.table_next_column();
-        ui.text("B");
-        ui.table_next_column();
-        ui.text(format!("{:02X}", gb.cpu.b));
+            ui.table_next_column();
+            ui.text("B");
+            ui.table_next_column();
+            ui.text(format!("{:02X}", gb.cpu.b));
 
-        ui.table_next_column();
-        ui.text("C");
-        ui.table_next_column();
-        ui.text(format!("{:02X}", gb.cpu.c));
+            ui.table_next_column();
+            ui.text("C");
+            ui.table_next_column();
+            ui.text(format!("{:02X}", gb.cpu.c));
 
-        ui.table_next_column();
-        ui.text("D");
-        ui.table_next_column();
-        ui.text(format!("{:02X}", gb.cpu.d));
+            ui.table_next_column();
+            ui.text("D");
+            ui.table_next_column();
+            ui.text(format!("{:02X}", gb.cpu.d));
 
-        ui.table_next_column();
-        ui.text("E");
-        ui.table_next_column();
-        ui.text(format!("{:02X}", gb.cpu.e));
+            ui.table_next_column();
+            ui.text("E");
+            ui.table_next_column();
+            ui.text(format!("{:02X}", gb.cpu.e));
 
-        ui.table_next_column();
-        ui.text("H");
-        ui.table_next_column();
-        ui.text(format!("{:02X}", gb.cpu.h));
+            ui.table_next_column();
+            ui.text("H");
+            ui.table_next_column();
+            ui.text(format!("{:02X}", gb.cpu.h));
 
-        ui.table_next_column();
-        ui.text("L");
-        ui.table_next_column();
-        ui.text(format!("{:02X}", gb.cpu.l));
+            ui.table_next_column();
+            ui.text("L");
+            ui.table_next_column();
+            ui.text(format!("{:02X}", gb.cpu.l));
 
-        ui.table_next_column();
-        ui.text("SP");
-        ui.table_next_column();
-        ui.text(format!("{:04X}", gb.cpu.sp));
+            ui.table_next_column();
+            ui.text("SP");
+            ui.table_next_column();
+            ui.text(format!("{:04X}", gb.cpu.sp));
 
-        ui.table_next_column();
-        ui.text("PC");
-        ui.table_next_column();
-        ui.text(format!("{:04X}", gb.cpu.pc));
+            ui.table_next_column();
+            ui.text("PC");
+            ui.table_next_column();
+            ui.text(format!("{:04X}", gb.cpu.pc));
 
-        ui.table_next_column();
-        ui.text("IME");
-        ui.table_next_column();
-        ui.text(format!("{}", gb.cpu.ime));
+            ui.table_next_column();
+            ui.text("IME");
+            ui.table_next_column();
+            ui.text(format!("{}", gb.cpu.ime));
 
-        ui.table_next_column();
-        ui.text("Cycles");
-        ui.table_next_column();
-        ui.text(format!("{}", gb.cpu.cycles));
+            ui.table_next_column();
+            ui.text("Cycles");
+            ui.table_next_column();
+            ui.text(format!("{}", gb.cpu.cycles));
+        }
+    } else {
+        ui.text("Emulator busy; debugger waiting for state");
     }
 }
 
-fn draw_vram(win: &mut ui::window::UiWindow, gb: &mut GameBoy, ui: &imgui::Ui) {
+fn draw_vram(win: &mut ui::window::UiWindow, gb: &Arc<Mutex<GameBoy>>, ui: &imgui::Ui) {
     let _ = win.pixels.frame_mut();
-    if let Some(viewer) = win.vram_viewer.as_mut() {
-        viewer.ui(
-            ui,
-            &mut gb.mmu.ppu,
-            &mut win.renderer,
-            win.pixels.device(),
-            win.pixels.queue(),
-        );
+    if let Ok(mut gb) = gb.try_lock() {
+        if let Some(viewer) = win.vram_viewer.as_mut() {
+            viewer.ui(
+                ui,
+                &mut gb.mmu.ppu,
+                &mut win.renderer,
+                win.pixels.device(),
+                win.pixels.queue(),
+            );
+        } else {
+            ui.text("VRAM viewer not initialized");
+        }
     } else {
-        ui.text("VRAM viewer not initialized");
+        ui.text("Emulator busy; VRAM view unavailable");
     }
 }
 
@@ -336,13 +463,7 @@ fn draw_game_screen(pixels: &mut Pixels, frame: &[u32]) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_ui(
-    state: &mut UiState,
-    ui: &imgui::Ui,
-    _gb: &mut GameBoy,
-    _event_loop: &ActiveEventLoop,
-    _platform: &mut WinitPlatform,
-) {
+fn build_ui(state: &mut UiState, ui: &imgui::Ui) {
     if state.show_context {
         let flags = imgui::WindowFlags::NO_TITLE_BAR
             | imgui::WindowFlags::NO_MOVE
@@ -548,15 +669,33 @@ fn main() {
         if cgb_mode { "CGB" } else { "DMG" }
     );
 
-    let mut frame = vec![0u32; 160 * 144];
-    let mut frame_count = 0u64;
-    let mut ui_state = UiState::default();
-    let mut speed = Speed {
-        factor: 1.0,
-        fast: false,
-    };
+    let headless = args.headless;
+    let debug_enabled = args.debug;
+    let frame_limit = args.frames;
+    let cycle_limit = args.cycles;
+    let second_limit = args.seconds.map(Duration::from_secs);
 
-    if !args.headless {
+    let mut frame = vec![0u32; 160 * 144];
+
+    if !headless {
+        let gb = Arc::new(Mutex::new(gb));
+        let mut speed = Speed {
+            factor: 1.0,
+            fast: false,
+        };
+        let mut ui_state = UiState::default();
+
+        let (to_emu_tx, to_emu_rx) = mpsc::channel();
+        let (from_emu_tx, from_emu_rx) = mpsc::channel();
+        let emu_gb = Arc::clone(&gb);
+        let emu_handle = thread::spawn(move || {
+            run_emulator_thread(emu_gb, speed, debug_enabled, to_emu_rx, from_emu_tx);
+        });
+        let mut emu_handle = Some(emu_handle);
+        let mut sent_shutdown = false;
+
+        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::UpdateInput(0xFF)));
+
         let event_loop = EventLoop::builder().build().unwrap();
         let attrs = Window::default_attributes()
             .with_title("vibeEmu")
@@ -585,14 +724,6 @@ fn main() {
             win.resize(win.win.inner_size());
         }
 
-        let mut audio_stream = None;
-        rebuild_audio_stream(&mut gb, speed, &mut audio_stream);
-
-        if gb.mmu.ppu.frame_ready() {
-            frame.copy_from_slice(gb.mmu.ppu.framebuffer());
-            gb.mmu.ppu.clear_frame_flag();
-        }
-
         let mut state = 0xFFu8;
         let mut cursor_pos = PhysicalPosition::new(0.0, 0.0);
 
@@ -616,17 +747,15 @@ fn main() {
                         match win_event {
                             WindowEvent::CloseRequested => {
                                 if matches!(win.kind, WindowKind::Main) {
-                                    // Flush any pending cartridge RAM before quitting.
-                                    gb.mmu.save_cart_ram();
-
-                                    // Tell winit to end the loop and let `event_loop.run` return.
+                                    if !sent_shutdown {
+                                        let _ =
+                                            to_emu_tx.send(UiToEmu::Command(EmuCommand::Shutdown));
+                                        sent_shutdown = true;
+                                    }
                                     target.exit();
-
-                                    // Nothing else to process.
                                     #[allow(clippy::needless_return)]
                                     return;
                                 } else {
-                                    // Non-main editor/aux window – just close it.
                                     windows.remove(window_id);
                                 }
                             }
@@ -652,6 +781,8 @@ fn main() {
                                     ui_state.paused = true;
                                     ui_state.show_context = true;
                                     ui_state.ctx_pos = [cursor_pos.x as f32, cursor_pos.y as f32];
+                                    let _ = to_emu_tx
+                                        .send(UiToEmu::Command(EmuCommand::SetPaused(true)));
                                 }
                             }
                             WindowEvent::MouseInput {
@@ -659,14 +790,13 @@ fn main() {
                                 button: MouseButton::Left,
                                 ..
                             } if matches!(win.kind, WindowKind::Main) => {
-                                // If the context menu is open and ImGui wants the mouse,
-                                // let the menu handle the click without closing it.
                                 if ui_state.show_context && imgui.io().want_capture_mouse {
-                                    // Menu click: handled by ImGui.
+                                    // Menu click handled by ImGui
                                 } else if cursor_in_screen(&win.win, cursor_pos) {
-                                    // Clicking the bare Game Boy screen closes the menu and resumes.
                                     ui_state.paused = false;
                                     ui_state.show_context = false;
+                                    let _ = to_emu_tx
+                                        .send(UiToEmu::Command(EmuCommand::SetPaused(false)));
                                 }
                             }
                             WindowEvent::KeyboardInput { event, .. }
@@ -679,9 +809,8 @@ fn main() {
                                     let mask = if code == KeyCode::Space {
                                         speed.fast = pressed;
                                         speed.factor = if speed.fast { FF_MULT } else { 1.0 };
-                                        if let Ok(mut apu) = gb.mmu.apu.lock() {
-                                            apu.set_speed(speed.factor);
-                                        }
+                                        let _ = to_emu_tx
+                                            .send(UiToEmu::Command(EmuCommand::SetSpeed(speed)));
                                         None
                                     } else {
                                         match code {
@@ -708,7 +837,8 @@ fn main() {
                                         } else {
                                             state |= mask;
                                         }
-                                        gb.mmu.input.update_state(state, &mut gb.mmu.if_reg);
+                                        let _ = to_emu_tx
+                                            .send(UiToEmu::Command(EmuCommand::UpdateInput(state)));
                                     }
                                 }
                             }
@@ -718,13 +848,11 @@ fn main() {
 
                                 match win.kind {
                                     WindowKind::Main => {
-                                        build_ui(&mut ui_state, ui, &mut gb, target, &mut platform);
+                                        build_ui(&mut ui_state, ui);
                                         draw_game_screen(&mut win.pixels, &frame);
                                     }
-                                    WindowKind::Debugger => {
-                                        draw_debugger(&mut win.pixels, &mut gb, ui)
-                                    }
-                                    WindowKind::VramViewer => draw_vram(win, &mut gb, ui),
+                                    WindowKind::Debugger => draw_debugger(&mut win.pixels, &gb, ui),
+                                    WindowKind::VramViewer => draw_vram(win, &gb, ui),
                                 }
 
                                 platform.prepare_render(ui, &win.win);
@@ -752,7 +880,6 @@ fn main() {
                                                 },
                                             );
 
-                                            // Clamp ImGui drawing to the actual render target bounds.
                                             let (clip_x, clip_y, clip_w, clip_h) =
                                                 context.scaling_renderer.clip_rect();
 
@@ -789,6 +916,8 @@ fn main() {
                                         &mut windows,
                                     );
                                     ui_state.paused = true;
+                                    let _ = to_emu_tx
+                                        .send(UiToEmu::Command(EmuCommand::SetPaused(true)));
                                     ui_state.spawn_debugger = false;
                                 }
                                 if ui_state.spawn_vram
@@ -803,6 +932,8 @@ fn main() {
                                         &mut windows,
                                     );
                                     ui_state.paused = true;
+                                    let _ = to_emu_tx
+                                        .send(UiToEmu::Command(EmuCommand::SetPaused(true)));
                                     ui_state.spawn_vram = false;
                                 }
                             }
@@ -811,57 +942,58 @@ fn main() {
                     }
                 }
                 Event::AboutToWait => {
+                    while let Ok(evt) = from_emu_rx.try_recv() {
+                        match evt {
+                            EmuEvent::Frame {
+                                frame: new_frame,
+                                frame_index: _,
+                            } => {
+                                if new_frame.len() == frame.len() {
+                                    frame.copy_from_slice(&new_frame);
+                                }
+                            }
+                            EmuEvent::Serial { data, frame_index } => {
+                                if !data.is_empty() {
+                                    print!("[SERIAL {frame_index}] ");
+                                    for b in &data {
+                                        if b.is_ascii_graphic() || *b == b' ' {
+                                            print!("{}", *b as char);
+                                        } else {
+                                            print!("\\x{b:02X}");
+                                        }
+                                    }
+                                    println!();
+                                }
+                            }
+                        }
+                    }
+
                     if let Some(action) = ui_state.pending_action.take() {
-                        apply_ui_action(action, &mut gb, &mut audio_stream, speed);
+                        let _ = to_emu_tx.send(UiToEmu::Action(action));
                         ui_state.paused = false;
                         ui_state.show_context = false;
-                    }
-
-                    if !ui_state.paused {
-                        emulate_until(&mut gb, speed, target);
-                    }
-
-                    if gb.mmu.ppu.frame_ready() {
-                        frame.copy_from_slice(gb.mmu.ppu.framebuffer());
-                        gb.mmu.ppu.clear_frame_flag();
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(false)));
                     }
 
                     for win in windows.values() {
                         win.win.request_redraw();
                     }
-
-                    if args.debug && frame_count.is_multiple_of(60) {
-                        let serial = gb.mmu.take_serial();
-                        if !serial.is_empty() {
-                            print!("[SERIAL] ");
-                            for b in &serial {
-                                if b.is_ascii_graphic() || *b == b' ' {
-                                    print!("{}", *b as char);
-                                } else {
-                                    print!("\\x{b:02X}");
-                                }
-                            }
-                            println!();
-                        }
-
-                        println!("{}", gb.cpu.debug_state());
-                    }
-
-                    frame_count += 1;
                 }
                 Event::LoopExiting => {
-                    // Extra safety: if we ever reach here without having saved yet.
-                    gb.mmu.save_cart_ram();
+                    if !sent_shutdown {
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::Shutdown));
+                        sent_shutdown = true;
+                    }
+                    if let Some(handle) = emu_handle.take() {
+                        let _ = handle.join();
+                    }
                 }
                 _ => {}
             }
         });
     } else {
-        let frame_limit = args.frames;
-        let cycle_limit = args.cycles;
-        let second_limit = args.seconds.map(Duration::from_secs);
-
-        let start = std::time::Instant::now();
+        let mut frame_count = 0u64;
+        let start = Instant::now();
         'headless: loop {
             while !gb.mmu.ppu.frame_ready() {
                 gb.cpu.step(&mut gb.mmu);
@@ -880,7 +1012,7 @@ fn main() {
             frame.copy_from_slice(gb.mmu.ppu.framebuffer());
             gb.mmu.ppu.clear_frame_flag();
 
-            if args.debug && frame_count.is_multiple_of(60) {
+            if debug_enabled && frame_count.is_multiple_of(60) {
                 let serial = gb.mmu.take_serial();
                 if !serial.is_empty() {
                     print!("[SERIAL] ");
