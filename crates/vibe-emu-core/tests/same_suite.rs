@@ -1,14 +1,46 @@
 #![allow(non_snake_case)]
 mod common;
+use std::path::Path;
 use std::time::{Duration, Instant};
-use vibe_emu_core::{cartridge::Cartridge, gameboy::GameBoy};
+use vibe_emu_core::{cartridge::Cartridge, gameboy::GameBoy, hardware::CgbRevision};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const FIB_SEQ: [u8; 6] = [3, 5, 8, 13, 21, 34];
+fn parse_cgb_revision_from_path<P: AsRef<Path>>(rom_path: P) -> Option<CgbRevision> {
+    let s = rom_path.as_ref().to_string_lossy().to_ascii_uppercase();
+    if let Some(i) = s.find("CGB") {
+        let mut revs = String::new();
+        for ch in s[i + 3..].chars() {
+            if ch.is_ascii_alphanumeric() {
+                revs.push(ch);
+            } else {
+                break;
+            }
+        }
+        if !revs.is_empty() {
+            let first = revs.chars().next().unwrap();
+            return match first {
+                '0' => Some(CgbRevision::Rev0),
+                'A' => Some(CgbRevision::RevA),
+                'B' => Some(CgbRevision::RevB),
+                'C' => Some(CgbRevision::RevC),
+                'D' => Some(CgbRevision::RevD),
+                'E' => Some(CgbRevision::RevE),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
 fn run_same_suite<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bool {
     let rom = std::fs::read(&rom_path).expect("rom not found");
     let cart = Cartridge::load(rom);
-    let mut gb = GameBoy::new_with_mode(cart.cgb);
+    let mut gb = if let Some(rev) = parse_cgb_revision_from_path(&rom_path) {
+        GameBoy::new_with_revision(cart.cgb, rev)
+    } else {
+        GameBoy::new_with_mode(cart.cgb)
+    };
     gb.mmu.load_cart(cart);
     let start = Instant::now();
     while gb.cpu.cycles < max_cycles {
@@ -27,7 +59,11 @@ fn run_same_suite<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bo
 fn run_same_suite_gb<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> GameBoy {
     let rom = std::fs::read(&rom_path).expect("rom not found");
     let cart = Cartridge::load(rom);
-    let mut gb = GameBoy::new_with_mode(cart.cgb);
+    let mut gb = if let Some(rev) = parse_cgb_revision_from_path(&rom_path) {
+        GameBoy::new_with_revision(cart.cgb, rev)
+    } else {
+        GameBoy::new_with_mode(cart.cgb)
+    };
     gb.mmu.load_cart(cart);
     let start = Instant::now();
     while gb.cpu.cycles < max_cycles {
