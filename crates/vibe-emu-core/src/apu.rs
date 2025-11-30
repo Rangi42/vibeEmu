@@ -1615,7 +1615,14 @@ impl Apu {
                     }
                 }
 
-                let mut delay = 6 - lf_div;
+                // CGB startup delay is one 2 MHz tick shorter in normal speed but
+                // matches DMG timing when running in double-speed mode.
+                let base_delay = if self.cgb_mode {
+                    if self.double_speed { 6 } else { 5 }
+                } else {
+                    6
+                };
+                let mut delay = base_delay - lf_div;
                 if delay < 0 {
                     delay = 0;
                 }

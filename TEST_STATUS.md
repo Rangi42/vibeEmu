@@ -33,10 +33,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1572 | 2042 | 0 | 0 | 3614 | 43.5% |
+| ROM Test Suites | 1571 | 2043 | 0 | 0 | 3614 | 43.5% |
 | Integration Tests | 150 | 27 | 0 | 0 | 177 | 84.7% |
 | Unit Tests | 5 | 0 | 0 | 0 | 5 | 100.0% |
-| **Overall** | 1727 | 2069 | 0 | 0 | 3796 | 45.5% |
+| **Overall** | 1726 | 2070 | 0 | 0 | 3796 | 45.5% |
 
 ## Detailed Results
 
@@ -94,7 +94,7 @@ Combined exit code: 101
 | `dmg_sound_11_regs_after_power` | ❌ Fail |
 | `dmg_sound_12_wave_write_while_on` | ❌ Fail |
 
-#### gambatte (1420/3429 passing, 41.4%)
+#### gambatte (1419/3429 passing, 41.4%)
 
 | Test | Result |
 | --- | --- |
@@ -940,7 +940,6 @@ Combined exit code: 101
 | `sound/ch1_duty0_pattern_pos4_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pattern_pos5_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pattern_pos8_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
-| `sound/ch1_duty0_pos6_to_pos7_timing_2_dmg08_cgb04c_outaudio1.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_2_cgb04c_outaudio1.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_4_cgb04c_outaudio1.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_6_cgb04c_outaudio1.gbc` | ✅ Pass |
@@ -2843,6 +2842,7 @@ Combined exit code: 101
 | `sound/ch1_duty0_pattern_pos6_dmg08_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch1_duty0_pattern_pos7_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_duty0_pos6_to_pos7_timing_1_dmg08_cgb04c_outaudio0.gbc` | ❌ Fail |
+| `sound/ch1_duty0_pos6_to_pos7_timing_2_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_3_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_5_cgb04c_outaudio0.gbc` | ❌ Fail |
@@ -3639,7 +3639,6 @@ Combined exit code: 101
 | `same_suite__apu__channel_1__channel_1_duty_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_extra_length_clocking_cgb0B_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_freq_change_gb` | ✅ Pass |
-| `same_suite__apu__channel_1__channel_1_freq_change_timing_A_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_nrx2_glitch_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_nrx2_speed_change_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_restart_gb` | ✅ Pass |
@@ -3660,6 +3659,7 @@ Combined exit code: 101
 | `same_suite__apu__channel_2__channel_2_restart_nrx2_glitch_gb` | ✅ Pass |
 | `same_suite__apu__channel_2__channel_2_stop_restart_gb` | ✅ Pass |
 | `same_suite__apu__channel_2__channel_2_volume_div_gb` | ✅ Pass |
+| `same_suite__apu__channel_2__channel_2_volume_gb` | ✅ Pass |
 | `same_suite__apu__channel_3__channel_3_and_glitch_gb` | ✅ Pass |
 | `same_suite__apu__channel_3__channel_3_delay_gb` | ✅ Pass |
 | `same_suite__apu__channel_3__channel_3_extra_length_clocking_cgb0_gb` | ✅ Pass |
@@ -3693,6 +3693,7 @@ Combined exit code: 101
 | `same_suite__dma__hdma_mode0_gb` | ✅ Pass |
 | `same_suite__interrupt__ei_delay_halt_gb` | ✅ Pass |
 | `same_suite__ppu__blocking_bgpi_increase_gb` | ✅ Pass |
+| `same_suite__apu__channel_1__channel_1_freq_change_timing_A_gb` | ❌ Fail |
 | `same_suite__apu__channel_1__channel_1_freq_change_timing_cgb0BC_gb` | ❌ Fail |
 | `same_suite__apu__channel_1__channel_1_freq_change_timing_cgbDE_gb` | ❌ Fail |
 | `same_suite__apu__channel_1__channel_1_stop_div_gb` | ❌ Fail |
@@ -3700,7 +3701,6 @@ Combined exit code: 101
 | `same_suite__apu__channel_1__channel_1_sweep_restart_2_gb` | ❌ Fail |
 | `same_suite__apu__channel_1__channel_1_sweep_restart_gb` | ❌ Fail |
 | `same_suite__apu__channel_2__channel_2_stop_div_gb` | ❌ Fail |
-| `same_suite__apu__channel_2__channel_2_volume_gb` | ❌ Fail |
 | `same_suite__apu__channel_3__channel_3_extra_length_clocking_cgbB_gb` | ❌ Fail |
 | `same_suite__apu__channel_3__channel_3_restart_during_delay_gb` | ❌ Fail |
 | `same_suite__apu__channel_3__channel_3_stop_div_gb` | ❌ Fail |
