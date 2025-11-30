@@ -33,21 +33,22 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1571 | 2043 | 0 | 0 | 3614 | 43.5% |
+| ROM Test Suites | 1590 | 2025 | 0 | 0 | 3615 | 44.0% |
 | Integration Tests | 150 | 27 | 0 | 0 | 177 | 84.7% |
-| Unit Tests | 5 | 0 | 0 | 0 | 5 | 100.0% |
-| **Overall** | 1726 | 2070 | 0 | 0 | 3796 | 45.5% |
+| Unit Tests | 9 | 0 | 0 | 0 | 9 | 100.0% |
+| **Overall** | 1749 | 2052 | 0 | 0 | 3801 | 46.0% |
 
 ## Detailed Results
 
 ### ROM Test Suites
 
-#### cartridge (2/2 passing, 100.0%)
+#### cartridge (3/3 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
 | `battery_ram_saved_to_disk` | ✅ Pass |
 | `mbc30_header_detection` | ✅ Pass |
+| `mbc3_rtc_state_roundtrips_to_disk` | ✅ Pass |
 
 #### cgb_acid2_rom (1/1 passing, 100.0%)
 
@@ -94,7 +95,7 @@ Combined exit code: 101
 | `dmg_sound_11_regs_after_power` | ❌ Fail |
 | `dmg_sound_12_wave_write_while_on` | ❌ Fail |
 
-#### gambatte (1419/3429 passing, 41.4%)
+#### gambatte (1439/3429 passing, 42.0%)
 
 | Test | Result |
 | --- | --- |
@@ -171,6 +172,19 @@ Combined exit code: 101
 | `dma/hdma_late_if_and_ie_halt_2_cgb04c_out02.gbc` | ✅ Pass |
 | `dma/hdma_late_length_2_cgb04c_out1.gbc` | ✅ Pass |
 | `dma/hdma_late_m0halt_1_cgb04c_out00.gbc` | ✅ Pass |
+| `dma/hdma_late_m0halt_ds_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m0halt_ds_lcdoffset1_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m0halt_lcdoffset3_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m0unhalt_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m0unhalt_ds_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m0unhalt_scx1_1_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m0unhalt_scx1_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m0unhalt_scx1_3_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m0unhalt_scx1_4_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m0unhalt_scx2_1_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m0unhalt_scx2_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m0unhalt_scx2_3_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m0unhalt_scx2_4_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_late_m3halt_m2unhalt_inc_scx1_1_cgb04c_out01.gbc` | ✅ Pass |
 | `dma/hdma_late_m3halt_m2unhalt_inc_scx1_3_cgb04c_out01.gbc` | ✅ Pass |
 | `dma/hdma_late_m3halt_m2unhalt_inc_scx2_1_cgb04c_out01.gbc` | ✅ Pass |
@@ -181,8 +195,12 @@ Combined exit code: 101
 | `dma/hdma_late_m3halt_m2unhalt_ly_scx2_2_cgb04c_out03.gbc` | ✅ Pass |
 | `dma/hdma_late_m3halt_m2unhalt_ly_scx2_4_cgb04c_out03.gbc` | ✅ Pass |
 | `dma/hdma_late_m3halt_m2unhalt_ly_scx2_6_cgb04c_out03.gbc` | ✅ Pass |
-| `dma/hdma_late_m3speedchange_hdma5_scx1_2_cgb04c_out80.gbc` | ✅ Pass |
-| `dma/hdma_late_m3speedchange_hdma5_scx2_2_cgb04c_out80.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m2unhalt_scx1_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3halt_m2unhalt_scx2_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3speedchange_hdma5_scx1_3_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3speedchange_hdma5_scx1_ds_2_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3speedchange_hdma5_scx2_3_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_late_m3speedchange_hdma5_scx2_ds_2_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_inc_scx1_1_cgb04c_out01.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_inc_scx1_3_cgb04c_out01.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_read_hdmadst00_scx1_2_cgb04c_out9F.gbc` | ✅ Pass |
@@ -192,6 +210,9 @@ Combined exit code: 101
 | `dma/hdma_late_speedchange_inc_scx1_ds_1_cgb04c_out01.gbc` | ✅ Pass |
 | `dma/hdma_late_speedchange_inc_scx1_ds_3_cgb04c_out01.gbc` | ✅ Pass |
 | `dma/hdma_late_wrambank_2_cgb04c_out1.gbc` | ✅ Pass |
+| `dma/hdma_m0halt_late_m3unhalt_scx1_1_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_m1halt_m0unhalt_hdma5_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_m2halt_m0unhalt_hdma5_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_m3halt_m0unhalt_ly_2_cgb04c_out03.gbc` | ✅ Pass |
 | `dma/hdma_start_2_cgb04c_out1.gbc` | ✅ Pass |
 | `dma/hdma_start_ds_2_cgb04c_out1.gbc` | ✅ Pass |
@@ -202,8 +223,8 @@ Combined exit code: 101
 | `dma/hdma_start_scx5_ds_2_cgb04c_out1.gbc` | ✅ Pass |
 | `dma/hdma_transition_ei_halt_late_unhalt_scx1_1_cgb04c_out00.gbc` | ✅ Pass |
 | `dma/hdma_transition_halt_hdmadst_unhalt_cgb04c_out01.gbc` | ✅ Pass |
+| `dma/hdma_transition_halt_late_unhalt_scx1_2_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_transition_speedchange_7fffstop_inc_cgb04c_out02.gbc` | ✅ Pass |
-| `dma/hdma_transition_speedchange_hdmalen00_hdma5_scx1_cgb04c_out80.gbc` | ✅ Pass |
 | `dma/late_gdma_pc_7ffe_2_cgb04c_out00.gbc` | ✅ Pass |
 | `enable_display/disable_display_regs_1_dmg08_cgb04c_out66e46666009266666666.gbc` | ✅ Pass |
 | `enable_display/disable_display_regs_2_dmg08_cgb04c_out66e06666006666666666.gbc` | ✅ Pass |
@@ -1654,23 +1675,10 @@ Combined exit code: 101
 | `dma/hdma_late_length_1_cgb04c_out0.gbc` | ❌ Fail |
 | `dma/hdma_late_m0halt_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m0halt_ds_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m0halt_ds_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m0halt_ds_lcdoffset1_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m0halt_ds_lcdoffset1_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m0halt_lcdoffset3_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m0halt_lcdoffset3_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m0unhalt_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m0unhalt_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m0unhalt_ds_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m0unhalt_ds_2_cgb04c_outFF.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m0unhalt_scx1_1_cgb04c_outFF.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m0unhalt_scx1_2_cgb04c_outFF.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m0unhalt_scx1_3_cgb04c_outFF.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m0unhalt_scx1_4_cgb04c_outFF.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m0unhalt_scx2_1_cgb04c_outFF.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m0unhalt_scx2_2_cgb04c_outFF.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m0unhalt_scx2_3_cgb04c_outFF.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m0unhalt_scx2_4_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m3halt_m2unhalt_inc_scx1_2_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_late_m3halt_m2unhalt_inc_scx2_2_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_late_m3halt_m2unhalt_ly_scx1_1_cgb04c_out02.gbc` | ❌ Fail |
@@ -1680,17 +1688,13 @@ Combined exit code: 101
 | `dma/hdma_late_m3halt_m2unhalt_ly_scx2_3_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_late_m3halt_m2unhalt_ly_scx2_5_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_late_m3halt_m2unhalt_scx1_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m2unhalt_scx1_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m3halt_m2unhalt_scx2_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m3halt_m2unhalt_scx2_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_hdma5_scx1_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m3speedchange_hdma5_scx1_3_cgb04c_outFF.gbc` | ❌ Fail |
+| `dma/hdma_late_m3speedchange_hdma5_scx1_2_cgb04c_out80.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_hdma5_scx1_ds_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m3speedchange_hdma5_scx1_ds_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_hdma5_scx2_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m3speedchange_hdma5_scx2_3_cgb04c_outFF.gbc` | ❌ Fail |
+| `dma/hdma_late_m3speedchange_hdma5_scx2_2_cgb04c_out80.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_hdma5_scx2_ds_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_late_m3speedchange_hdma5_scx2_ds_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_inc_scx1_2_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_ly_scx1_1_cgb04c_out92.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_ly_scx1_2_cgb04c_out93.gbc` | ❌ Fail |
@@ -1710,14 +1714,11 @@ Combined exit code: 101
 | `dma/hdma_late_m3speedchange_tima_scx1_ds_6_cgb04c_outF9.gbc` | ❌ Fail |
 | `dma/hdma_late_speedchange_inc_scx1_ds_2_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_late_wrambank_1_cgb04c_out0.gbc` | ❌ Fail |
-| `dma/hdma_m0halt_late_m3unhalt_scx1_1_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_m0halt_late_m3unhalt_scx1_2_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_m0speedchange_late_m3wakeup_scx1_1_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_m0speedchange_late_m3wakeup_scx1_2_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_m0speedchange_late_m3wakeup_scx2_1_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_m0speedchange_late_m3wakeup_scx2_2_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_m1halt_m0unhalt_hdma5_cgb04c_outFF.gbc` | ❌ Fail |
-| `dma/hdma_m2halt_m0unhalt_hdma5_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_m3halt_m0unhalt_ly_1_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_m3halt_m1unhalt_hdma5_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_m3speedchange_late_m0wakeup_1_cgb04c_outFF.gbc` | ❌ Fail |
@@ -1737,10 +1738,10 @@ Combined exit code: 101
 | `dma/hdma_transition_halt_late_unhalt_ldaaimm_hdma_scx1_1_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_transition_halt_late_unhalt_ldaaimm_hdma_scx1_2_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_transition_halt_late_unhalt_scx1_1_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_transition_halt_late_unhalt_scx1_2_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_transition_halt_m0unhalt_ldaaimm_scx1_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_transition_oamdma_1_cgb04c_out509E529C.gbc` | ❌ Fail |
 | `dma/hdma_transition_oamdma_2_cgb04c_out67.gbc` | ❌ Fail |
+| `dma/hdma_transition_speedchange_hdmalen00_hdma5_scx1_cgb04c_out80.gbc` | ❌ Fail |
 | `dma/hdma_transition_speedchange_hdmalen01_hdma5_scx1_cgb04c_out81.gbc` | ❌ Fail |
 | `dma/hdma_transition_speedchange_hdmalen01_hdmadst10_scx1_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_transition_speedchange_hdmalen7f_hdma5_scx1_cgb04c_outFF.gbc` | ❌ Fail |
@@ -3628,7 +3629,7 @@ Combined exit code: 101
 | `ppu__intr_2_mode0_timing_sprites_gb` | ❌ Fail |
 | `ppu__lcdon_write_timing_GS_gb` | ❌ Fail |
 
-#### same_suite (61/78 passing, 78.2%)
+#### same_suite (59/78 passing, 75.6%)
 
 | Test | Result |
 | --- | --- |
@@ -3689,8 +3690,6 @@ Combined exit code: 101
 | `same_suite__apu__div_write_trigger_volume_gb` | ✅ Pass |
 | `same_suite__dma__gbc_dma_cont_gb` | ✅ Pass |
 | `same_suite__dma__gdma_addr_mask_gb` | ✅ Pass |
-| `same_suite__dma__hdma_lcd_off_gb` | ✅ Pass |
-| `same_suite__dma__hdma_mode0_gb` | ✅ Pass |
 | `same_suite__interrupt__ei_delay_halt_gb` | ✅ Pass |
 | `same_suite__ppu__blocking_bgpi_increase_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_freq_change_timing_A_gb` | ❌ Fail |
@@ -3708,6 +3707,8 @@ Combined exit code: 101
 | `same_suite__apu__div_trigger_volume_10_gb` | ❌ Fail |
 | `same_suite__apu__div_write_trigger_10_gb` | ❌ Fail |
 | `same_suite__apu__div_write_trigger_volume_10_gb` | ❌ Fail |
+| `same_suite__dma__hdma_lcd_off_gb` | ❌ Fail |
+| `same_suite__dma__hdma_mode0_gb` | ❌ Fail |
 | `same_suite__sgb__command_mlt_req_1_incrementing_gb` | ❌ Fail |
 | `same_suite__sgb__command_mlt_req_gb` | ❌ Fail |
 
@@ -3938,3 +3939,12 @@ Combined exit code: 101
 | `apu::tests::dc_filter_converges_to_zero` | ✅ Pass |
 | `apu::tests::dc_filter_reduces_constant_input` | ✅ Pass |
 | `apu::tests::dc_filter_reset_when_all_dacs_off` | ✅ Pass |
+
+#### cartridge (4/4 passing, 100.0%)
+
+| Test | Result |
+| --- | --- |
+| `cartridge::tests::rtc_day_overflow_sets_carry` | ✅ Pass |
+| `cartridge::tests::rtc_halt_preserves_subseconds` | ✅ Pass |
+| `cartridge::tests::rtc_seconds_write_resets_phase` | ✅ Pass |
+| `cartridge::tests::rtc_ticks_through_invalid_values` | ✅ Pass |

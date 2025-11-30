@@ -245,15 +245,12 @@ impl Mmu {
             0xFF55 => {
                 if !self.cgb_mode {
                     0xFF
+                } else if self.hdma.active {
+                    // Busy flag (bit 7) is cleared while the DMA is running.
+                    self.hdma.blocks.saturating_sub(1) & 0x7F
                 } else {
-                    let remaining = self.hdma.blocks.saturating_sub(1) & 0x7F;
-                    if self.hdma.active {
-                        remaining
-                    } else if self.hdma.mode == DmaMode::Hdma {
-                        remaining | 0x80
-                    } else {
-                        0xFF
-                    }
+                    // Hardware returns 0xFF once HDMA/GDMA has completed or is idle.
+                    0xFF
                 }
             }
             0xFF4D => {
