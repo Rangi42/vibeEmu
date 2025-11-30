@@ -138,8 +138,8 @@ impl Mmu {
         }
     }
 
-    pub fn save_cart_ram(&self) {
-        if let Some(cart) = &self.cart
+    pub fn save_cart_ram(&mut self) {
+        if let Some(cart) = &mut self.cart
             && let Err(e) = cart.save_ram()
         {
             eprintln!("Failed to save RAM: {e}");
@@ -168,7 +168,7 @@ impl Mmu {
                 .as_ref()
                 .and_then(|b| b.get(addr as usize).copied())
                 .unwrap_or(0xFF),
-            0x0000..=0x7FFF => self.cart.as_ref().map(|c| c.read(addr)).unwrap_or(0xFF),
+            0x0000..=0x7FFF => self.cart.as_mut().map(|c| c.read(addr)).unwrap_or(0xFF),
             0x8000..=0x9FFF => {
                 let accessible = self.ppu.vram_accessible();
                 if accessible {
@@ -194,7 +194,7 @@ impl Mmu {
                     0xFF
                 }
             }
-            0xA000..=0xBFFF => self.cart.as_ref().map(|c| c.read(addr)).unwrap_or(0xFF),
+            0xA000..=0xBFFF => self.cart.as_mut().map(|c| c.read(addr)).unwrap_or(0xFF),
             0xC000..=0xCFFF => self.wram[0][(addr - 0xC000) as usize],
             0xD000..=0xDFFF => self.wram[self.wram_bank][(addr - 0xD000) as usize],
             0xE000..=0xEFFF => self.wram[0][(addr - 0xE000) as usize],
