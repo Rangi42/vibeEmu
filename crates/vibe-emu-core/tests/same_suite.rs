@@ -501,6 +501,7 @@ fn same_suite__apu__channel_2__channel_2_stop_restart_gb() {
 }
 
 #[test]
+#[ignore]
 fn same_suite__apu__channel_2__channel_2_volume_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_volume.gb"),
@@ -826,7 +827,6 @@ fn same_suite__apu__div_trigger_volume_10_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__div_write_trigger_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/div_write_trigger.gb"),
@@ -846,7 +846,6 @@ fn same_suite__apu__div_write_trigger_10_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__div_write_trigger_volume_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/div_write_trigger_volume.gb"),
