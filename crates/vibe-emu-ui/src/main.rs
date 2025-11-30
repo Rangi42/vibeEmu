@@ -4,6 +4,7 @@ mod audio;
 mod ui;
 
 use clap::Parser;
+use cpal::traits::StreamTrait;
 use imgui::{ConfigFlags, Context as ImguiContext};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use log::{error, info, warn};
@@ -61,6 +62,9 @@ const SCALE: u32 = 2;
 const GB_FPS: f64 = 59.7275;
 const FRAME_TIME: Duration = Duration::from_nanos((1e9_f64 / GB_FPS) as u64);
 const FF_MULT: f32 = 4.0;
+const AUDIO_WARMUP_TARGET_RATIO: f32 = 0.9;
+const AUDIO_WARMUP_CHECK_INTERVAL: u32 = 1024;
+const AUDIO_WARMUP_TIMEOUT_MS: u64 = 200;
 #[allow(static_mut_refs)]
 static mut NEXT_FRAME: Option<Instant> = None;
 
@@ -384,6 +388,48 @@ fn configure_wgpu_backend() {
     }
 }
 
+fn prime_audio_queue(gb: &mut GameBoy) -> (usize, usize) {
+    let capacity = {
+        let apu = gb.mmu.apu.lock().unwrap();
+        apu.max_queue_capacity().max(1)
+    };
+    let target_frames = ((capacity as f32) * AUDIO_WARMUP_TARGET_RATIO).ceil() as usize;
+
+    let mut queued = {
+        let apu = gb.mmu.apu.lock().unwrap();
+        apu.queued_frames()
+    };
+    if queued >= target_frames {
+        return (queued, target_frames);
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(AUDIO_WARMUP_TIMEOUT_MS);
+    let mut steps = 0u32;
+    loop {
+        gb.cpu.step(&mut gb.mmu);
+        steps += 1;
+
+        if steps >= AUDIO_WARMUP_CHECK_INTERVAL {
+            steps = 0;
+            let now = Instant::now();
+            let apu = gb.mmu.apu.lock().unwrap();
+            queued = apu.queued_frames();
+            if queued >= target_frames || now >= deadline {
+                break;
+            }
+        }
+    }
+
+    if queued < target_frames {
+        queued = {
+            let apu = gb.mmu.apu.lock().unwrap();
+            apu.queued_frames()
+        };
+    }
+
+    (queued, target_frames)
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
@@ -433,16 +479,6 @@ fn main() {
         if cgb_mode { "CGB" } else { "DMG" }
     );
 
-    let _stream = if args.headless {
-        None
-    } else {
-        let stream = audio::start_stream(Arc::clone(&gb.mmu.apu));
-        if stream.is_none() {
-            warn!("Audio output disabled; continuing without sound");
-        }
-        stream
-    };
-
     let mut frame = vec![0u32; 160 * 144];
     let mut frame_count = 0u64;
     let mut ui_state = UiState::default();
@@ -480,11 +516,46 @@ fn main() {
             win.resize(win.win.inner_size());
         }
 
+        let mut audio_stream = audio::start_stream(Arc::clone(&gb.mmu.apu), false);
+        if audio_stream.is_none() {
+            warn!("Audio output disabled; continuing without sound");
+        }
+
+        let primed = audio_stream.as_ref().map(|_| prime_audio_queue(&mut gb));
+        if let Some((queued, target)) = &primed {
+            if *queued >= *target {
+                info!(
+                    "Primed audio queue with {queued} / {target} frames before starting playback"
+                );
+            } else {
+                warn!(
+                    "Audio warmup timed out after priming {queued} / {target} frames; startup may glitch"
+                );
+            }
+        }
+
+        if gb.mmu.ppu.frame_ready() {
+            frame.copy_from_slice(gb.mmu.ppu.framebuffer());
+            gb.mmu.ppu.clear_frame_flag();
+        }
+
+        if let Some(stream) = audio_stream.as_ref() {
+            if let Err(e) = stream.play() {
+                warn!("Failed to start audio stream: {e}");
+                audio_stream = None;
+            } else if let Some((queued, target)) = &primed {
+                info!("Audio playback started with {queued} primed frames (capacity {target})");
+            } else {
+                info!("Audio playback started");
+            }
+        }
+
         let mut state = 0xFFu8;
         let mut cursor_pos = PhysicalPosition::new(0.0, 0.0);
 
         #[allow(deprecated)]
         let _ = event_loop.run(move |event, target| {
+            let _keep_stream_alive = &audio_stream;
             target.set_control_flow(ControlFlow::Poll);
             match &event {
                 Event::WindowEvent {

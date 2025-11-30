@@ -3,10 +3,12 @@ use log::{error, info, warn};
 use std::sync::{Arc, Mutex};
 use vibe_emu_core::apu::Apu;
 
-/// Start audio playback using `cpal` and stream samples produced by the APU.
+/// Build an audio stream using `cpal` and hook it up to the APU sample queue.
 ///
-/// Returns the active [`cpal::Stream`] if successful.
-pub fn start_stream(apu: Arc<Mutex<Apu>>) -> Option<cpal::Stream> {
+/// If `autoplay` is true the stream starts immediately; otherwise the caller is
+/// responsible for invoking [`cpal::Stream::play`] once any warm-up work
+/// completes. Returns the configured stream on success.
+pub fn start_stream(apu: Arc<Mutex<Apu>>, autoplay: bool) -> Option<cpal::Stream> {
     let host = cpal::default_host();
     let device = match host.default_output_device() {
         Some(device) => device,
@@ -97,11 +99,16 @@ pub fn start_stream(apu: Arc<Mutex<Apu>>) -> Option<cpal::Stream> {
         _ => panic!("Unsupported sample format"),
     };
 
-    if let Err(e) = stream.play() {
-        warn!("Failed to start audio stream: {e}");
-        None
+    if autoplay {
+        if let Err(e) = stream.play() {
+            warn!("Failed to start audio stream: {e}");
+            None
+        } else {
+            info!("Audio stream started");
+            Some(stream)
+        }
     } else {
-        info!("Audio stream started");
+        info!("Audio stream prepared (playback deferred)");
         Some(stream)
     }
 }
