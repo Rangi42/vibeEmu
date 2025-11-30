@@ -75,6 +75,12 @@ struct UiState {
     ctx_pos: [f32; 2],
     spawn_debugger: bool,
     spawn_vram: bool,
+    pending_action: Option<UiAction>,
+}
+
+enum UiAction {
+    Reset,
+    Load(Cartridge),
 }
 
 #[derive(Clone, Copy)]
@@ -333,7 +339,7 @@ fn draw_game_screen(pixels: &mut Pixels, frame: &[u32]) {
 fn build_ui(
     state: &mut UiState,
     ui: &imgui::Ui,
-    gb: &mut GameBoy,
+    _gb: &mut GameBoy,
     _event_loop: &ActiveEventLoop,
     _platform: &mut WinitPlatform,
 ) {
@@ -355,14 +361,13 @@ fn build_ui(
                         .pick_file()
                         && let Ok(cart) = Cartridge::from_file(&path)
                     {
-                        gb.reset();
-                        gb.mmu.load_cart(cart);
+                        state.pending_action = Some(UiAction::Load(cart));
                         state.paused = false;
                     }
                     close_menu = true;
                 }
                 if ui.button("Reset GB") {
-                    gb.reset();
+                    state.pending_action = Some(UiAction::Reset);
                     state.paused = false;
                     close_menu = true;
                 }
@@ -428,6 +433,70 @@ fn prime_audio_queue(gb: &mut GameBoy) -> (usize, usize) {
     }
 
     (queued, target_frames)
+}
+
+fn prime_and_play_audio(gb: &mut GameBoy, audio_stream: &mut Option<cpal::Stream>) {
+    let primed = audio_stream.as_ref().map(|_| prime_audio_queue(gb));
+
+    if let Some((queued, target)) = &primed {
+        if *queued >= *target {
+            info!("Primed audio queue with {queued} / {target} frames before starting playback");
+        } else {
+            warn!(
+                "Audio warmup timed out after priming {queued} / {target} frames; startup may glitch"
+            );
+        }
+    }
+
+    if let Some(stream) = audio_stream.as_ref() {
+        if let Err(e) = stream.play() {
+            warn!("Failed to start audio stream: {e}");
+            *audio_stream = None;
+        } else if let Some((queued, target)) = &primed {
+            info!("Audio playback started with {queued} primed frames (capacity {target})");
+        } else {
+            info!("Audio playback started");
+        }
+    }
+}
+
+fn rebuild_audio_stream(gb: &mut GameBoy, speed: Speed, audio_stream: &mut Option<cpal::Stream>) {
+    if let Some(stream) = audio_stream.take() {
+        drop(stream);
+    }
+
+    if let Ok(mut apu) = gb.mmu.apu.lock() {
+        apu.set_speed(speed.factor);
+    }
+
+    *audio_stream = audio::start_stream(Arc::clone(&gb.mmu.apu), false);
+    if audio_stream.is_none() {
+        warn!("Audio output disabled; continuing without sound");
+        return;
+    }
+
+    prime_and_play_audio(gb, audio_stream);
+}
+
+fn apply_ui_action(
+    action: UiAction,
+    gb: &mut GameBoy,
+    audio_stream: &mut Option<cpal::Stream>,
+    speed: Speed,
+) {
+    match action {
+        UiAction::Reset => {
+            info!("Resetting Game Boy");
+            gb.reset();
+        }
+        UiAction::Load(cart) => {
+            info!("Loading new ROM");
+            gb.reset();
+            gb.mmu.load_cart(cart);
+        }
+    }
+
+    rebuild_audio_stream(gb, speed, audio_stream);
 }
 
 fn main() {
@@ -516,38 +585,12 @@ fn main() {
             win.resize(win.win.inner_size());
         }
 
-        let mut audio_stream = audio::start_stream(Arc::clone(&gb.mmu.apu), false);
-        if audio_stream.is_none() {
-            warn!("Audio output disabled; continuing without sound");
-        }
-
-        let primed = audio_stream.as_ref().map(|_| prime_audio_queue(&mut gb));
-        if let Some((queued, target)) = &primed {
-            if *queued >= *target {
-                info!(
-                    "Primed audio queue with {queued} / {target} frames before starting playback"
-                );
-            } else {
-                warn!(
-                    "Audio warmup timed out after priming {queued} / {target} frames; startup may glitch"
-                );
-            }
-        }
+        let mut audio_stream = None;
+        rebuild_audio_stream(&mut gb, speed, &mut audio_stream);
 
         if gb.mmu.ppu.frame_ready() {
             frame.copy_from_slice(gb.mmu.ppu.framebuffer());
             gb.mmu.ppu.clear_frame_flag();
-        }
-
-        if let Some(stream) = audio_stream.as_ref() {
-            if let Err(e) = stream.play() {
-                warn!("Failed to start audio stream: {e}");
-                audio_stream = None;
-            } else if let Some((queued, target)) = &primed {
-                info!("Audio playback started with {queued} primed frames (capacity {target})");
-            } else {
-                info!("Audio playback started");
-            }
         }
 
         let mut state = 0xFFu8;
@@ -555,7 +598,6 @@ fn main() {
 
         #[allow(deprecated)]
         let _ = event_loop.run(move |event, target| {
-            let _keep_stream_alive = &audio_stream;
             target.set_control_flow(ControlFlow::Poll);
             match &event {
                 Event::WindowEvent {
@@ -710,13 +752,15 @@ fn main() {
                                                 },
                                             );
 
-                                            let surface_size = win.win.inner_size();
-                                            rpass.set_scissor_rect(
-                                                0,
-                                                0,
-                                                surface_size.width,
-                                                surface_size.height,
-                                            );
+                                            // Clamp ImGui drawing to the actual render target bounds.
+                                            let (clip_x, clip_y, clip_w, clip_h) =
+                                                context.scaling_renderer.clip_rect();
+
+                                            if clip_w == 0 || clip_h == 0 {
+                                                return Ok(());
+                                            }
+
+                                            rpass.set_scissor_rect(clip_x, clip_y, clip_w, clip_h);
 
                                             win.renderer
                                                 .render(
@@ -767,6 +811,12 @@ fn main() {
                     }
                 }
                 Event::AboutToWait => {
+                    if let Some(action) = ui_state.pending_action.take() {
+                        apply_ui_action(action, &mut gb, &mut audio_stream, speed);
+                        ui_state.paused = false;
+                        ui_state.show_context = false;
+                    }
+
                     if !ui_state.paused {
                         emulate_until(&mut gb, speed, target);
                     }
