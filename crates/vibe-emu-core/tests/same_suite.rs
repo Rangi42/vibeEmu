@@ -214,13 +214,31 @@ fn same_suite__apu__channel_1__channel_1_duty_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_extra_length_clocking_cgb0B_gb() {
-    let passed = run_same_suite(
+    const EXPECTED: [u8; 24] = [
+        0xF1, 0xF1, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1,
+        0xF1, 0xF1, 0xF1, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+    ];
+    let mut gb = run_same_suite_gb(
         common::rom_path("same-suite/apu/channel_1/channel_1_extra_length_clocking-cgb0B.gb"),
         20_000_000,
     );
-    assert!(passed, "test failed");
+    let mut results = [0u8; EXPECTED.len()];
+    for (i, byte) in results.iter_mut().enumerate() {
+        *byte = gb.mmu.read_byte(0xC000 + i as u16);
+    }
+    if results != EXPECTED {
+        println!("correct: {:02X?}", EXPECTED);
+        println!("actual : {:02X?}", results);
+        let matches = results
+            .iter()
+            .zip(EXPECTED.iter())
+            .filter(|(a, b)| a == b)
+            .count();
+        let percent = matches as f32 / EXPECTED.len() as f32 * 100.0;
+        println!("match {:.2}%", percent);
+        panic!("test failed");
+    }
 }
 
 #[test]
@@ -410,7 +428,6 @@ fn same_suite__apu__channel_2__channel_2_duty_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_extra_length_clocking_cgb0B_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_extra_length_clocking-cgb0B.gb"),
@@ -520,7 +537,6 @@ fn same_suite__apu__channel_3__channel_3_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_extra_length_clocking_cgb0_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_extra_length_clocking-cgb0.gb"),
@@ -710,7 +726,6 @@ fn same_suite__apu__channel_4__channel_4_equivalent_frequencies_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_4__channel_4_extra_length_clocking_cgb0B_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_4/channel_4_extra_length_clocking-cgb0B.gb"),

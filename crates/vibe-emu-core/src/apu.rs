@@ -1303,6 +1303,17 @@ impl Apu {
         (self.lf_div_counter & 0x3) as u8
     }
 
+    pub fn on_div_reset(&mut self, prev_div: u16, _double_speed: bool) {
+        let bit = 12;
+        let prev_bit = (prev_div >> bit) & 1;
+        self.lf_div_counter = 0;
+        self.lf_div = 0;
+        self.mhz2_residual = 0;
+        if prev_bit == 1 {
+            self.handle_div_event();
+        }
+    }
+
     pub fn write_reg(&mut self, addr: u16, val: u8) {
         if self.nr52 & 0x80 == 0 && addr != 0xFF26 && !(0xFF30..=0xFF3F).contains(&addr) {
             return;
@@ -1364,15 +1375,12 @@ impl Apu {
             0xFF13 => self.ch1.write_frequency_low(val),
             0xFF14 => {
                 let prev = self.ch1.length_enable;
-                self.ch1.length_enable = val & 0x40 != 0;
-                if !prev && self.ch1.length_enable {
-                    let next_step = (self.sequencer.step + 1) & 7;
-                    Apu::maybe_extra_len_clock(&mut self.ch1, next_step);
-                }
+                let length_enable = val & 0x40 != 0;
                 self.ch1.write_frequency_high(val);
                 if val & 0x80 != 0 {
                     self.trigger_square(1);
                 }
+                self.extra_length_clock_square(prev, length_enable, val & 0x80 != 0, 1);
             }
             0xFF16 => {
                 self.ch2.write_duty(val >> 6);
@@ -1406,15 +1414,12 @@ impl Apu {
             0xFF18 => self.ch2.write_frequency_low(val),
             0xFF19 => {
                 let prev = self.ch2.length_enable;
-                self.ch2.length_enable = val & 0x40 != 0;
-                if !prev && self.ch2.length_enable {
-                    let next_step = (self.sequencer.step + 1) & 7;
-                    Apu::maybe_extra_len_clock(&mut self.ch2, next_step);
-                }
+                let length_enable = val & 0x40 != 0;
                 self.ch2.write_frequency_high(val);
                 if val & 0x80 != 0 {
                     self.trigger_square(2);
                 }
+                self.extra_length_clock_square(prev, length_enable, val & 0x80 != 0, 2);
             }
             0xFF1A => {
                 self.ch3.dac_enabled = val & 0x80 != 0;
@@ -1451,13 +1456,7 @@ impl Apu {
             }
             0xFF1E => {
                 let prev = self.ch3.length_enable;
-                self.ch3.length_enable = val & 0x40 != 0;
-                if !prev && self.ch3.length_enable {
-                    let next_step = (self.sequencer.step + 1) & 7;
-                    if !matches!(next_step, 0 | 2 | 4 | 6) && self.ch3.length > 0 {
-                        self.ch3.clock_length();
-                    }
-                }
+                let length_enable = val & 0x40 != 0;
                 self.ch3.frequency = (self.ch3.frequency & 0xFF) | (((val & 0x07) as u16) << 8);
                 self.ch3.sample_length =
                     (self.ch3.sample_length & 0xFF) | (((val & 0x07) as u16) << 8);
@@ -1466,6 +1465,7 @@ impl Apu {
                     self.trigger_wave(was_enabled);
                     self.refresh_pcm_regs();
                 }
+                self.extra_length_clock_wave(prev, length_enable, val & 0x80 != 0);
             }
             0xFF20 => {
                 self.ch4.length = 64 - (val & 0x3F);
@@ -1528,17 +1528,12 @@ impl Apu {
             }
             0xFF23 => {
                 let prev = self.ch4.length_enable;
-                self.ch4.length_enable = val & 0x40 != 0;
-                if !prev && self.ch4.length_enable {
-                    let next_step = (self.sequencer.step + 1) & 7;
-                    if !matches!(next_step, 0 | 2 | 4 | 6) && self.ch4.length > 0 {
-                        self.ch4.clock_length();
-                    }
-                }
+                let length_enable = val & 0x40 != 0;
                 if val & 0x80 != 0 {
                     self.trigger_noise();
                     self.refresh_pcm_regs();
                 }
+                self.extra_length_clock_noise(prev, length_enable, val & 0x80 != 0);
                 #[cfg(feature = "apu-trace")]
                 self.trace_noise_state("NR44", Some(val));
             }
@@ -1845,6 +1840,68 @@ impl Apu {
         self.trace_noise_state("trigger", None);
     }
 
+    fn handle_div_event(&mut self) {
+        let step = self.sequencer.advance();
+        self.clock_frame_sequencer(step);
+
+        self.div_divider = self.div_divider.wrapping_add(1);
+        if (self.div_divider & 7) == 7 {
+            if !self.ch1_env_clock.clock {
+                self.ch1_env_countdown = self.ch1_env_countdown.wrapping_sub(1) & 7;
+            }
+            if !self.ch2_env_clock.clock {
+                self.ch2_env_countdown = self.ch2_env_countdown.wrapping_sub(1) & 7;
+            }
+            if !self.ch4_env_clock.clock {
+                self.ch4.volume_countdown = self.ch4.volume_countdown.wrapping_sub(1) & 7;
+            }
+        }
+
+        // Tick envelopes if their clock is high; clear the clock and honor lock state.
+        if self.ch1_env_clock.clock {
+            Apu::set_envelope_clock(&mut self.ch1_env_clock, false, false, 0);
+            if !self.ch1_env_clock.locked {
+                let nr12 = self.regs[0x02];
+                if nr12 & 7 != 0 {
+                    if nr12 & 8 != 0 {
+                        self.ch1.envelope.volume = (self.ch1.envelope.volume + 1) & 0x0F;
+                    } else {
+                        self.ch1.envelope.volume =
+                            (self.ch1.envelope.volume.wrapping_sub(1)) & 0x0F;
+                    }
+                }
+            }
+        }
+        if self.ch2_env_clock.clock {
+            Apu::set_envelope_clock(&mut self.ch2_env_clock, false, false, 0);
+            if !self.ch2_env_clock.locked {
+                let nr22 = self.regs[0x07];
+                if nr22 & 7 != 0 {
+                    if nr22 & 8 != 0 {
+                        self.ch2.envelope.volume = (self.ch2.envelope.volume + 1) & 0x0F;
+                    } else {
+                        self.ch2.envelope.volume =
+                            (self.ch2.envelope.volume.wrapping_sub(1)) & 0x0F;
+                    }
+                }
+            }
+        }
+        if self.ch4_env_clock.clock {
+            Apu::set_envelope_clock(&mut self.ch4_env_clock, false, false, 0);
+            if !self.ch4_env_clock.locked {
+                let nr42 = self.regs[NR42_IDX];
+                if nr42 & 7 != 0 {
+                    if nr42 & 8 != 0 {
+                        self.ch4.current_volume = (self.ch4.current_volume + 1) & 0x0F;
+                    } else {
+                        self.ch4.current_volume = (self.ch4.current_volume.wrapping_sub(1)) & 0x0F;
+                    }
+                    self.ch4.envelope.volume = self.ch4.current_volume;
+                }
+            }
+        }
+    }
+
     fn clock_frame_sequencer(&mut self, step: u8) {
         if matches!(step, 0 | 2 | 4 | 6) {
             self.ch1.clock_length();
@@ -1886,72 +1943,13 @@ impl Apu {
             // DIV values by incrementing `div_prev`.
             let prev = div_prev.wrapping_add(i as u16);
             let curr = div_prev.wrapping_add((i + 1) as u16);
-            let bit = if double_speed { 13 } else { 12 };
+            let bit = 12;
             let prev_bit = (prev >> bit) & 1;
             let curr_bit = (curr >> bit) & 1;
             if prev_bit == 1 && curr_bit == 0 {
                 // Falling edge (DIV event): advance frame sequencer, decrement envelope countdowns every 8 DIV events,
                 // and if any envelope clock is high, tick once now.
-                let step = self.sequencer.advance();
-                self.clock_frame_sequencer(step);
-
-                self.div_divider = self.div_divider.wrapping_add(1);
-                if (self.div_divider & 7) == 7 {
-                    if !self.ch1_env_clock.clock {
-                        self.ch1_env_countdown = self.ch1_env_countdown.wrapping_sub(1) & 7;
-                    }
-                    if !self.ch2_env_clock.clock {
-                        self.ch2_env_countdown = self.ch2_env_countdown.wrapping_sub(1) & 7;
-                    }
-                    if !self.ch4_env_clock.clock {
-                        self.ch4.volume_countdown = self.ch4.volume_countdown.wrapping_sub(1) & 7;
-                    }
-                }
-
-                // Tick envelopes if their clock is high; clear the clock and honor lock state.
-                if self.ch1_env_clock.clock {
-                    Apu::set_envelope_clock(&mut self.ch1_env_clock, false, false, 0);
-                    if !self.ch1_env_clock.locked {
-                        let nr12 = self.regs[0x02];
-                        if nr12 & 7 != 0 {
-                            if nr12 & 8 != 0 {
-                                self.ch1.envelope.volume = (self.ch1.envelope.volume + 1) & 0x0F;
-                            } else {
-                                self.ch1.envelope.volume =
-                                    (self.ch1.envelope.volume.wrapping_sub(1)) & 0x0F;
-                            }
-                        }
-                    }
-                }
-                if self.ch2_env_clock.clock {
-                    Apu::set_envelope_clock(&mut self.ch2_env_clock, false, false, 0);
-                    if !self.ch2_env_clock.locked {
-                        let nr22 = self.regs[0x07];
-                        if nr22 & 7 != 0 {
-                            if nr22 & 8 != 0 {
-                                self.ch2.envelope.volume = (self.ch2.envelope.volume + 1) & 0x0F;
-                            } else {
-                                self.ch2.envelope.volume =
-                                    (self.ch2.envelope.volume.wrapping_sub(1)) & 0x0F;
-                            }
-                        }
-                    }
-                }
-                if self.ch4_env_clock.clock {
-                    Apu::set_envelope_clock(&mut self.ch4_env_clock, false, false, 0);
-                    if !self.ch4_env_clock.locked {
-                        let nr42 = self.regs[NR42_IDX];
-                        if nr42 & 7 != 0 {
-                            if nr42 & 8 != 0 {
-                                self.ch4.envelope.volume = (self.ch4.envelope.volume + 1) & 0x0F;
-                            } else {
-                                self.ch4.envelope.volume =
-                                    (self.ch4.envelope.volume.wrapping_sub(1)) & 0x0F;
-                            }
-                            self.ch4.current_volume = self.ch4.envelope.volume;
-                        }
-                    }
-                }
+                self.handle_div_event();
             }
 
             if prev_bit == 0 && curr_bit == 1 {
@@ -2368,9 +2366,123 @@ impl Apu {
         }
     }
 
-    fn maybe_extra_len_clock(ch: &mut SquareChannel, upcoming_step: u8) {
-        if !matches!(upcoming_step, 0 | 2 | 4 | 6) && ch.length > 0 {
-            ch.clock_length();
+    fn cgb_early_length_bug(&self) -> bool {
+        self.cgb_mode
+            && matches!(
+                self.cgb_revision,
+                CgbRevision::Rev0 | CgbRevision::RevA | CgbRevision::RevB
+            )
+    }
+
+    fn extra_length_clock_square(
+        &mut self,
+        prev_length_enable: bool,
+        new_length_enable: bool,
+        triggered: bool,
+        idx: u8,
+    ) {
+        let bugged = self.cgb_early_length_bug();
+        let should_clock = {
+            let ch = if idx == 1 {
+                &mut self.ch1
+            } else {
+                &mut self.ch2
+            };
+            let tick = !prev_length_enable
+                && (new_length_enable || bugged)
+                && ch.length > 0
+                && (self.div_divider & 1) != 0;
+            if tick {
+                ch.length = ch.length.saturating_sub(1);
+                if ch.length == 0 {
+                    if triggered {
+                        ch.length = 63;
+                        ch.enabled = ch.dac_enabled;
+                        ch.active = ch.enabled;
+                        ch.sample_surpressed = false;
+                    } else {
+                        ch.enabled = false;
+                        ch.active = false;
+                    }
+                }
+            }
+            tick
+        };
+        if idx == 1 {
+            self.ch1.length_enable = new_length_enable;
+        } else {
+            self.ch2.length_enable = new_length_enable;
+        }
+        if should_clock {
+            self.refresh_pcm_regs();
+        }
+    }
+
+    fn extra_length_clock_wave(
+        &mut self,
+        prev_length_enable: bool,
+        new_length_enable: bool,
+        triggered: bool,
+    ) {
+        let bugged = self.cgb_early_length_bug();
+        let should_clock = {
+            let tick = !prev_length_enable
+                && (new_length_enable || bugged)
+                && self.ch3.length > 0
+                && (self.div_divider & 1) != 0;
+            if tick {
+                self.ch3.length = self.ch3.length.saturating_sub(1);
+                if self.ch3.length == 0 {
+                    if triggered {
+                        self.ch3.length = 255;
+                        self.ch3.enabled = self.ch3.dac_enabled;
+                    } else {
+                        self.ch3.enabled = false;
+                        self.ch3.sample_suppressed.set(true);
+                        self.ch3.set_pipeline_sample(0);
+                    }
+                }
+            }
+            tick
+        };
+        self.ch3.length_enable = new_length_enable;
+        if should_clock {
+            self.refresh_pcm_regs();
+        }
+    }
+
+    fn extra_length_clock_noise(
+        &mut self,
+        prev_length_enable: bool,
+        new_length_enable: bool,
+        triggered: bool,
+    ) {
+        let bugged = self.cgb_early_length_bug();
+        let should_clock = {
+            let tick = !prev_length_enable
+                && (new_length_enable || bugged)
+                && self.ch4.length > 0
+                && (self.div_divider & 1) != 0;
+            if tick {
+                self.ch4.length = self.ch4.length.saturating_sub(1);
+                if self.ch4.length == 0 {
+                    if triggered {
+                        self.ch4.length = 63;
+                        self.ch4.enabled = self.ch4.dac_enabled;
+                        self.ch4.sample_suppressed = false;
+                        self.ch4.pending_disable = false;
+                    } else {
+                        self.ch4.enabled = false;
+                        self.ch4.sample_suppressed = true;
+                        self.ch4.pending_disable = true;
+                    }
+                }
+            }
+            tick
+        };
+        self.ch4.length_enable = new_length_enable;
+        if should_clock {
+            self.refresh_pcm_regs();
         }
     }
 

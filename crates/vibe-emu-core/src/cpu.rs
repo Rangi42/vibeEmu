@@ -615,7 +615,7 @@ impl Cpu {
             0x10 => {
                 // STOP
                 let _ = self.fetch8(mmu);
-                mmu.timer.reset_div(&mut mmu.if_reg);
+                mmu.reset_div();
                 if mmu.key1 & 0x01 != 0 {
                     mmu.key1 &= !0x01;
                     mmu.key1 ^= 0x80;
