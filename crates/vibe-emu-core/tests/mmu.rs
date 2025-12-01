@@ -1,6 +1,38 @@
 use vibe_emu_core::{cartridge::Cartridge, mmu::Mmu};
 
 #[test]
+fn hdma_wait_loop_observes_idle_ff55() {
+    let mut mmu = Mmu::new_with_mode(true);
+    // Ensure the LCD is considered enabled so HDMA enters H-Blank mode.
+    mmu.write_byte(0xFF40, 0x80);
+
+    // Populate the HDMA source region with a known pattern.
+    for (i, byte) in (0xC000..0xC010).enumerate() {
+        mmu.write_byte(byte, i as u8);
+    }
+
+    // Program source (0xC000) and destination (0x8000).
+    mmu.write_byte(0xFF51, 0xC0);
+    mmu.write_byte(0xFF52, 0x00);
+    mmu.write_byte(0xFF53, 0x80);
+    mmu.write_byte(0xFF54, 0x00);
+
+    // Kick off a single 16-byte H-Blank DMA block (value 0 => 1 block).
+    mmu.write_byte(0xFF55, 0x80);
+    assert_ne!(
+        mmu.read_byte(0xFF55),
+        0xFF,
+        "HDMA should report busy immediately after start"
+    );
+
+    // Deliver one H-Blank slot and ensure the transfer completes.
+    mmu.hdma_hblank_transfer();
+
+    // Hardware returns 0xFF after HDMA completes, which the legacy wait loop relies on.
+    assert_eq!(mmu.read_byte(0xFF55), 0xFF);
+}
+
+#[test]
 fn wram_echo_and_bank_switch() {
     let mut mmu = Mmu::new_with_mode(true);
     mmu.write_byte(0xC000, 0xAA);

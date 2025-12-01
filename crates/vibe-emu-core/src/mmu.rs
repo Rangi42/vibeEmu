@@ -32,6 +32,8 @@ struct HdmaState {
     mode: DmaMode,
     /// HDMA active flag
     active: bool,
+    /// Whether the previous transfer was explicitly cancelled (FF55 <- 0)
+    cancelled: bool,
 }
 
 pub struct Mmu {
@@ -60,6 +62,10 @@ pub struct Mmu {
     cgb_mode: bool,
     cgb_revision: CgbRevision,
     dmg_revision: DmgRevision,
+    /// Last CPU program counter observed when the CPU performed a memory
+    /// operation. This is set by the `Cpu` helpers before calling into the
+    /// MMU so logs can attribute blocked accesses to the originating PC.
+    pub last_cpu_pc: Option<u16>,
 }
 
 impl Mmu {
@@ -112,6 +118,7 @@ impl Mmu {
                 blocks: 0,
                 mode: DmaMode::Gdma,
                 active: false,
+                cancelled: false,
             },
             key1: if cgb { 0x7E } else { 0 },
             rp: 0,
@@ -123,6 +130,7 @@ impl Mmu {
             cgb_mode: cgb,
             cgb_revision,
             dmg_revision,
+            last_cpu_pc: None,
         }
     }
 
@@ -153,13 +161,84 @@ impl Mmu {
 
     fn read_byte_inner(&mut self, addr: u16, allow_dma: bool) -> u8 {
         if !allow_dma && self.dma_cycles > 0 {
-            match addr {
-                // allow ROM, WRAM and all I/O/HRAM during DMA
-                0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
-                // block accesses within OAM (and forbidden gap)
-                0xFE00..=0xFEFF => return 0xFF,
-                // block VRAM and other regions
-                _ => return 0xFF,
+            // PanDocs: On DMG (non-CGB) during OAM DMA the CPU can access only
+            // HRAM ($FF80-$FFFE). On CGB behavior is more permissive due to
+            // separate buses; keep existing permissive behavior for CGB.
+            if !self.cgb_mode {
+                // Only allow HRAM accesses on DMG.
+                if (0xFF80..=0xFFFE).contains(&addr) {
+                    // allowed
+                } else if (0xFE00..=0xFEFF).contains(&addr) {
+                    #[cfg(feature = "ppu-trace")]
+                    {
+                        let pc_str = self
+                            .last_cpu_pc
+                            .map(|p| format!("{:04X}", p))
+                            .unwrap_or_else(|| "<none>".to_string());
+                        eprintln!(
+                            "[DMA] read blocked (OAM) addr={:04X} dma_cycles={} pc={}",
+                            addr, self.dma_cycles, pc_str
+                        );
+                    }
+                    return 0xFF;
+                } else {
+                    #[cfg(feature = "ppu-trace")]
+                    {
+                        let region = if (0x8000..=0x9FFF).contains(&addr) {
+                            "VRAM"
+                        } else {
+                            "OTHER"
+                        };
+                        let pc_str = self
+                            .last_cpu_pc
+                            .map(|p| format!("{:04X}", p))
+                            .unwrap_or_else(|| "<none>".to_string());
+                        eprintln!(
+                            "[DMA] read blocked ({}) addr={:04X} dma_cycles={} dma_src={:04X} pc={}",
+                            region, addr, self.dma_cycles, self.dma_source, pc_str
+                        );
+                    }
+                    return 0xFF;
+                }
+            } else {
+                // CGB: allow ROM, WRAM and I/O/HRAM during DMA as before; but
+                // still block OAM and other regions.
+                match addr {
+                    0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
+                    0xFE00..=0xFEFF => {
+                        #[cfg(feature = "ppu-trace")]
+                        {
+                            let pc_str = self
+                                .last_cpu_pc
+                                .map(|p| format!("{:04X}", p))
+                                .unwrap_or_else(|| "<none>".to_string());
+                            eprintln!(
+                                "[DMA] read blocked (OAM) addr={:04X} dma_cycles={} pc={}",
+                                addr, self.dma_cycles, pc_str
+                            );
+                        }
+                        return 0xFF;
+                    }
+                    _ => {
+                        #[cfg(feature = "ppu-trace")]
+                        {
+                            let region = if (0x8000..=0x9FFF).contains(&addr) {
+                                "VRAM"
+                            } else {
+                                "OTHER"
+                            };
+                            let pc_str = self
+                                .last_cpu_pc
+                                .map(|p| format!("{:04X}", p))
+                                .unwrap_or_else(|| "<none>".to_string());
+                            eprintln!(
+                                "[DMA] read blocked ({}) addr={:04X} dma_cycles={} pc={}",
+                                region, addr, self.dma_cycles, pc_str
+                            );
+                        }
+                        return 0xFF;
+                    }
+                }
             }
         }
         match addr {
@@ -176,9 +255,13 @@ impl Mmu {
                     #[cfg(feature = "ppu-trace")]
                     {
                         let (stage, cycle, mode, mode_clock) = self.ppu.debug_startup_snapshot();
+                        let pc_str = self
+                            .last_cpu_pc
+                            .map(|p| format!("{:04X}", p))
+                            .unwrap_or_else(|| "<none>".to_string());
                         eprintln!(
-                            "[PPU] VRAM read allow addr={:04X} val={:02X} stage={:?} cycle={:?} mode={} mode_clock={}",
-                            addr, value, stage, cycle, mode, mode_clock
+                            "[PPU] VRAM read allow addr={:04X} val={:02X} bank={} pc={} stage={:?} cycle={:?} mode={} mode_clock={}",
+                            addr, value, self.ppu.vram_bank, pc_str, stage, cycle, mode, mode_clock
                         );
                     }
                     value
@@ -186,9 +269,13 @@ impl Mmu {
                     #[cfg(feature = "ppu-trace")]
                     {
                         let (stage, cycle, mode, mode_clock) = self.ppu.debug_startup_snapshot();
+                        let pc_str = self
+                            .last_cpu_pc
+                            .map(|p| format!("{:04X}", p))
+                            .unwrap_or_else(|| "<none>".to_string());
                         eprintln!(
-                            "[PPU] VRAM read blocked addr={:04X} stage={:?} cycle={:?} mode={} mode_clock={}",
-                            addr, stage, cycle, mode, mode_clock
+                            "[PPU] VRAM read blocked addr={:04X} bank={} pc={} stage={:?} cycle={:?} mode={} mode_clock={}",
+                            addr, self.ppu.vram_bank, pc_str, stage, cycle, mode, mode_clock
                         );
                     }
                     0xFF
@@ -248,8 +335,11 @@ impl Mmu {
                 } else if self.hdma.active {
                     // Busy flag (bit 7) is cleared while the DMA is running.
                     self.hdma.blocks.saturating_sub(1) & 0x7F
+                } else if self.hdma.cancelled {
+                    // After cancellation the hardware reports bit 7 set with the lower bits cleared.
+                    0x80
                 } else {
-                    // Hardware returns 0xFF once HDMA/GDMA has completed or is idle.
+                    // Hardware returns 0xFF once HDMA/GDMA has completed or no transfer is pending.
                     0xFF
                 }
             }
@@ -310,13 +400,81 @@ impl Mmu {
 
     pub fn write_byte(&mut self, addr: u16, val: u8) {
         if self.dma_cycles > 0 {
-            match addr {
-                // allow writes to ROM, WRAM and all I/O/HRAM during DMA
-                0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
-                // block writes within OAM (and forbidden gap)
-                0xFE00..=0xFEFF => return,
-                // block VRAM and other regions
-                _ => return,
+            if !self.cgb_mode {
+                // On DMG only HRAM is accessible during OAM DMA.
+                if (0xFF80..=0xFFFE).contains(&addr) {
+                    // allowed
+                } else if (0xFE00..=0xFEFF).contains(&addr) {
+                    #[cfg(feature = "ppu-trace")]
+                    {
+                        let pc_str = self
+                            .last_cpu_pc
+                            .map(|p| format!("{:04X}", p))
+                            .unwrap_or_else(|| "<none>".to_string());
+                        eprintln!(
+                            "[DMA] write blocked (OAM) addr={:04X} val={:02X} dma_cycles={} pc={}",
+                            addr, val, self.dma_cycles, pc_str
+                        );
+                    }
+                    return;
+                } else {
+                    #[cfg(feature = "ppu-trace")]
+                    {
+                        let region = if (0x8000..=0x9FFF).contains(&addr) {
+                            "VRAM"
+                        } else {
+                            "OTHER"
+                        };
+                        let pc_str = self
+                            .last_cpu_pc
+                            .map(|p| format!("{:04X}", p))
+                            .unwrap_or_else(|| "<none>".to_string());
+                        eprintln!(
+                            "[DMA] write blocked ({}) addr={:04X} val={:02X} dma_cycles={} dma_src={:04X} pc={}",
+                            region, addr, val, self.dma_cycles, self.dma_source, pc_str
+                        );
+                    }
+                    return;
+                }
+            } else {
+                // CGB: allow ROM, WRAM and all I/O/HRAM during DMA as before;
+                // but block OAM and other regions.
+                match addr {
+                    0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
+                    0xFE00..=0xFEFF => {
+                        #[cfg(feature = "ppu-trace")]
+                        {
+                            let pc_str = self
+                                .last_cpu_pc
+                                .map(|p| format!("{:04X}", p))
+                                .unwrap_or_else(|| "<none>".to_string());
+                            eprintln!(
+                                "[DMA] write blocked (OAM) addr={:04X} val={:02X} dma_cycles={} pc={}",
+                                addr, val, self.dma_cycles, pc_str
+                            );
+                        }
+                        return;
+                    }
+                    _ => {
+                        #[cfg(feature = "ppu-trace")]
+                        {
+                            let region = if (0x8000..=0x9FFF).contains(&addr) {
+                                "VRAM"
+                            } else {
+                                "OTHER"
+                            };
+                            let pc_str = self
+                                .last_cpu_pc
+                                .map(|p| format!("{:04X}", p))
+                                .unwrap_or_else(|| "<none>".to_string());
+                            eprintln!(
+                                "[DMA] write blocked ({}) addr={:04X} val={:02X} dma_cycles={} pc={}",
+                                region, addr, val, self.dma_cycles, pc_str
+                            );
+                        }
+                        return;
+                    }
+                }
             }
         }
 
@@ -324,6 +482,18 @@ impl Mmu {
             0x8000..=0x9FFF => {
                 if self.ppu.vram_accessible() {
                     self.ppu.vram[self.ppu.vram_bank][(addr - 0x8000) as usize] = val;
+                } else {
+                    #[cfg(feature = "ppu-trace")]
+                    {
+                        let pc_str = self
+                            .last_cpu_pc
+                            .map(|p| format!("{:04X}", p))
+                            .unwrap_or_else(|| "<none>".to_string());
+                        eprintln!(
+                            "[PPU] VRAM write blocked addr={:04X} val={:02X} bank={} pc={}",
+                            addr, val, self.ppu.vram_bank, pc_str
+                        );
+                    }
                 }
             }
             0x0000..=0x7FFF | 0xA000..=0xBFFF => {
@@ -349,7 +519,14 @@ impl Mmu {
             0xFF05..=0xFF07 => self.timer.write(addr, val, &mut self.if_reg),
             0xFF0F => self.if_reg = (val & 0x1F) | (self.if_reg & 0xE0),
             0xFF10..=0xFF3F => self.apu.lock().unwrap().write_reg(addr, val),
-            0xFF40..=0xFF45 | 0xFF47..=0xFF4B | 0xFF68..=0xFF6B => self.ppu.write_reg(addr, val),
+            0xFF40 => {
+                let lcd_was_on = self.ppu.lcd_enabled();
+                self.ppu.write_reg(addr, val);
+                if lcd_was_on && !self.ppu.lcd_enabled() {
+                    self.complete_active_hdma();
+                }
+            }
+            0xFF41..=0xFF45 | 0xFF47..=0xFF4B | 0xFF68..=0xFF6B => self.ppu.write_reg(addr, val),
             0xFF51 => {
                 if self.cgb_mode && !self.hdma.active {
                     self.hdma.src = (val as u16) << 8 | (self.hdma.src & 0x00FF);
@@ -380,16 +557,19 @@ impl Mmu {
                 self.hdma.dst = Self::sanitize_vram_dma_dest(self.hdma.dst);
                 let requested_blocks = (val & 0x7F) + 1;
                 if self.hdma.active && (val & 0x80) == 0 {
-                    // Abort ongoing HDMA
+                    // Abort ongoing HDMA. Hardware reports remaining blocks in FF55 when
+                    // polled after cancellation, so keep the current block count.
                     self.hdma.active = false;
                     self.hdma.blocks = 0;
+                    self.hdma.cancelled = true;
                 } else if val & 0x80 == 0 {
                     self.start_gdma(requested_blocks);
                 } else {
                     self.hdma.mode = DmaMode::Hdma;
                     self.hdma.blocks = requested_blocks;
                     self.hdma.active = true;
-                    if self.ppu.in_hblank() {
+                    self.hdma.cancelled = false;
+                    if !self.ppu.lcd_enabled() || self.ppu.in_hblank() {
                         self.hdma_hblank_transfer();
                     }
                 }
@@ -413,8 +593,30 @@ impl Mmu {
                 self.ppu.dma = val;
                 let src = (val as u16) << 8;
                 self.pending_dma = Some(src);
-                // DMA starts after two M-cycles (8 cycles)
-                self.pending_delay = 8;
+                // DMA starts after two M-cycles. `pending_delay` is tracked
+                // in T-cycles (dots). In double-speed mode an M-cycle is 2
+                // T-cycles instead of 4, so halve the delay there.
+                self.pending_delay = if self.key1 & 0x80 != 0 { 4 } else { 8 };
+                #[cfg(feature = "ppu-trace")]
+                {
+                    let region = if (0x0000..=0x7FFF).contains(&src) {
+                        "ROM"
+                    } else if (0xA000..=0xBFFF).contains(&src) {
+                        "CARTRAM"
+                    } else if (0xC000..=0xDFFF).contains(&src) || (0xE000..=0xFDFF).contains(&src) {
+                        "WRAM"
+                    } else {
+                        "OTHER"
+                    };
+                    let pc_str = self
+                        .last_cpu_pc
+                        .map(|p| format!("{:04X}", p))
+                        .unwrap_or_else(|| "<none>".to_string());
+                    eprintln!(
+                        "[DMA] pending OAM DMA scheduled src={:04X} region={} pending_delay=8 pc={}",
+                        src, region, pc_str
+                    );
+                }
             }
             0xFF50 => self.boot_mapped = false,
             0xFF70 => {
@@ -447,8 +649,28 @@ impl Mmu {
                     && let Some(src) = self.pending_dma.take()
                 {
                     self.dma_source = src;
-                    // 160 bytes * 4 cycles each
-                    self.dma_cycles = 640;
+                    // Number of T-cycles for the OAM DMA transfer: 160 M-cycles.
+                    // In normal speed M-cycle = 4 T-cycles => 160 * 4 = 640.
+                    // In double-speed M-cycle = 2 T-cycles => 160 * 2 = 320.
+                    self.dma_cycles = if self.key1 & 0x80 != 0 { 320 } else { 640 };
+                    #[cfg(feature = "ppu-trace")]
+                    {
+                        let region = if (0x0000..=0x7FFF).contains(&src) {
+                            "ROM"
+                        } else if (0xA000..=0xBFFF).contains(&src) {
+                            "CARTRAM"
+                        } else if (0xC000..=0xDFFF).contains(&src)
+                            || (0xE000..=0xFDFF).contains(&src)
+                        {
+                            "WRAM"
+                        } else {
+                            "OTHER"
+                        };
+                        eprintln!(
+                            "[DMA] OAM DMA started src={:04X} region={} dma_cycles={}",
+                            src, region, self.dma_cycles
+                        );
+                    }
                 }
             }
 
@@ -456,10 +678,20 @@ impl Mmu {
                 continue;
             }
 
-            let elapsed = 640 - self.dma_cycles;
-            if elapsed.is_multiple_of(4) {
-                let idx: u16 = elapsed / 4;
+            // Determine per-byte cadence based on double-speed. In normal
+            // speed one byte is transferred every 4 T-cycles; in double-speed
+            // it's every 2 T-cycles.
+            let per_byte = if self.key1 & 0x80 != 0 { 2 } else { 4 };
+            let initial = if self.key1 & 0x80 != 0 { 320 } else { 640 };
+            let elapsed = initial - self.dma_cycles;
+            if elapsed.is_multiple_of(per_byte) {
+                let idx: u16 = elapsed / per_byte;
                 if idx < 0xA0 {
+                    // Clear `last_cpu_pc` to avoid attributing DMA-originated reads
+                    // to the last CPU instruction that happened to run. DMA
+                    // engine operations are independent of the CPU and should
+                    // not surface a CPU PC in logs.
+                    self.last_cpu_pc = None;
                     let byte = self.dma_read_byte(self.dma_source.wrapping_add(idx));
                     self.ppu.oam[idx as usize] = byte;
                 }
@@ -497,8 +729,13 @@ impl Mmu {
         let mut src = self.hdma.src;
         let mut dst = Self::sanitize_vram_dma_dest(self.hdma.dst);
 
+        // Clear last_cpu_pc so these DMA-driven reads/writes are not
+        // misattributed to the last executing CPU instruction in logs.
+        self.last_cpu_pc = None;
         for _ in 0..total_bytes {
-            let byte = self.read_byte(src);
+            // Read source using the DMA-aware reader so this GDMA operation
+            // can proceed even if an OAM DMA (`dma_cycles`) is active.
+            let byte = self.dma_read_byte(src);
             self.vram_dma_write(dst, byte);
             src = src.wrapping_add(1);
             dst = 0x8000 | ((dst.wrapping_add(1)) & 0x1FFF);
@@ -508,7 +745,8 @@ impl Mmu {
         self.hdma.dst = Self::sanitize_vram_dma_dest(dst);
         self.hdma.active = false;
         self.hdma.blocks = 0;
-        self.gdma_cycles = blocks as u32 * 8;
+        self.hdma.cancelled = false;
+        self.gdma_cycles = blocks as u32 * self.hdma_block_cycle_cost();
     }
 
     /// Execute a single 0x10-byte HDMA burst during H-Blank.
@@ -516,10 +754,19 @@ impl Mmu {
         if !(self.hdma.active && self.hdma.mode == DmaMode::Hdma) {
             return;
         }
+        self.perform_hdma_block();
+    }
 
+    fn perform_hdma_block(&mut self) {
         self.hdma.dst = Self::sanitize_vram_dma_dest(self.hdma.dst);
+        // Clear last_cpu_pc so HDMA transfers don't get logged with the
+        // previously executing CPU PC.
+        self.last_cpu_pc = None;
         for _ in 0..0x10 {
-            let byte = self.read_byte(self.hdma.src);
+            // HDMA source reads should also bypass the DMA blocking checks
+            // so HDMA can transfer data even if an OAM DMA is currently
+            // active.
+            let byte = self.dma_read_byte(self.hdma.src);
             self.vram_dma_write(self.hdma.dst, byte);
             self.hdma.src = self.hdma.src.wrapping_add(1);
             self.hdma.dst = 0x8000 | ((self.hdma.dst.wrapping_add(1)) & 0x1FFF);
@@ -528,10 +775,21 @@ impl Mmu {
         self.hdma.blocks = self.hdma.blocks.saturating_sub(1);
         if self.hdma.blocks == 0 {
             self.hdma.active = false;
+            self.hdma.cancelled = false;
         }
 
         self.hdma.dst = Self::sanitize_vram_dma_dest(self.hdma.dst);
-        self.gdma_cycles += 8;
+        self.gdma_cycles += self.hdma_block_cycle_cost();
+    }
+
+    fn complete_active_hdma(&mut self) {
+        while self.hdma.active && self.hdma.mode == DmaMode::Hdma {
+            self.perform_hdma_block();
+        }
+    }
+
+    fn hdma_block_cycle_cost(&self) -> u32 {
+        if self.key1 & 0x80 != 0 { 16 } else { 8 }
     }
 
     pub fn reset_div(&mut self) {

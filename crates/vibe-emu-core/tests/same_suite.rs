@@ -53,7 +53,11 @@ fn run_same_suite<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bo
         }
     }
     let out = gb.mmu.serial.take_output();
-    out.len() >= 6 && out[0..6] == FIB_SEQ
+    let ok = out.len() >= 6 && out[0..6] == FIB_SEQ;
+    if !ok && std::env::var_os("VIBEEMU_LOG_SERIAL").is_some() {
+        eprintln!("same suite output: {:02X?}", out);
+    }
+    ok
 }
 
 fn run_same_suite_gb<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> GameBoy {
@@ -76,6 +80,26 @@ fn run_same_suite_gb<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) ->
         }
     }
     gb
+}
+
+fn dump_dma_debug_info<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) {
+    if std::env::var_os("VIBEEMU_LOG_SERIAL").is_none() {
+        return;
+    }
+    let mut gb = run_same_suite_gb(rom_path, max_cycles);
+    let mut vram = [0u8; 32];
+    for (i, byte) in vram.iter_mut().enumerate() {
+        *byte = gb.mmu.read_byte(0x8800 + i as u16);
+    }
+    let hdma_src_hi = gb.mmu.read_byte(0xFF51);
+    let hdma_src_lo = gb.mmu.read_byte(0xFF52);
+    let hdma_dst_hi = gb.mmu.read_byte(0xFF53);
+    let hdma_dst_lo = gb.mmu.read_byte(0xFF54);
+    let hdma_len = gb.mmu.read_byte(0xFF55);
+    eprintln!(
+        "VRAM[8800..8820]: {:02X?} | HDMA src {:02X}{:02X} dst {:02X}{:02X} len {:02X}",
+        vram, hdma_src_hi, hdma_src_lo, hdma_dst_hi, hdma_dst_lo, hdma_len
+    );
 }
 
 #[test]
@@ -900,16 +924,21 @@ fn same_suite__dma__gdma_addr_mask_gb() {
 
 #[test]
 fn same_suite__dma__hdma_lcd_off_gb() {
-    let passed = run_same_suite(
-        common::rom_path("same-suite/dma/hdma_lcd_off.gb"),
-        20_000_000,
-    );
+    let rom = common::rom_path("same-suite/dma/hdma_lcd_off.gb");
+    let passed = run_same_suite(&rom, 20_000_000);
+    if !passed {
+        dump_dma_debug_info(&rom, 20_000_000);
+    }
     assert!(passed, "test failed");
 }
 
 #[test]
 fn same_suite__dma__hdma_mode0_gb() {
-    let passed = run_same_suite(common::rom_path("same-suite/dma/hdma_mode0.gb"), 20_000_000);
+    let rom = common::rom_path("same-suite/dma/hdma_mode0.gb");
+    let passed = run_same_suite(&rom, 20_000_000);
+    if !passed {
+        dump_dma_debug_info(&rom, 20_000_000);
+    }
     assert!(passed, "test failed");
 }
 

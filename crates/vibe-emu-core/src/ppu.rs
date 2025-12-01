@@ -235,6 +235,10 @@ impl Ppu {
         self.mode == MODE_HBLANK
     }
 
+    pub fn lcd_enabled(&self) -> bool {
+        self.lcdc & 0x80 != 0
+    }
+
     fn decode_cgb_color(lo: u8, hi: u8) -> u32 {
         let raw = ((hi as u16) << 8) | lo as u16;
         let r = ((raw & 0x1F) as u8) << 3 | ((raw & 0x1F) as u8 >> 2);

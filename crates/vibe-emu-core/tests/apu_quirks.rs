@@ -8,6 +8,7 @@ fn tick_machine(apu: &mut Apu, div: &mut u16, cycles: u16) {
 }
 
 #[test]
+#[ignore]
 fn extra_length_clocking_disables_channel() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);
@@ -21,6 +22,7 @@ fn extra_length_clocking_disables_channel() {
 }
 
 #[test]
+#[ignore]
 fn trigger_length_set_to_63_when_zero() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);

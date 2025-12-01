@@ -239,6 +239,7 @@ impl Cpu {
 
     #[inline(always)]
     fn fetch8(&mut self, mmu: &mut crate::mmu::Mmu) -> u8 {
+        mmu.last_cpu_pc = Some(self.pc);
         let val = mmu.read_byte(self.pc);
         self.pc = self.pc.wrapping_add(1);
         self.tick(mmu, 1);
@@ -254,6 +255,7 @@ impl Cpu {
 
     #[inline(always)]
     fn read8(&mut self, mmu: &mut crate::mmu::Mmu, addr: u16) -> u8 {
+        mmu.last_cpu_pc = Some(self.pc);
         let val = mmu.read_byte(addr);
         self.tick(mmu, 1);
         val
@@ -268,6 +270,7 @@ impl Cpu {
 
     #[inline(always)]
     fn write8(&mut self, mmu: &mut crate::mmu::Mmu, addr: u16, val: u8) {
+        mmu.last_cpu_pc = Some(self.pc);
         mmu.write_byte(addr, val);
         self.tick(mmu, 1);
     }
