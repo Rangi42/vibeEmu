@@ -20,7 +20,7 @@ use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Icon, Window};
+use winit::window::{Icon, Window, WindowAttributes};
 
 fn load_window_icon() -> Option<Icon> {
     let icon_data = include_bytes!(concat!(
@@ -159,6 +159,18 @@ fn cursor_in_screen(window: &winit::window::Window, pos: PhysicalPosition<f64>) 
     x_in && y_in
 }
 
+#[cfg(target_os = "windows")]
+fn enforce_square_corners(attrs: WindowAttributes) -> WindowAttributes {
+    use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
+
+    attrs.with_corner_preference(CornerPreference::DoNotRound)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn enforce_square_corners(attrs: WindowAttributes) -> WindowAttributes {
+    attrs
+}
+
 fn spawn_debugger_window(
     event_loop: &ActiveEventLoop,
     platform: &mut WinitPlatform,
@@ -166,10 +178,12 @@ fn spawn_debugger_window(
     windows: &mut HashMap<winit::window::WindowId, UiWindow>,
 ) {
     use winit::dpi::LogicalSize;
-    let attrs = Window::default_attributes()
-        .with_title("vibeEmu \u{2013} Debugger")
-        .with_window_icon(load_window_icon())
-        .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64));
+    let attrs = enforce_square_corners(
+        Window::default_attributes()
+            .with_title("vibeEmu \u{2013} Debugger")
+            .with_window_icon(load_window_icon())
+            .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64)),
+    );
     let w = event_loop.create_window(attrs).unwrap();
 
     let size = w.inner_size();
@@ -193,10 +207,12 @@ fn spawn_vram_window(
     windows: &mut HashMap<winit::window::WindowId, UiWindow>,
 ) {
     use winit::dpi::LogicalSize;
-    let attrs = Window::default_attributes()
-        .with_title("vibeEmu \u{2013} VRAM")
-        .with_window_icon(load_window_icon())
-        .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64));
+    let attrs = enforce_square_corners(
+        Window::default_attributes()
+            .with_title("vibeEmu \u{2013} VRAM")
+            .with_window_icon(load_window_icon())
+            .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64)),
+    );
     let w = event_loop.create_window(attrs).unwrap();
 
     let size = w.inner_size();
@@ -697,13 +713,15 @@ fn main() {
         let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::UpdateInput(0xFF)));
 
         let event_loop = EventLoop::builder().build().unwrap();
-        let attrs = Window::default_attributes()
-            .with_title("vibeEmu")
-            .with_window_icon(load_window_icon())
-            .with_inner_size(winit::dpi::LogicalSize::new(
-                (160 * SCALE) as f64,
-                (144 * SCALE) as f64,
-            ));
+        let attrs = enforce_square_corners(
+            Window::default_attributes()
+                .with_title("vibeEmu")
+                .with_window_icon(load_window_icon())
+                .with_inner_size(winit::dpi::LogicalSize::new(
+                    (160 * SCALE) as f64,
+                    (144 * SCALE) as f64,
+                )),
+        );
         #[allow(deprecated)]
         let window = event_loop.create_window(attrs).unwrap();
 
