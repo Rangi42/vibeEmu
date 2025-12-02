@@ -33,10 +33,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1550 | 2065 | 0 | 0 | 3615 | 42.9% |
-| Integration Tests | 150 | 28 | 0 | 0 | 178 | 84.3% |
+| ROM Test Suites | 1595 | 2020 | 0 | 0 | 3615 | 44.1% |
+| Integration Tests | 151 | 27 | 0 | 0 | 178 | 84.8% |
 | Unit Tests | 9 | 0 | 0 | 0 | 9 | 100.0% |
-| **Overall** | 1709 | 2093 | 0 | 0 | 3802 | 45.0% |
+| **Overall** | 1755 | 2047 | 0 | 0 | 3802 | 46.2% |
 
 ## Detailed Results
 
@@ -95,7 +95,7 @@ Combined exit code: 101
 | `dmg_sound_11_regs_after_power` | ❌ Fail |
 | `dmg_sound_12_wave_write_while_on` | ❌ Fail |
 
-#### gambatte (1408/3429 passing, 41.1%)
+#### gambatte (1442/3429 passing, 42.1%)
 
 | Test | Result |
 | --- | --- |
@@ -823,18 +823,23 @@ Combined exit code: 101
 | `oam_access/prewrite_ds_lcdoffset1_1_cgb04c_out1.gbc` | ✅ Pass |
 | `oam_access/prewrite_lcdoffset1_1_cgb04c_out1.gbc` | ✅ Pass |
 | `oam_access/prewrite_lcdoffset1_2_cgb04c_out0.gbc` | ✅ Pass |
+| `oamdma/late_sp00x_1_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp00x_ds_1_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp00y_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp00y_ds_2_cgb04c_out0.gbc` | ✅ Pass |
+| `oamdma/late_sp01x_1_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp01x_ds_1_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp01y_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp01y_ds_2_cgb04c_out0.gbc` | ✅ Pass |
+| `oamdma/late_sp02x_1_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp02y_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
+| `oamdma/late_sp39x_1_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp39x_3_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp39x_ds_1_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp39y_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp39y_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
+| `oamdma/oamdma_src0000_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busyread0000_3_dmg08_cgb04c_out1.gbc` | ✅ Pass |
@@ -843,48 +848,77 @@ Combined exit code: 101
 | `oamdma/oamdma_src0000_busyreadC000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busyreadFE00_1_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busyreadFE00_2_dmg08_cgb04c_out2.gbc` | ✅ Pass |
+| `oamdma/oamdma_src0000_busyreadFF4B_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_rombankchange_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_srambankchange_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_wrambankchange_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_src7F00_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
+| `oamdma/oamdma_src7F00_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src7F00_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
 | `oamdma/oamdma_src7F00_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypopBFFF_2_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypopDFFF_dmg08_cgb04c_out657655AA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypopEFFF_dmg08_cgb04c_out657655AA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypopFDFF_dmg08_cgb04c_out657655FF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypopFFFF_dmg08_cgb04c_out657655AA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypush0001_dmg08_cgb04c_out6576AA34.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypushC001_2_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypushE001_dmg08_cgb04c_out6576AA55.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypushF001_dmg08_cgb04c_out6576AA55.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busypushFE01_dmg08_cgb04c_out6576AA98.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busyread0000_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_busyread8000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_busyreadC000_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_srcchange0000_busyread0000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_vrambankchange_1_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_vrambankchange_2_cgb04c_out4.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_vrambankchange_3_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_vrambankchange_4_cgb04c_out3.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypopBFFF_2_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypopDFFF_dmg08_cgb04c_out657655AA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypopEFFF_dmg08_cgb04c_out657655AA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypopFDFF_dmg08_cgb04c_out657655FF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src9F00_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src9F00_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypopFFFF_dmg08_cgb04c_out657655AA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypush0001_dmg08_cgb04c_out6576AA34.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypushC001_2_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypushE001_dmg08_cgb04c_out6576AA55.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypushF001_dmg08_cgb04c_out6576AA55.gbc` | ✅ Pass |
+| `oamdma/oamdma_src9F00_busypushFE01_dmg08_cgb04c_out6576AA98.gbc` | ✅ Pass |
 | `oamdma/oamdma_src9F00_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
-| `oamdma/oamdma_srcA000_busypopBFFF_2_dmg08_outFFFFFFFF_cgb04c_outFFFFFFAA.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcA000_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
+| `oamdma/oamdma_srcA000_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcA000_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcA000_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcA000_busyread0000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcA000_busyreadC000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcA000_srambankchange_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcBF00_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
+| `oamdma/oamdma_srcBF00_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcBF00_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcBF00_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcC000_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
+| `oamdma/oamdma_srcC000_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcC000_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcC000_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcC000_busyreadA000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
-| `oamdma/oamdma_srcC000_srambankchange_1_dmg08_out4_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcC000_srambankchange_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcD000_wrambankchange_1_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcD000_wrambankchange_2_cgb04c_out4.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcDF00_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
+| `oamdma/oamdma_srcDF00_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcDF00_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcDF00_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcDF00_readFE00_dmg08_cgb04c_out2.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcF000_busyread0000_2_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `oamdma/oamdma_srcFE00_busyreadA000_dmg08_cgb04c_out0.gbc` | ✅ Pass |
+| `oamdma/oamdma_srcFF00_busyreadFF4B_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `scx_during_m3/scx_m3_extend_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `scx_during_m3/scx_m3_extend_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `serial/div_write_start_wait_read_if_1_dmg08_cgb04c_outE0.gbc` | ✅ Pass |
@@ -2331,20 +2365,16 @@ Combined exit code: 101
 | `oam_access/preread_ds_lcdoffset1_2_cgb04c_out3.gbc` | ❌ Fail |
 | `oam_access/prewrite_2_dmg08_out1_cgb04c_out0.gbc` | ❌ Fail |
 | `oam_access/prewrite_ds_lcdoffset1_2_cgb04c_out0.gbc` | ❌ Fail |
-| `oamdma/late_sp00x_1_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/late_sp00x_2_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp00x_ds_2_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp00y_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp00y_ds_1_cgb04c_out3.gbc` | ❌ Fail |
-| `oamdma/late_sp01x_1_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/late_sp01x_2_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp01x_ds_2_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp01y_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp01y_ds_1_cgb04c_out3.gbc` | ❌ Fail |
-| `oamdma/late_sp02x_1_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/late_sp02x_2_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp02y_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
-| `oamdma/late_sp39x_1_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/late_sp39x_2_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp39x_4_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp39x_ds_2_cgb04c_out3.gbc` | ❌ Fail |
@@ -2365,7 +2395,6 @@ Combined exit code: 101
 | `oamdma/oamdma_src0000_busypopDFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypopEFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypopFDFF_dmg08_out657665FF_cgb04c_out657655FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src0000_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypopFFFF_dmg08_cgb04c_out65765576.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypush0001_dmg08_cgb04c_out5576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypush8001_dmg08_cgb04c_out65AA1255.gbc` | ❌ Fail |
@@ -2386,7 +2415,6 @@ Combined exit code: 101
 | `oamdma/oamdma_src0000_busyread8000_dmg08_cgb04c_out1.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busyreadA000_1_dmg08_cgb04c_out5.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busyreadC000_1_dmg08_out5_cgb04c_out1.gbc` | ❌ Fail |
-| `oamdma/oamdma_src0000_busyreadFF4B_dmg08_cgb04c_out1.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busyrst0002_dmg08_cgb04c_outFF8DFA9E.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_rombankchange_1_dmg08_cgb04c_out4.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_srambankchange_1_dmg08_cgb04c_out4.gbc` | ❌ Fail |
@@ -2398,7 +2426,6 @@ Combined exit code: 101
 | `oamdma/oamdma_src7F00_busypopDFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypopEFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypopFDFF_dmg08_out657665FF_cgb04c_out657655FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src7F00_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypopFFFF_dmg08_cgb04c_out65765576.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypush0001_dmg08_cgb04c_out5576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypush8001_dmg08_cgb04c_out65AA1255.gbc` | ❌ Fail |
@@ -2414,28 +2441,15 @@ Combined exit code: 101
 | `oamdma/oamdma_src8000_busypop7FFF_dmg08_out65765576_cgb04c_out65005576.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busypop9FFF_2_dmg08_out657665FF_cgb04c_out007665FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busypop9FFF_dmg08_out657665AA_cgb04c_out007665AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypopBFFF_2_dmg08_cgb04c_out6576FFAA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busypopBFFF_dmg08_cgb04c_out657655AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypopDFFF_dmg08_cgb04c_out657655AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypopEFFF_dmg08_cgb04c_out657655AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypopFDFF_dmg08_cgb04c_out657655FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypopFFFF_dmg08_cgb04c_out657655AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypush0001_dmg08_cgb04c_out6576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busypush8001_dmg08_out55761234_cgb04c_out00761234.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busypushA001_2_dmg08_out65AA12FF_cgb04c_out650012FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busypushA001_dmg08_out65AA1255_cgb04c_out65001255.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypushC001_2_dmg08_cgb04c_out6576FF55.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busypushC001_dmg08_cgb04c_out6576AA55.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypushE001_dmg08_cgb04c_out6576AA55.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypushF001_dmg08_cgb04c_out6576AA55.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busypushFE01_dmg08_cgb04c_out6576AA98.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busypushFEA1_dmg08_out65768700_cgb04c_out65768734.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busypushFF01_dmg08_out657600DF_cgb04c_out657612DF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busyread0000_dmg08_cgb04c_out1.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busyread8000_1_dmg08_cgb04c_out5.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busyreadA000_dmg08_cgb04c_out1.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_busyreadC000_dmg08_cgb04c_out1.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busywrite8000_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_srcchange0000_busyinc_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_srcchange0000_busyread0000_1_dmg08_cgb04c_out5.gbc` | ❌ Fail |
@@ -2443,32 +2457,21 @@ Combined exit code: 101
 | `oamdma/oamdma_src9F00_busypop7FFF_dmg08_out65765576_cgb04c_out65005576.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypop9FFF_2_dmg08_out657665FF_cgb04c_out007665FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypop9FFF_dmg08_out657665AA_cgb04c_out007665AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypopBFFF_2_dmg08_cgb04c_out6576FFAA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypopBFFF_dmg08_cgb04c_out657655AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypopDFFF_dmg08_cgb04c_out657655AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypopEFFF_dmg08_cgb04c_out657655AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypopFDFF_dmg08_cgb04c_out657655FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypopFFFF_dmg08_cgb04c_out657655AA.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypush0001_dmg08_cgb04c_out6576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypush8001_dmg08_out55761234_cgb04c_out00761234.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypushA001_2_dmg08_out65AA12FF_cgb04c_out650012FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypushA001_dmg08_out65AA1255_cgb04c_out65001255.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypushC001_2_dmg08_cgb04c_out6576FF55.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypushC001_dmg08_cgb04c_out6576AA55.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypushE001_dmg08_cgb04c_out6576AA55.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypushF001_dmg08_cgb04c_out6576AA55.gbc` | ❌ Fail |
-| `oamdma/oamdma_src9F00_busypushFE01_dmg08_cgb04c_out6576AA98.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypushFEA1_dmg08_out65768700_cgb04c_out65768734.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypushFF01_dmg08_out657600DF_cgb04c_out657612DF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypop7FFF_dmg08_cgb04c_out657665AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypop9FFF_2_dmg08_cgb04c_outFFFF55FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypop9FFF_dmg08_cgb04c_out65765576.gbc` | ❌ Fail |
+| `oamdma/oamdma_srcA000_busypopBFFF_2_dmg08_outFFFFFFFF_cgb04c_outFFFFFFAA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypopBFFF_dmg08_out65766576_cgb04c_out657665AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypopDFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypopEFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypopFDFF_dmg08_out657665FF_cgb04c_out657655FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_srcA000_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypopFFFF_dmg08_cgb04c_out65765576.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypush0001_dmg08_cgb04c_out5576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcA000_busypush8001_dmg08_cgb04c_out65AA1255.gbc` | ❌ Fail |
@@ -2493,7 +2496,6 @@ Combined exit code: 101
 | `oamdma/oamdma_srcBF00_busypopDFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcBF00_busypopEFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcBF00_busypopFDFF_dmg08_out657665FF_cgb04c_out657655FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_srcBF00_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcBF00_busypopFFFF_dmg08_cgb04c_out65765576.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcBF00_busypush0001_dmg08_cgb04c_out5576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcBF00_busypush8001_dmg08_cgb04c_out65AA1255.gbc` | ❌ Fail |
@@ -2514,7 +2516,6 @@ Combined exit code: 101
 | `oamdma/oamdma_srcC000_busypopDFFF_dmg08_cgb04c_out65766576.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcC000_busypopEFFF_dmg08_cgb04c_out65766576.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcC000_busypopFDFF_dmg08_cgb04c_out657665FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_srcC000_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcC000_busypopFFFF_dmg08_out65765576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcC000_busypush0001_dmg08_out4576AA34_cgb04c_out6576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcC000_busypush8001_dmg08_out65221255_cgb04c_out65761255.gbc` | ❌ Fail |
@@ -2528,6 +2529,7 @@ Combined exit code: 101
 | `oamdma/oamdma_srcC000_busypushFEA1_dmg08_out65768700_cgb04c_out65768734.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcC000_busypushFF01_dmg08_out657600DF_cgb04c_out657612DF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcC000_busyreadA000_1_dmg08_out5_cgb04c_out1.gbc` | ❌ Fail |
+| `oamdma/oamdma_srcC000_srambankchange_1_dmg08_out4_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcDF00_busypop7FFF_dmg08_out657665AA_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcDF00_busypop9FFF_2_dmg08_out65765576_cgb04c_out657655FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcDF00_busypop9FFF_dmg08_out65765576_cgb04c_out657655AA.gbc` | ❌ Fail |
@@ -2536,7 +2538,6 @@ Combined exit code: 101
 | `oamdma/oamdma_srcDF00_busypopDFFF_dmg08_cgb04c_out65766576.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcDF00_busypopEFFF_dmg08_cgb04c_out65766576.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcDF00_busypopFDFF_dmg08_cgb04c_out657665FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_srcDF00_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcDF00_busypopFFFF_dmg08_out65765576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcDF00_busypush0001_dmg08_out4576AA34_cgb04c_out6576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcDF00_busypush8001_dmg08_out65221255_cgb04c_out65761255.gbc` | ❌ Fail |
@@ -2683,7 +2684,6 @@ Combined exit code: 101
 | `oamdma/oamdma_srcFF00_busyread8000_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcFF00_busyreadA000_dmg08_out1_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcFF00_busyreadC000_dmg08_out1_cgb_xoutblank.gbc` | ❌ Fail |
-| `oamdma/oamdma_srcFF00_busyreadFF4B_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcFF00_readFE00_dmg08_out1_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcFF00_readFE45_dmg08_out1_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/oamdmasrc80_halt_lycirq_read8000_dmg08_cgb04c_out81.gbc` | ❌ Fail |
@@ -3549,10 +3549,11 @@ Combined exit code: 101
 | `mem_timing_read` | ✅ Pass |
 | `mem_timing_write` | ✅ Pass |
 
-#### mooneye_acceptance (56/75 passing, 74.7%)
+#### mooneye_acceptance (67/75 passing, 89.3%)
 
 | Test | Result |
 | --- | --- |
+| `add_sp_e_timing_gb` | ✅ Pass |
 | `bits__mem_oam_gb` | ✅ Pass |
 | `bits__reg_f_gb` | ✅ Pass |
 | `bits__unused_hwio_GS_gb` | ✅ Pass |
@@ -3563,7 +3564,9 @@ Combined exit code: 101
 | `boot_regs_dmg0_gb` | ✅ Pass |
 | `boot_regs_dmgABC_gb` | ✅ Pass |
 | `call_cc_timing2_gb` | ✅ Pass |
+| `call_cc_timing_gb` | ✅ Pass |
 | `call_timing2_gb` | ✅ Pass |
+| `call_timing_gb` | ✅ Pass |
 | `di_timing_GS_gb` | ✅ Pass |
 | `div_timing_gb` | ✅ Pass |
 | `ei_sequence_gb` | ✅ Pass |
@@ -3576,8 +3579,13 @@ Combined exit code: 101
 | `instr__daa_gb` | ✅ Pass |
 | `interrupts__ie_push_gb` | ✅ Pass |
 | `intr_timing_gb` | ✅ Pass |
+| `jp_cc_timing_gb` | ✅ Pass |
+| `jp_timing_gb` | ✅ Pass |
+| `ld_hl_sp_e_timing_gb` | ✅ Pass |
 | `oam_dma__basic_gb` | ✅ Pass |
+| `oam_dma__reg_read_gb` | ✅ Pass |
 | `oam_dma__sources_GS_gb` | ✅ Pass |
+| `oam_dma_restart_gb` | ✅ Pass |
 | `oam_dma_start_gb` | ✅ Pass |
 | `oam_dma_timing_gb` | ✅ Pass |
 | `pop_timing_gb` | ✅ Pass |
@@ -3593,7 +3601,10 @@ Combined exit code: 101
 | `ppu__vblank_stat_intr_GS_gb` | ✅ Pass |
 | `push_timing_gb` | ✅ Pass |
 | `rapid_di_ei_gb` | ✅ Pass |
+| `ret_cc_timing_gb` | ✅ Pass |
+| `ret_timing_gb` | ✅ Pass |
 | `reti_intr_timing_gb` | ✅ Pass |
+| `reti_timing_gb` | ✅ Pass |
 | `rst_timing_gb` | ✅ Pass |
 | `serial__boot_sclk_align_dmgABCmgb_gb` | ✅ Pass |
 | `timer__div_write_gb` | ✅ Pass |
@@ -3609,25 +3620,14 @@ Combined exit code: 101
 | `timer__tima_reload_gb` | ✅ Pass |
 | `timer__tima_write_reloading_gb` | ✅ Pass |
 | `timer__tma_write_reloading_gb` | ✅ Pass |
-| `add_sp_e_timing_gb` | ❌ Fail |
 | `boot_div2_S_gb` | ❌ Fail |
 | `boot_div_S_gb` | ❌ Fail |
 | `boot_hwio_S_gb` | ❌ Fail |
 | `boot_regs_mgb_gb` | ❌ Fail |
 | `boot_regs_sgb2_gb` | ❌ Fail |
 | `boot_regs_sgb_gb` | ❌ Fail |
-| `call_cc_timing_gb` | ❌ Fail |
-| `call_timing_gb` | ❌ Fail |
-| `jp_cc_timing_gb` | ❌ Fail |
-| `jp_timing_gb` | ❌ Fail |
-| `ld_hl_sp_e_timing_gb` | ❌ Fail |
-| `oam_dma__reg_read_gb` | ❌ Fail |
-| `oam_dma_restart_gb` | ❌ Fail |
 | `ppu__intr_2_mode0_timing_sprites_gb` | ❌ Fail |
 | `ppu__lcdon_write_timing_GS_gb` | ❌ Fail |
-| `ret_cc_timing_gb` | ❌ Fail |
-| `ret_timing_gb` | ❌ Fail |
-| `reti_timing_gb` | ❌ Fail |
 
 #### same_suite (61/78 passing, 78.2%)
 
@@ -3871,7 +3871,7 @@ Combined exit code: 101
 | `stop_speed_switch` | ✅ Pass |
 | `stop_speed_switch_resets_div` | ✅ Pass |
 
-#### mmu (10/11 passing, 90.9%)
+#### mmu (11/11 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
@@ -3881,11 +3881,11 @@ Combined exit code: 101
 | `mbc1_ram_enable` | ✅ Pass |
 | `mbc1_rom_bank_switching` | ✅ Pass |
 | `oam_dma_initial_delay` | ✅ Pass |
+| `oam_dma_restart_timing` | ✅ Pass |
 | `oam_dma_transfer` | ✅ Pass |
 | `vram_bank_switch` | ✅ Pass |
 | `vram_oam_access_blocking` | ✅ Pass |
 | `wram_echo_and_bank_switch` | ✅ Pass |
-| `oam_dma_restart_timing` | ❌ Fail |
 
 #### ppu (18/18 passing, 100.0%)
 

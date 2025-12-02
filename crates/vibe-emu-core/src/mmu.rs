@@ -161,14 +161,13 @@ impl Mmu {
 
     fn read_byte_inner(&mut self, addr: u16, allow_dma: bool) -> u8 {
         if !allow_dma && self.dma_cycles > 0 {
-            // PanDocs: On DMG (non-CGB) during OAM DMA the CPU can access only
-            // HRAM ($FF80-$FFFE). On CGB behavior is more permissive due to
-            // separate buses; keep existing permissive behavior for CGB.
-            if !self.cgb_mode {
-                // Only allow HRAM accesses on DMG.
-                if (0xFF80..=0xFFFE).contains(&addr) {
-                    // allowed
-                } else if (0xFE00..=0xFEFF).contains(&addr) {
+            match addr {
+                // Allow ROM, WRAM/Echo and all I/O/HRAM accesses during the
+                // transfer. These regions remain readable/writable because
+                // they reside on buses that stay available even while OAM DMA
+                // monopolizes the VRAM/OAM bus.
+                0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
+                0xFE00..=0xFEFF => {
                     #[cfg(feature = "ppu-trace")]
                     {
                         let pc_str = self
@@ -181,7 +180,8 @@ impl Mmu {
                         );
                     }
                     return 0xFF;
-                } else {
+                }
+                _ => {
                     #[cfg(feature = "ppu-trace")]
                     {
                         let region = if (0x8000..=0x9FFF).contains(&addr) {
@@ -199,45 +199,6 @@ impl Mmu {
                         );
                     }
                     return 0xFF;
-                }
-            } else {
-                // CGB: allow ROM, WRAM and I/O/HRAM during DMA as before; but
-                // still block OAM and other regions.
-                match addr {
-                    0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
-                    0xFE00..=0xFEFF => {
-                        #[cfg(feature = "ppu-trace")]
-                        {
-                            let pc_str = self
-                                .last_cpu_pc
-                                .map(|p| format!("{:04X}", p))
-                                .unwrap_or_else(|| "<none>".to_string());
-                            eprintln!(
-                                "[DMA] read blocked (OAM) addr={:04X} dma_cycles={} pc={}",
-                                addr, self.dma_cycles, pc_str
-                            );
-                        }
-                        return 0xFF;
-                    }
-                    _ => {
-                        #[cfg(feature = "ppu-trace")]
-                        {
-                            let region = if (0x8000..=0x9FFF).contains(&addr) {
-                                "VRAM"
-                            } else {
-                                "OTHER"
-                            };
-                            let pc_str = self
-                                .last_cpu_pc
-                                .map(|p| format!("{:04X}", p))
-                                .unwrap_or_else(|| "<none>".to_string());
-                            eprintln!(
-                                "[DMA] read blocked ({}) addr={:04X} dma_cycles={} pc={}",
-                                region, addr, self.dma_cycles, pc_str
-                            );
-                        }
-                        return 0xFF;
-                    }
                 }
             }
         }
@@ -400,11 +361,9 @@ impl Mmu {
 
     pub fn write_byte(&mut self, addr: u16, val: u8) {
         if self.dma_cycles > 0 {
-            if !self.cgb_mode {
-                // On DMG only HRAM is accessible during OAM DMA.
-                if (0xFF80..=0xFFFE).contains(&addr) {
-                    // allowed
-                } else if (0xFE00..=0xFEFF).contains(&addr) {
+            match addr {
+                0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
+                0xFE00..=0xFEFF => {
                     #[cfg(feature = "ppu-trace")]
                     {
                         let pc_str = self
@@ -417,7 +376,8 @@ impl Mmu {
                         );
                     }
                     return;
-                } else {
+                }
+                _ => {
                     #[cfg(feature = "ppu-trace")]
                     {
                         let region = if (0x8000..=0x9FFF).contains(&addr) {
@@ -435,45 +395,6 @@ impl Mmu {
                         );
                     }
                     return;
-                }
-            } else {
-                // CGB: allow ROM, WRAM and all I/O/HRAM during DMA as before;
-                // but block OAM and other regions.
-                match addr {
-                    0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
-                    0xFE00..=0xFEFF => {
-                        #[cfg(feature = "ppu-trace")]
-                        {
-                            let pc_str = self
-                                .last_cpu_pc
-                                .map(|p| format!("{:04X}", p))
-                                .unwrap_or_else(|| "<none>".to_string());
-                            eprintln!(
-                                "[DMA] write blocked (OAM) addr={:04X} val={:02X} dma_cycles={} pc={}",
-                                addr, val, self.dma_cycles, pc_str
-                            );
-                        }
-                        return;
-                    }
-                    _ => {
-                        #[cfg(feature = "ppu-trace")]
-                        {
-                            let region = if (0x8000..=0x9FFF).contains(&addr) {
-                                "VRAM"
-                            } else {
-                                "OTHER"
-                            };
-                            let pc_str = self
-                                .last_cpu_pc
-                                .map(|p| format!("{:04X}", p))
-                                .unwrap_or_else(|| "<none>".to_string());
-                            eprintln!(
-                                "[DMA] write blocked ({}) addr={:04X} val={:02X} dma_cycles={} pc={}",
-                                region, addr, val, self.dma_cycles, pc_str
-                            );
-                        }
-                        return;
-                    }
                 }
             }
         }
