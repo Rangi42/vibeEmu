@@ -125,6 +125,8 @@ pub struct Ppu {
     debug_lcd_enable_timer: Option<u64>,
     #[cfg(feature = "ppu-trace")]
     debug_prev_mode: u8,
+    /// Runtime DMG palette (allows choosing alternate non-green palettes)
+    dmg_palette: [u32; 4],
 }
 
 /// Default DMG palette colors in 0x00RRGGBB order for the `pixels` crate.
@@ -180,11 +182,17 @@ impl Ppu {
             dmg_startup_cycle: None,
             dmg_startup_stage: None,
             dmg_post_startup_line2: false,
+            dmg_palette: DMG_PALETTE,
             #[cfg(feature = "ppu-trace")]
             debug_lcd_enable_timer: None,
             #[cfg(feature = "ppu-trace")]
             debug_prev_mode: MODE_OAM,
         }
+    }
+
+    /// Set a runtime DMG palette. Colors are in 0x00RRGGBB order.
+    pub fn set_dmg_palette(&mut self, pal: [u32; 4]) {
+        self.dmg_palette = pal;
     }
 
     /// Collect up to 10 sprites visible on the current scanline.
@@ -750,7 +758,7 @@ impl Ppu {
             Self::decode_cgb_color(self.bgpd[0], self.bgpd[1])
         } else {
             let idx = Self::dmg_shade(self.bgp, 0);
-            DMG_PALETTE[idx as usize]
+            self.dmg_palette[idx as usize]
         };
         for x in 0..SCREEN_WIDTH {
             let idx = self.ly as usize * SCREEN_WIDTH + x;
@@ -811,7 +819,7 @@ impl Ppu {
                     )
                 } else {
                     let idx = Self::dmg_shade(self.bgp, color_id);
-                    (DMG_PALETTE[idx as usize], idx)
+                    (self.dmg_palette[idx as usize], idx)
                 };
                 let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
                 self.framebuffer[idx] = color;
@@ -868,7 +876,7 @@ impl Ppu {
                         )
                     } else {
                         let idx = Self::dmg_shade(self.bgp, color_id);
-                        (DMG_PALETTE[idx as usize], idx)
+                        (self.dmg_palette[idx as usize], idx)
                     };
                     let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
                     self.framebuffer[idx] = color;
@@ -935,10 +943,10 @@ impl Ppu {
                         Self::decode_cgb_color(self.obpd[off], self.obpd[off + 1])
                     } else if s.flags & 0x10 != 0 {
                         let idxc = Self::dmg_shade(self.obp1, color_id);
-                        DMG_PALETTE[idxc as usize]
+                        self.dmg_palette[idxc as usize]
                     } else {
                         let idxc = Self::dmg_shade(self.obp0, color_id);
-                        DMG_PALETTE[idxc as usize]
+                        self.dmg_palette[idxc as usize]
                     };
                     let idx = self.ly as usize * SCREEN_WIDTH + sx as usize;
                     self.framebuffer[idx] = color;

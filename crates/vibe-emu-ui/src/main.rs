@@ -117,6 +117,10 @@ struct Args {
     #[arg(long, conflicts_with = "cgb")]
     dmg: bool,
 
+    /// Use a neutral (non-green) DMG palette
+    #[arg(long)]
+    dmg_neutral: bool,
+
     /// Force CGB mode
     #[arg(long, conflicts_with = "dmg")]
     cgb: bool,
@@ -672,6 +676,11 @@ fn main() {
     };
     let mut gb = GameBoy::new_with_revision(cgb_mode, CgbRevision::default());
     gb.mmu.load_cart(cart);
+    // If user requested a neutral/non-green DMG palette, apply it.
+    if !cgb_mode && args.dmg_neutral {
+        const NEUTRAL_DMG_PALETTE: [u32; 4] = [0x00E0F8D0, 0x0088C070, 0x00346856, 0x00081820];
+        gb.mmu.ppu.set_dmg_palette(NEUTRAL_DMG_PALETTE);
+    }
 
     if let Some(path) = args.bootrom {
         match std::fs::read(&path) {
