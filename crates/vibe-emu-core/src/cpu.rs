@@ -1500,7 +1500,12 @@ impl Cpu {
                     }
                     | if self.a < val { FLAG_C } else { 0 };
             }
-            _ => panic!("unhandled opcode {opcode:02X}"),
+            _ => {
+                panic!(
+                    "unhandled opcode {opcode:02X} at PC={:04X}",
+                    self.pc.wrapping_sub(1)
+                );
+            }
         }
 
         if enable_after && self.ime_enable_delay > 0 {

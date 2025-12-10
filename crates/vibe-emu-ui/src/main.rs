@@ -683,7 +683,11 @@ fn main() {
 
     if let Some(path) = args.bootrom {
         match std::fs::read(&path) {
-            Ok(data) => gb.mmu.load_boot_rom(data),
+            Ok(data) => {
+                gb.mmu.load_boot_rom(data);
+                // Start executing from the boot ROM entry point.
+                gb.cpu.pc = 0x0000;
+            }
             Err(e) => warn!("Failed to load boot ROM: {e}"),
         }
     }

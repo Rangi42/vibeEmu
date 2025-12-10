@@ -203,7 +203,17 @@ impl Mmu {
             }
         }
         match addr {
+            // When the boot ROM is mapped, overlay it on the lower
+            // portion of the address space. On DMG this covers
+            // 0x0000-0x00FF. On CGB the internal boot ROM also maps
+            // 0x0200-0x08FF while leaving the cartridge header at
+            // 0x0100-0x01FF visible.
             0x0000..=0x00FF if self.boot_mapped => self
+                .boot_rom
+                .as_ref()
+                .and_then(|b| b.get(addr as usize).copied())
+                .unwrap_or(0xFF),
+            0x0200..=0x08FF if self.boot_mapped && self.cgb_mode => self
                 .boot_rom
                 .as_ref()
                 .and_then(|b| b.get(addr as usize).copied())

@@ -79,6 +79,52 @@ fn boot_rom_disable() {
 }
 
 #[test]
+fn cgb_boot_rom_mapping() {
+    // CGB mode MMU with a cartridge and a synthetic 0x900-byte boot ROM.
+    let mut rom = vec![0u8; 0x8000];
+    rom[0x0000] = 0xC0;
+    rom[0x00FF] = 0xC1;
+    rom[0x0100] = 0xC2;
+    rom[0x01FF] = 0xC3;
+    rom[0x0200] = 0xC4;
+    rom[0x08FF] = 0xC5;
+    let cart = Cartridge::from_bytes_with_ram(rom, 0);
+
+    let mut mmu = Mmu::new_with_mode(true);
+    mmu.load_cart(cart);
+
+    let mut boot = vec![0u8; 0x900];
+    boot[0x0000] = 0xA0;
+    boot[0x00FF] = 0xA1;
+    boot[0x0100] = 0xA2; // should never be visible while boot ROM is mapped
+    boot[0x01FF] = 0xA3; // should never be visible while boot ROM is mapped
+    boot[0x0200] = 0xA4;
+    boot[0x08FF] = 0xA5;
+    mmu.load_boot_rom(boot);
+
+    // While boot ROM is mapped, DMG-compatible 0x0000-0x00FF region comes from boot ROM.
+    assert_eq!(mmu.read_byte(0x0000), 0xA0);
+    assert_eq!(mmu.read_byte(0x00FF), 0xA1);
+
+    // On CGB, 0x0100-0x01FF remains mapped to the cartridge header.
+    assert_eq!(mmu.read_byte(0x0100), 0xC2);
+    assert_eq!(mmu.read_byte(0x01FF), 0xC3);
+
+    // CGB-only extension: 0x0200-0x08FF should also be served from boot ROM.
+    assert_eq!(mmu.read_byte(0x0200), 0xA4);
+    assert_eq!(mmu.read_byte(0x08FF), 0xA5);
+
+    // After disabling the boot ROM via FF50, all addresses should revert to the cartridge.
+    mmu.write_byte(0xFF50, 1);
+    assert_eq!(mmu.read_byte(0x0000), 0xC0);
+    assert_eq!(mmu.read_byte(0x00FF), 0xC1);
+    assert_eq!(mmu.read_byte(0x0100), 0xC2);
+    assert_eq!(mmu.read_byte(0x01FF), 0xC3);
+    assert_eq!(mmu.read_byte(0x0200), 0xC4);
+    assert_eq!(mmu.read_byte(0x08FF), 0xC5);
+}
+
+#[test]
 fn cartridge_ram_access() {
     let mut mmu = Mmu::new();
     mmu.load_cart(Cartridge::from_bytes_with_ram(vec![0; 0x200], 0x2000));
