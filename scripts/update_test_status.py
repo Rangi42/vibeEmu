@@ -123,23 +123,34 @@ def gather_integration_modules() -> Dict[str, str]:
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        category = "rom" if "rom_path" in text else "integration"
+        # Most ROM-based tests call `rom_path` to locate the test ROMs.
+        # As a safe fallback, treat any test whose filename mentions
+        # "interrupt_time" or other known blargg suites as a ROM test.
+        if "rom_path" in text:
+            category = "rom"
+        elif "interrupt_time" in path.stem or "blargg" in path.stem:
+            category = "rom"
+        else:
+            category = "integration"
         modules[path.stem] = category
     return modules
 
 
 def build_test_commands(integration_modules: Dict[str, str]) -> List[Tuple[List[str], str]]:
     commands: List[Tuple[List[str], str]] = []
-    commands.append((["cargo", "test", "--lib", "--", "--include-ignored"], "lib"))
+    commands.append((["cargo", "test", "--release", "--lib", "--", "--include-ignored"], "lib"))
 
     bin_target = REPO_ROOT.name
     if (REPO_ROOT / "src" / "main.rs").exists():
-        commands.append((["cargo", "test", "--bin", bin_target, "--", "--include-ignored"], f"bin:{bin_target}"))
+        commands.append((["cargo", "test", "--release", "--bin", bin_target, "--", "--include-ignored"], f"bin:{bin_target}"))
 
-    commands.append((["cargo", "test", "--doc"], "doc"))
+    commands.append((["cargo", "test", "--release", "--doc"], "doc"))
 
     for module in sorted(integration_modules):
-        commands.append((["cargo", "test", "--test", module, "--", "--include-ignored"], f"test:{module}"))
+        commands.append((["cargo", "test", "--release", "--test", module, "--", "--include-ignored"], f"test:{module}"))
+    # Ensure the gambatte test is always executed (some repos keep it out of discovery).
+    if not any("gambatte" in cmd for cmd, _ in commands):
+        commands.append((["cargo", "test", "--release", "--test", "gambatte", "--", "--include-ignored"], "test:gambatte"))
 
     return commands
 

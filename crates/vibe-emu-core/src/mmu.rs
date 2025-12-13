@@ -48,6 +48,10 @@ pub struct Mmu {
     pub ppu: Ppu,
     pub apu: Apu,
     pub timer: Timer,
+    /// 16-bit divider counter in the LCD dot clock domain (used for APU/serial timing).
+    /// In normal speed this matches the CPU divider progression; in CGB double-speed
+    /// the CPU divider advances twice as fast as this dot counter.
+    pub dot_div: u16,
     pub input: Input,
     hdma: HdmaState,
     pub key1: u8,
@@ -91,6 +95,8 @@ impl Mmu {
             DmgRevision::RevA | DmgRevision::RevB | DmgRevision::RevC => 0xABCC,
         };
 
+        let dot_div = timer.div;
+
         let mut ppu = Ppu::new_with_mode(cgb);
         ppu.apply_boot_state(if cgb { None } else { Some(dmg_revision) });
 
@@ -107,6 +113,7 @@ impl Mmu {
             ppu,
             apu: Apu::new_with_revisions(cgb, dmg_revision, cgb_revision),
             timer,
+            dot_div,
             input: Input::new(),
             hdma: HdmaState {
                 src: 0,
@@ -731,25 +738,36 @@ impl Mmu {
     }
 
     pub fn reset_div(&mut self) {
-        let prev_div = self.timer.div;
+        let prev_dot_div = self.dot_div;
+        self.dot_div = 0;
+
+        // DIV/TIMA are derived from the CPU clock domain.
         self.timer.reset_div(&mut self.if_reg);
+
         let double_speed = self.key1 & 0x80 != 0;
-        self.apu.on_div_reset(prev_div, double_speed);
+        self.apu.on_div_reset(prev_dot_div, double_speed);
     }
 
     fn tick(&mut self, m_cycles: u32) {
-        let hw_cycles = if self.key1 & 0x80 != 0 {
+        let dot_cycles = if self.key1 & 0x80 != 0 {
             2 * m_cycles as u16
         } else {
             4 * m_cycles as u16
         };
-        let prev_div = self.timer.div;
-        self.timer.step(hw_cycles, &mut self.if_reg);
-        let curr_div = self.timer.div;
+
+        // CPU clock cycles: always 4 cycles per M-cycle regardless of CGB speed.
+        let cpu_cycles = 4u16.saturating_mul(m_cycles as u16);
+
+        let prev_dot_div = self.dot_div;
+        self.dot_div = self.dot_div.wrapping_add(dot_cycles);
+        let curr_dot_div = self.dot_div;
+
+        self.timer.step(cpu_cycles, &mut self.if_reg);
         // Advance 2 MHz domain before 1 MHz staging to match APU internal ordering
-        self.apu.step(hw_cycles);
-        self.apu.tick(prev_div, curr_div, self.key1 & 0x80 != 0);
-        let _ = self.ppu.step(hw_cycles, &mut self.if_reg);
+        self.apu.step(dot_cycles);
+        self.apu
+            .tick(prev_dot_div, curr_dot_div, self.key1 & 0x80 != 0);
+        let _ = self.ppu.step(dot_cycles, &mut self.if_reg);
     }
 }
 

@@ -235,12 +235,16 @@ fn double_speed_timer_scaling() {
     mmu.key1 = 0x01;
 
     cpu.step(&mut mmu); // STOP
-    let div_before = mmu.timer.div;
+    let cpu_div_before = mmu.timer.div;
+    let dot_div_before = mmu.dot_div;
     cpu.step(&mut mmu); // NOP
 
     assert!(cpu.double_speed);
-    // In double speed, hardware advances half the cycles (2) for a NOP
-    assert_eq!(mmu.timer.div.wrapping_sub(div_before), 2);
+    // In double speed, the CPU clock is 2x but DIV/TIMA remain in the CPU clock domain,
+    // so timer.div still advances by 4 cycles for a NOP.
+    assert_eq!(mmu.timer.div.wrapping_sub(cpu_div_before), 4);
+    // Meanwhile the dot clock advances half as many cycles.
+    assert_eq!(mmu.dot_div.wrapping_sub(dot_div_before), 2);
 }
 
 #[test]
@@ -282,9 +286,12 @@ fn stop_speed_switch_resets_div() {
     cpu.step(&mut mmu); // STOP (switch speed)
     assert!(cpu.double_speed);
     assert_eq!(mmu.timer.div, 0);
-    let start = mmu.timer.div;
+    assert_eq!(mmu.dot_div, 0);
+    let cpu_start = mmu.timer.div;
+    let dot_start = mmu.dot_div;
     cpu.step(&mut mmu); // NOP
-    assert_eq!(mmu.timer.div.wrapping_sub(start), 2);
+    assert_eq!(mmu.timer.div.wrapping_sub(cpu_start), 4);
+    assert_eq!(mmu.dot_div.wrapping_sub(dot_start), 2);
 }
 
 #[test]
@@ -300,12 +307,14 @@ fn div_rate_double_speed() {
     mmu.timer.div = 0;
 
     cpu.step(&mut mmu); // STOP -> enable double speed
-    let start = mmu.timer.div;
+    let cpu_start = mmu.timer.div;
+    let dot_start = mmu.dot_div;
     for _ in 0..128 {
         cpu.step(&mut mmu); // NOPs
     }
 
     assert!(cpu.double_speed);
-    assert_eq!(mmu.timer.div.wrapping_sub(start), 256);
-    assert_eq!(mmu.timer.read(0xFF04), 1);
+    assert_eq!(mmu.timer.div.wrapping_sub(cpu_start), 512);
+    assert_eq!(mmu.dot_div.wrapping_sub(dot_start), 256);
+    assert_eq!(mmu.timer.read(0xFF04), 2);
 }

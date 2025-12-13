@@ -302,15 +302,10 @@ fn execute_mode(
 
     let audio = if requirements.needs_audio {
         let mut samples = Vec::new();
-        let mut apu = gb
-            .mmu
-            .apu
-            .lock()
-            .map_err(|_| format!("failed to lock APU for {}", rom.display()))?;
-        while let Some(sample) = apu.pop_sample() {
-            samples.push(sample);
+        let consumer = gb.mmu.apu.enable_output(44_100);
+        while let Some((left, _right)) = consumer.pop_stereo() {
+            samples.push(left);
         }
-        drop(apu);
         Some(samples)
     } else {
         None

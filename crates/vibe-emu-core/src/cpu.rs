@@ -212,26 +212,37 @@ impl Cpu {
 
     #[inline]
     fn tick(&mut self, mmu: &mut crate::mmu::Mmu, m_cycles: u8) {
-        let hw_cycles = if self.double_speed {
+        let dot_cycles = if self.double_speed {
             CYCLES_PER_M_CYCLE_DOUBLE
         } else {
             CYCLES_PER_M_CYCLE
         } * m_cycles as u16;
-        self.cycles += hw_cycles as u64;
-        let prev_div = mmu.timer.div;
-        mmu.timer.step(hw_cycles, &mut mmu.if_reg);
-        let curr_div = mmu.timer.div;
+
+        // CPU clock cycles: always 4 cycles per M-cycle regardless of CGB speed.
+        let cpu_cycles = CYCLES_PER_M_CYCLE * m_cycles as u16;
+
+        self.cycles += dot_cycles as u64;
+
+        let prev_dot_div = mmu.dot_div;
+        mmu.dot_div = mmu.dot_div.wrapping_add(dot_cycles);
+        let curr_dot_div = mmu.dot_div;
+
+        mmu.timer.step(cpu_cycles, &mut mmu.if_reg);
         // Advance 2 MHz domain first so duty edges and suppression changes
         // are visible to the subsequent 1 MHz staging/PCM update in the
         // same CPU step (aligns with the APU's internal ordering for audio updates).
-        mmu.apu.step(hw_cycles);
-        mmu.apu.tick(prev_div, curr_div, self.double_speed);
-        mmu.serial
-            .step(prev_div, curr_div, self.double_speed, &mut mmu.if_reg);
-        if mmu.ppu.step(hw_cycles, &mut mmu.if_reg) {
+        mmu.apu.step(dot_cycles);
+        mmu.apu.tick(prev_dot_div, curr_dot_div, self.double_speed);
+        mmu.serial.step(
+            prev_dot_div,
+            curr_dot_div,
+            self.double_speed,
+            &mut mmu.if_reg,
+        );
+        if mmu.ppu.step(dot_cycles, &mut mmu.if_reg) {
             mmu.hdma_hblank_transfer();
         }
-        mmu.dma_step(hw_cycles);
+        mmu.dma_step(dot_cycles);
     }
 
     #[inline(always)]
