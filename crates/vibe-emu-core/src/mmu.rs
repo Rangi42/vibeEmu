@@ -64,6 +64,7 @@ pub struct Mmu {
     /// Last CPU program counter observed when the CPU performed a memory
     /// operation. This is set by the `Cpu` helpers before calling into the
     /// MMU so logs can attribute blocked accesses to the originating PC.
+    #[cfg(feature = "ppu-trace")]
     pub last_cpu_pc: Option<u16>,
 }
 
@@ -125,6 +126,7 @@ impl Mmu {
             cgb_mode: cgb,
             cgb_revision,
             dmg_revision,
+            #[cfg(feature = "ppu-trace")]
             last_cpu_pc: None,
         }
     }
@@ -604,9 +606,10 @@ impl Mmu {
                 continue;
             }
 
-            // Determine per-byte cadence based on double-speed. In normal
-            // speed one byte is transferred every 4 T-cycles; in double-speed
-            // it's every 2 T-cycles.
+            #[cfg(feature = "ppu-trace")]
+            {
+                self.last_cpu_pc = None;
+            }
             let per_byte = if self.key1 & 0x80 != 0 { 2 } else { 4 };
             let initial = if self.key1 & 0x80 != 0 { 320 } else { 640 };
             let elapsed = initial - self.dma_cycles;
@@ -617,7 +620,10 @@ impl Mmu {
                     // to the last CPU instruction that happened to run. DMA
                     // engine operations are independent of the CPU and should
                     // not surface a CPU PC in logs.
-                    self.last_cpu_pc = None;
+                    #[cfg(feature = "ppu-trace")]
+                    {
+                        self.last_cpu_pc = None;
+                    }
                     let byte = self.dma_read_byte(self.dma_source.wrapping_add(idx));
                     self.ppu.oam[idx as usize] = byte;
                 }
@@ -657,7 +663,10 @@ impl Mmu {
 
         // Clear last_cpu_pc so these DMA-driven reads/writes are not
         // misattributed to the last executing CPU instruction in logs.
-        self.last_cpu_pc = None;
+        #[cfg(feature = "ppu-trace")]
+        {
+            self.last_cpu_pc = None;
+        }
         for _ in 0..total_bytes {
             // Read source using the DMA-aware reader so this GDMA operation
             // can proceed even if an OAM DMA (`dma_cycles`) is active.
@@ -687,7 +696,10 @@ impl Mmu {
         self.hdma.dst = Self::sanitize_vram_dma_dest(self.hdma.dst);
         // Clear last_cpu_pc so HDMA transfers don't get logged with the
         // previously executing CPU PC.
-        self.last_cpu_pc = None;
+        #[cfg(feature = "ppu-trace")]
+        {
+            self.last_cpu_pc = None;
+        }
         for _ in 0..0x10 {
             // HDMA source reads should also bypass the DMA blocking checks
             // so HDMA can transfer data even if an OAM DMA is currently

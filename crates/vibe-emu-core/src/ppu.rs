@@ -407,14 +407,14 @@ impl Ppu {
     pub fn oam_accessible(&self) -> bool {
         if self.mode == MODE_OAM || self.mode == MODE_TRANSFER {
             #[cfg(feature = "ppu-trace")]
-            if let Some(stage) = self.dmg_startup_stage {
-                if stage <= 5 {
-                    ppu_trace!(
-                        "oam blocked by mode stage={} cycle={:?}",
-                        stage,
-                        self.dmg_startup_cycle
-                    );
-                }
+            if let Some(stage) = self.dmg_startup_stage
+                && stage <= 5
+            {
+                ppu_trace!(
+                    "oam blocked by mode stage={} cycle={:?}",
+                    stage,
+                    self.dmg_startup_cycle
+                );
             }
             return false;
         }
@@ -1032,22 +1032,22 @@ impl Ppu {
                             }
                             *if_reg |= 0x01;
                             #[cfg(feature = "ppu-trace")]
-                            if let Some(after) = debug_cycles_after {
-                                if after <= 512 {
-                                    ppu_trace!("entering VBlank at ly={} @{}", self.ly, after);
-                                }
+                            if let Some(after) = debug_cycles_after
+                                && after <= 512
+                            {
+                                ppu_trace!("entering VBlank at ly={} @{}", self.ly, after);
                             }
                         } else {
                             self.mode = MODE_OAM;
                             #[cfg(feature = "ppu-trace")]
-                            if let Some(after) = debug_cycles_after {
-                                if after <= 512 {
-                                    ppu_trace!(
-                                        "transition -> MODE_OAM ly={} (after HBlank) @{}",
-                                        self.ly,
-                                        after
-                                    );
-                                }
+                            if let Some(after) = debug_cycles_after
+                                && after <= 512
+                            {
+                                ppu_trace!(
+                                    "transition -> MODE_OAM ly={} (after HBlank) @{}",
+                                    self.ly,
+                                    after
+                                );
                             }
                         }
                     }
@@ -1076,15 +1076,15 @@ impl Ppu {
                             self.dmg_post_startup_line2 = false;
                         }
                         #[cfg(feature = "ppu-trace")]
-                        if let Some(after) = debug_cycles_after {
-                            if after <= 512 {
-                                ppu_trace!(
-                                    "entering MODE3 ly={} mode_clock={} @{}",
-                                    self.ly,
-                                    self.mode_clock,
-                                    after
-                                );
-                            }
+                        if let Some(after) = debug_cycles_after
+                            && after <= 512
+                        {
+                            ppu_trace!(
+                                "entering MODE3 ly={} mode_clock={} @{}",
+                                self.ly,
+                                self.mode_clock,
+                                after
+                            );
                         }
                     }
                 }
@@ -1095,15 +1095,15 @@ impl Ppu {
                         self.mode = MODE_HBLANK;
                         hblank_triggered = true;
                         #[cfg(feature = "ppu-trace")]
-                        if let Some(after) = debug_cycles_after {
-                            if after <= 512 {
-                                ppu_trace!(
-                                    "entering HBlank ly={} mode_clock={} @{}",
-                                    self.ly,
-                                    self.mode_clock,
-                                    after
-                                );
-                            }
+                        if let Some(after) = debug_cycles_after
+                            && after <= 512
+                        {
+                            ppu_trace!(
+                                "entering HBlank ly={} mode_clock={} @{}",
+                                self.ly,
+                                self.mode_clock,
+                                after
+                            );
                         }
                     }
                 }
@@ -1113,16 +1113,16 @@ impl Ppu {
             #[cfg(feature = "ppu-trace")]
             {
                 if self.debug_prev_mode != self.mode {
-                    if let Some(after) = debug_cycles_after {
-                        if after <= 512 {
-                            ppu_trace!(
-                                "mode {} -> {} at {} cycles (ly={})",
-                                self.debug_prev_mode,
-                                self.mode,
-                                after,
-                                self.ly
-                            );
-                        }
+                    if let Some(after) = debug_cycles_after
+                        && after <= 512
+                    {
+                        ppu_trace!(
+                            "mode {} -> {} at {} cycles (ly={})",
+                            self.debug_prev_mode,
+                            self.mode,
+                            after,
+                            self.ly
+                        );
                     }
                     self.debug_prev_mode = self.mode;
                 }
