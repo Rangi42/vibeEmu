@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 pub mod apu;
+pub mod audio_queue;
 pub mod cartridge;
 pub mod cpu;
 pub mod gameboy;

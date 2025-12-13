@@ -7,7 +7,6 @@ use crate::{
     serial::Serial,
     timer::Timer,
 };
-use std::sync::{Arc, Mutex};
 
 const WRAM_BANK_SIZE: usize = 0x1000;
 
@@ -47,7 +46,7 @@ pub struct Mmu {
     pub ie_reg: u8,
     pub serial: Serial,
     pub ppu: Ppu,
-    pub apu: Arc<Mutex<Apu>>,
+    pub apu: Apu,
     pub timer: Timer,
     pub input: Input,
     hdma: HdmaState,
@@ -105,11 +104,7 @@ impl Mmu {
             ie_reg: 0,
             serial: Serial::new(cgb, dmg_revision),
             ppu,
-            apu: Arc::new(Mutex::new(Apu::new_with_revisions(
-                cgb,
-                dmg_revision,
-                cgb_revision,
-            ))),
+            apu: Apu::new_with_revisions(cgb, dmg_revision, cgb_revision),
             timer,
             input: Input::new(),
             hdma: HdmaState {
@@ -269,7 +264,7 @@ impl Mmu {
             0xFF01 | 0xFF02 => self.serial.read(addr),
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.if_reg,
-            0xFF10..=0xFF3F => self.apu.lock().unwrap().read_reg(addr),
+            0xFF10..=0xFF3F => self.apu.read_reg(addr),
             0xFF40..=0xFF45 | 0xFF47..=0xFF4B | 0xFF68..=0xFF6B => self.ppu.read_reg(addr),
             0xFF46 => self.ppu.dma,
             0xFF51 => {
@@ -344,7 +339,7 @@ impl Mmu {
             }
             0xFF76 | 0xFF77 => {
                 if self.cgb_mode {
-                    self.apu.lock().unwrap().read_pcm(addr)
+                    self.apu.read_pcm(addr)
                 } else {
                     0xFF
                 }
@@ -449,7 +444,7 @@ impl Mmu {
             }
             0xFF05..=0xFF07 => self.timer.write(addr, val, &mut self.if_reg),
             0xFF0F => self.if_reg = (val & 0x1F) | (self.if_reg & 0xE0),
-            0xFF10..=0xFF3F => self.apu.lock().unwrap().write_reg(addr, val),
+            0xFF10..=0xFF3F => self.apu.write_reg(addr, val),
             0xFF40 => {
                 let lcd_was_on = self.ppu.lcd_enabled();
                 self.ppu.write_reg(addr, val);
@@ -727,10 +722,7 @@ impl Mmu {
         let prev_div = self.timer.div;
         self.timer.reset_div(&mut self.if_reg);
         let double_speed = self.key1 & 0x80 != 0;
-        self.apu
-            .lock()
-            .unwrap()
-            .on_div_reset(prev_div, double_speed);
+        self.apu.on_div_reset(prev_div, double_speed);
     }
 
     fn tick(&mut self, m_cycles: u32) {
@@ -742,12 +734,9 @@ impl Mmu {
         let prev_div = self.timer.div;
         self.timer.step(hw_cycles, &mut self.if_reg);
         let curr_div = self.timer.div;
-        {
-            let mut apu = self.apu.lock().unwrap();
-            // Advance 2 MHz domain before 1 MHz staging to match APU internal ordering
-            apu.step(hw_cycles);
-            apu.tick(prev_div, curr_div, self.key1 & 0x80 != 0);
-        }
+        // Advance 2 MHz domain before 1 MHz staging to match APU internal ordering
+        self.apu.step(hw_cycles);
+        self.apu.tick(prev_div, curr_div, self.key1 & 0x80 != 0);
         let _ = self.ppu.step(hw_cycles, &mut self.if_reg);
     }
 }

@@ -29,6 +29,7 @@ fn frame_sequencer_tick() {
 #[ignore]
 fn sample_generation() {
     let mut apu = Apu::new();
+    let consumer = apu.enable_output(44_100);
     // enable sound and channel 2 with simple settings
     apu.write_reg(0xFF26, 0x80); // master enable
     apu.write_reg(0xFF24, 0x77); // max volume
@@ -44,7 +45,7 @@ fn sample_generation() {
             tick_machine(&mut apu, &mut div, 4);
         }
     }
-    assert!(apu.pop_sample().is_some());
+    assert!(consumer.pop_stereo().is_some());
 }
 #[test]
 #[ignore]
@@ -298,12 +299,9 @@ fn pcm_mmu_mapping() {
     mmu.write_byte(0xFF16, 0xC0);
     mmu.write_byte(0xFF17, 0xF0);
     mmu.write_byte(0xFF19, 0x80);
-    {
-        let mut apu = mmu.apu.lock().unwrap();
-        let mut div = 0u16;
-        for _ in 0..(8300 / 4) {
-            tick_machine(&mut apu, &mut div, 4);
-        }
+    let mut div = 0u16;
+    for _ in 0..(8300 / 4) {
+        tick_machine(&mut mmu.apu, &mut div, 4);
     }
     assert_eq!(mmu.read_byte(0xFF76), 0xF0);
     let mut dmg = Mmu::new();
@@ -409,6 +407,7 @@ fn nr52_wave_ram_persist() {
 
 fn run_ch2_sample(pan: u8) -> (i16, i16) {
     let mut apu = Apu::new();
+    let consumer = apu.enable_output(44_100);
     apu.write_reg(0xFF26, 0x80); // enable
     apu.write_reg(0xFF24, 0x77); // max volume
     apu.write_reg(0xFF25, pan); // panning
@@ -420,13 +419,12 @@ fn run_ch2_sample(pan: u8) -> (i16, i16) {
     for _ in 0..25 {
         tick_machine(&mut apu, &mut div, 4);
     }
-    let left = apu.pop_sample().unwrap();
-    let right = apu.pop_sample().unwrap();
-    (left, right)
+    consumer.pop_stereo().unwrap()
 }
 
 fn run_ch2_sample_with_nr50(pan: u8, nr50: u8) -> (i16, i16) {
     let mut apu = Apu::new();
+    let consumer = apu.enable_output(44_100);
     apu.write_reg(0xFF26, 0x80); // enable
     apu.write_reg(0xFF24, nr50); // master volume
     apu.write_reg(0xFF25, pan); // panning
@@ -438,9 +436,7 @@ fn run_ch2_sample_with_nr50(pan: u8, nr50: u8) -> (i16, i16) {
     for _ in 0..25 {
         tick_machine(&mut apu, &mut div, 4);
     }
-    let left = apu.pop_sample().unwrap();
-    let right = apu.pop_sample().unwrap();
-    (left, right)
+    consumer.pop_stereo().unwrap()
 }
 
 #[test]

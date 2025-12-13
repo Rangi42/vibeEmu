@@ -1,6 +1,6 @@
 use std::cell::Cell;
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+
+use crate::audio_queue::{AudioConsumer, AudioProducer, audio_queue};
 
 use crate::hardware::{CgbRevision, DmgRevision};
 
@@ -715,126 +715,6 @@ impl FrameSequencer {
     }
 }
 
-struct AudioDiagnostics {
-    last_report: Instant,
-    dropped_since_report: u64,
-    underruns_since_report: u64,
-    pushes_since_report: u64,
-    pops_since_report: u64,
-    min_depth: usize,
-    max_depth: usize,
-}
-
-impl AudioDiagnostics {
-    fn new() -> Self {
-        let now = Instant::now();
-        let mut diag = Self {
-            last_report: now,
-            dropped_since_report: 0,
-            underruns_since_report: 0,
-            pushes_since_report: 0,
-            pops_since_report: 0,
-            min_depth: usize::MAX,
-            max_depth: 0,
-        };
-        diag.reset_window(0, now);
-        diag
-    }
-
-    fn reset_window(&mut self, depth: usize, now: Instant) {
-        self.last_report = now;
-        self.dropped_since_report = 0;
-        self.underruns_since_report = 0;
-        self.pushes_since_report = 0;
-        self.pops_since_report = 0;
-        self.min_depth = depth;
-        self.max_depth = depth;
-    }
-
-    fn reset_now(&mut self, depth: usize) {
-        self.reset_window(depth, Instant::now());
-    }
-
-    fn record_push(&mut self, depth: usize, max_depth: usize, sample_rate: u32) {
-        self.pushes_since_report += 1;
-        self.observe_depth(depth);
-        self.maybe_report(depth, max_depth, sample_rate);
-    }
-
-    fn record_pop(&mut self, depth: usize, max_depth: usize, sample_rate: u32) {
-        self.pops_since_report += 1;
-        self.observe_depth(depth);
-        self.maybe_report(depth, max_depth, sample_rate);
-    }
-
-    fn record_drop(&mut self, dropped: usize, depth: usize, max_depth: usize, sample_rate: u32) {
-        self.dropped_since_report += dropped as u64;
-        self.observe_depth(depth);
-        self.maybe_report(depth, max_depth, sample_rate);
-    }
-
-    fn record_underrun(&mut self, max_depth: usize, sample_rate: u32) {
-        self.underruns_since_report += 1;
-        self.maybe_report(0, max_depth, sample_rate);
-    }
-
-    fn observe_depth(&mut self, depth: usize) {
-        self.min_depth = self.min_depth.min(depth);
-        self.max_depth = self.max_depth.max(depth);
-    }
-
-    fn maybe_report(&mut self, depth: usize, max_depth: usize, sample_rate: u32) {
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.last_report);
-        if elapsed < Duration::from_secs(1) {
-            return;
-        }
-
-        let low_threshold = (max_depth / 4).max(1);
-        let should_warn = self.underruns_since_report > 0;
-        let should_info =
-            should_warn || self.dropped_since_report > 0 || self.min_depth <= low_threshold;
-
-        if should_info {
-            let min_ms = Self::frames_to_ms(self.min_depth, sample_rate);
-            let max_ms = Self::frames_to_ms(self.max_depth, sample_rate);
-            let depth_ms = Self::frames_to_ms(depth, sample_rate);
-            if should_warn {
-                log::warn!(
-                    "audio underrun: {underruns} underruns, {drops} dropped frames in {:?}; depth {}..{} frames ({min_ms:.1}..{max_ms:.1} ms), current {} frames ({depth_ms:.1} ms) / max {}",
-                    elapsed,
-                    self.min_depth,
-                    self.max_depth,
-                    depth,
-                    max_depth,
-                    underruns = self.underruns_since_report,
-                    drops = self.dropped_since_report,
-                );
-            } else {
-                log::info!(
-                    "audio buffer low: depth {}..{} frames ({min_ms:.1}..{max_ms:.1} ms) within {:?}; drops={} underruns={} current {} frames ({depth_ms:.1} ms) / max {}",
-                    self.min_depth,
-                    self.max_depth,
-                    elapsed,
-                    self.dropped_since_report,
-                    self.underruns_since_report,
-                    depth,
-                    max_depth,
-                );
-            }
-        }
-
-        self.reset_window(depth, now);
-    }
-
-    fn frames_to_ms(frames: usize, rate: u32) -> f32 {
-        if rate == 0 {
-            return 0.0;
-        }
-        (frames as f32 / rate as f32) * 1000.0
-    }
-}
-
 pub struct Apu {
     ch1: SquareChannel,
     ch2: SquareChannel,
@@ -847,10 +727,7 @@ pub struct Apu {
     sequencer: FrameSequencer,
     sample_rate: u32,
     sample_timer_accum: u64,
-    samples: VecDeque<[i16; 2]>,
-    max_queued_frames: usize,
-    pending_sample: Option<i16>,
-    audio_diag: AudioDiagnostics,
+    audio_out: Option<AudioProducer>,
     pcm_samples: [u8; 4],
     pcm_active: [bool; 4],
     pcm_mask: [u8; 2],
@@ -909,78 +786,37 @@ impl Apu {
     }
 
     pub fn queued_frames(&self) -> usize {
-        self.samples.len()
+        self.audio_out.as_ref().map(|q| q.len()).unwrap_or(0)
     }
 
     pub fn max_queue_capacity(&self) -> usize {
-        self.max_queued_frames
+        self.audio_out
+            .as_ref()
+            .map(|q| q.capacity_frames())
+            .unwrap_or(0)
+    }
+
+    /// Enable lock-free audio output and return a consumer handle that can be
+    /// drained by the audio backend.
+    pub fn enable_output(&mut self, sample_rate: u32) -> AudioConsumer {
+        self.set_sample_rate(sample_rate);
+        let capacity_frames = Self::max_frames_for_rate(sample_rate);
+        let (producer, consumer) = audio_queue(capacity_frames);
+        self.audio_out = Some(producer);
+        consumer
+    }
+
+    /// Disable audio output.
+    pub fn disable_output(&mut self) {
+        self.audio_out = None;
     }
 
     pub fn push_samples(&mut self, left: i16, right: i16) {
         if !self.tracking_audio() {
             return;
         }
-        if self.samples.len() >= self.max_queued_frames {
-            let excess = self.samples.len() + 1 - self.max_queued_frames;
-            self.samples.drain(..excess);
-            self.audio_diag.record_drop(
-                excess,
-                self.samples.len(),
-                self.max_queued_frames,
-                self.sample_rate,
-            );
-        }
-        self.samples.push_back([left, right]);
-        self.audio_diag
-            .record_push(self.samples.len(), self.max_queued_frames, self.sample_rate);
-    }
-
-    pub fn pop_sample(&mut self) -> Option<i16> {
-        if let Some(sample) = self.pending_sample.take() {
-            return Some(sample);
-        }
-        match self.samples.pop_front() {
-            Some([left, right]) => {
-                self.pending_sample = Some(right);
-                if self.tracking_audio() {
-                    self.audio_diag.record_pop(
-                        self.samples.len(),
-                        self.max_queued_frames,
-                        self.sample_rate,
-                    );
-                }
-                Some(left)
-            }
-            None => {
-                if self.tracking_audio() {
-                    self.audio_diag
-                        .record_underrun(self.max_queued_frames, self.sample_rate);
-                }
-                None
-            }
-        }
-    }
-
-    pub fn pop_stereo(&mut self) -> Option<(i16, i16)> {
-        self.pending_sample = None;
-        match self.samples.pop_front() {
-            Some([left, right]) => {
-                if self.tracking_audio() {
-                    self.audio_diag.record_pop(
-                        self.samples.len(),
-                        self.max_queued_frames,
-                        self.sample_rate,
-                    );
-                }
-                Some((left, right))
-            }
-            None => {
-                if self.tracking_audio() {
-                    self.audio_diag
-                        .record_underrun(self.max_queued_frames, self.sample_rate);
-                }
-                None
-            }
+        if let Some(out) = &self.audio_out {
+            let _ = out.push_stereo(left, right);
         }
     }
 
@@ -1176,11 +1012,8 @@ impl Apu {
         self.regs.fill(0);
         self.nr50 = 0;
         self.nr51 = 0;
-        self.samples.clear();
-        self.pending_sample = None;
-        self.max_queued_frames = Self::max_frames_for_rate(self.sample_rate);
+        self.disable_output();
         self.sample_timer_accum = 0;
-        self.audio_diag.reset_now(self.samples.len());
         self.pcm_samples = [0; 4];
         self.pcm_active = [false; 4];
         self.pcm_mask = [0xFF; 2];
@@ -1338,7 +1171,6 @@ impl Apu {
         self.ch4.envelope.add = new_val & 0x08 != 0;
     }
     fn new_internal() -> Self {
-        let max_frames = Self::max_frames_for_rate(44_100);
         let mut apu = Self {
             ch1: SquareChannel::new(true),
             ch2: SquareChannel::new(false),
@@ -1352,10 +1184,7 @@ impl Apu {
             sequencer: FrameSequencer::new(),
             sample_rate: 44_100,
             sample_timer_accum: 0,
-            samples: VecDeque::with_capacity(max_frames),
-            max_queued_frames: max_frames,
-            pending_sample: None,
-            audio_diag: AudioDiagnostics::new(),
+            audio_out: None,
             pcm_samples: [0; 4],
             pcm_active: [false; 4],
             pcm_mask: [0xFF; 2],
@@ -2873,27 +2702,9 @@ impl Apu {
 
     pub fn set_sample_rate(&mut self, rate: u32) {
         self.sample_rate = rate;
-        self.max_queued_frames = Self::max_frames_for_rate(rate);
-        let mut dropped = 0;
-        if self.samples.len() > self.max_queued_frames {
-            dropped = self.samples.len() - self.max_queued_frames;
-            self.samples.drain(..dropped);
-        }
         self.sample_timer_accum = 0;
-        self.pending_sample = None;
         self.hp_coef = Apu::calc_hp_coef(rate);
-        if dropped > 0 {
-            log::warn!(
-                "audio queue shrank with new sample rate: dropped {dropped} frames (capacity {} frames)",
-                self.max_queued_frames,
-            );
-        }
-        self.audio_diag.reset_now(self.samples.len());
-        let buffer_ms = AudioDiagnostics::frames_to_ms(self.max_queued_frames, self.sample_rate);
-        log::info!(
-            "APU sample rate set to {rate} Hz (queue capacity {} frames, ~{buffer_ms:.1} ms)",
-            self.max_queued_frames,
-        );
+        // Queue sizing is handled by `enable_output()`.
     }
 
     pub fn sequencer_step(&self) -> u8 {

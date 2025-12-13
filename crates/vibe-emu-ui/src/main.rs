@@ -260,10 +260,8 @@ fn run_emulator_thread(
                     EmuCommand::SetSpeed(new_speed) => {
                         speed = new_speed;
                         next_frame = Instant::now() + FRAME_TIME;
-                        if let Ok(gb) = gb.lock()
-                            && let Ok(mut apu) = gb.mmu.apu.lock()
-                        {
-                            apu.set_speed(speed.factor);
+                        if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.apu.set_speed(speed.factor);
                         }
                     }
                     EmuCommand::UpdateInput(state) => {
@@ -301,9 +299,7 @@ fn run_emulator_thread(
         let mut serial = None;
 
         if let Ok(mut gb) = gb.lock() {
-            if let Ok(mut apu) = gb.mmu.apu.lock() {
-                apu.set_speed(speed.factor);
-            }
+            gb.mmu.apu.set_speed(speed.factor);
 
             {
                 let (cpu, mmu) = {
@@ -322,20 +318,13 @@ fn run_emulator_thread(
                 let elapsed = frame_start.elapsed();
                 let warn_threshold = FRAME_TIME + FRAME_TIME / 2;
                 if elapsed > warn_threshold {
-                    if let Ok(apu) = gb.mmu.apu.lock() {
-                        warn!(
-                            "Frame emulation exceeded budget: {:?} vs {:?} (audio queue {} / {})",
-                            elapsed,
-                            FRAME_TIME,
-                            apu.queued_frames(),
-                            apu.max_queue_capacity()
-                        );
-                    } else {
-                        warn!(
-                            "Frame emulation exceeded budget: {:?} vs {:?} (audio queue unavailable)",
-                            elapsed, FRAME_TIME
-                        );
-                    }
+                    warn!(
+                        "Frame emulation exceeded budget: {:?} vs {:?} (audio queue {} / {})",
+                        elapsed,
+                        FRAME_TIME,
+                        gb.mmu.apu.queued_frames(),
+                        gb.mmu.apu.max_queue_capacity()
+                    );
                 }
             }
 
@@ -534,16 +523,10 @@ fn configure_wgpu_backend() {
 }
 
 fn prime_audio_queue(gb: &mut GameBoy) -> (usize, usize) {
-    let capacity = {
-        let apu = gb.mmu.apu.lock().unwrap();
-        apu.max_queue_capacity().max(1)
-    };
+    let capacity = gb.mmu.apu.max_queue_capacity().max(1);
     let target_frames = ((capacity as f32) * AUDIO_WARMUP_TARGET_RATIO).ceil() as usize;
 
-    let mut queued = {
-        let apu = gb.mmu.apu.lock().unwrap();
-        apu.queued_frames()
-    };
+    let mut queued = gb.mmu.apu.queued_frames();
     if queued >= target_frames {
         return (queued, target_frames);
     }
@@ -557,8 +540,7 @@ fn prime_audio_queue(gb: &mut GameBoy) -> (usize, usize) {
         if steps >= AUDIO_WARMUP_CHECK_INTERVAL {
             steps = 0;
             let now = Instant::now();
-            let apu = gb.mmu.apu.lock().unwrap();
-            queued = apu.queued_frames();
+            queued = gb.mmu.apu.queued_frames();
             if queued >= target_frames || now >= deadline {
                 break;
             }
@@ -566,10 +548,7 @@ fn prime_audio_queue(gb: &mut GameBoy) -> (usize, usize) {
     }
 
     if queued < target_frames {
-        queued = {
-            let apu = gb.mmu.apu.lock().unwrap();
-            apu.queued_frames()
-        };
+        queued = gb.mmu.apu.queued_frames();
     }
 
     (queued, target_frames)
@@ -605,11 +584,9 @@ fn rebuild_audio_stream(gb: &mut GameBoy, speed: Speed, audio_stream: &mut Optio
         drop(stream);
     }
 
-    if let Ok(mut apu) = gb.mmu.apu.lock() {
-        apu.set_speed(speed.factor);
-    }
+    gb.mmu.apu.set_speed(speed.factor);
 
-    *audio_stream = audio::start_stream(Arc::clone(&gb.mmu.apu), false);
+    *audio_stream = audio::start_stream(&mut gb.mmu.apu, false);
     if audio_stream.is_none() {
         warn!("Audio output disabled; continuing without sound");
         return;

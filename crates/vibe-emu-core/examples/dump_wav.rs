@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -50,15 +49,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut gb = GameBoy::new_with_revisions(force_cgb, DmgRevision::default(), cgb_revision);
     gb.mmu.load_cart(cart);
 
-    {
-        let mut apu = gb.mmu.apu.lock().unwrap();
-        apu.set_sample_rate(SAMPLE_RATE);
-        apu.set_speed(1.0);
-    }
+    gb.mmu.apu.set_speed(1.0);
+    let consumer = gb.mmu.apu.enable_output(SAMPLE_RATE);
 
     let total_frames = (seconds * SAMPLE_RATE as f64).ceil() as usize;
     let mut frames_written = 0usize;
-    let mut fifo = VecDeque::new();
 
     let spec = hound::WavSpec {
         channels: 2,
@@ -80,15 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while frames_written < total_frames && gb.cpu.cycles <= cycle_budget {
         gb.cpu.step(&mut gb.mmu);
-        {
-            let mut apu = gb.mmu.apu.lock().unwrap();
-            while let Some(sample) = apu.pop_sample() {
-                fifo.push_back(sample);
-            }
-        }
-        while frames_written < total_frames && fifo.len() >= 2 {
-            let left = fifo.pop_front().unwrap();
-            let right = fifo.pop_front().unwrap();
+        while frames_written < total_frames {
+            let Some((left, right)) = consumer.pop_stereo() else {
+                break;
+            };
             writer.write_sample(left)?;
             writer.write_sample(right)?;
             frames_written += 1;
@@ -96,15 +86,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Drain any leftover samples once the main loop exits.
-    {
-        let mut apu = gb.mmu.apu.lock().unwrap();
-        while let Some(sample) = apu.pop_sample() {
-            fifo.push_back(sample);
-        }
-    }
-    while frames_written < total_frames && fifo.len() >= 2 {
-        let left = fifo.pop_front().unwrap();
-        let right = fifo.pop_front().unwrap();
+    while frames_written < total_frames {
+        let Some((left, right)) = consumer.pop_stereo() else {
+            break;
+        };
         writer.write_sample(left)?;
         writer.write_sample(right)?;
         frames_written += 1;
