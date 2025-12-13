@@ -1,4 +1,5 @@
 use crate::hardware::DmgRevision;
+use crate::ppu::OamBugAccess;
 
 // CPU flag bits as documented in gbdev.io/pandocs/The_CPU_Flags.html
 const FLAG_Z: u8 = 0x80; // Zero
@@ -247,10 +248,7 @@ impl Cpu {
 
     #[inline(always)]
     fn fetch8(&mut self, mmu: &mut crate::mmu::Mmu) -> u8 {
-        #[cfg(feature = "ppu-trace")]
-        {
-            mmu.last_cpu_pc = Some(self.pc);
-        }
+        mmu.last_cpu_pc = Some(self.pc);
         let val = mmu.read_byte(self.pc);
         self.pc = self.pc.wrapping_add(1);
         self.tick(mmu, 1);
@@ -266,10 +264,7 @@ impl Cpu {
 
     #[inline(always)]
     fn read8(&mut self, mmu: &mut crate::mmu::Mmu, addr: u16) -> u8 {
-        #[cfg(feature = "ppu-trace")]
-        {
-            mmu.last_cpu_pc = Some(self.pc);
-        }
+        mmu.last_cpu_pc = Some(self.pc);
         let val = mmu.read_byte(addr);
         self.tick(mmu, 1);
         val
@@ -284,10 +279,7 @@ impl Cpu {
 
     #[inline(always)]
     fn write8(&mut self, mmu: &mut crate::mmu::Mmu, addr: u16, val: u8) {
-        #[cfg(feature = "ppu-trace")]
-        {
-            mmu.last_cpu_pc = Some(self.pc);
-        }
+        mmu.last_cpu_pc = Some(self.pc);
         mmu.write_byte(addr, val);
         self.tick(mmu, 1);
     }
@@ -312,6 +304,15 @@ impl Cpu {
         )
     }
 
+    #[inline(always)]
+    fn dmg_oam_bug_idu_if_needed(mmu: &mut crate::mmu::Mmu, addr: u16, access: OamBugAccess) {
+        // Blargg oam_bug: corruption is triggered by the CPU's 16-bit
+        // inc/dec unit driving an address in $FE00-$FEFF during mode 2.
+        if (0xFE00..=0xFEFF).contains(&addr) {
+            mmu.ppu.oam_bug_access(addr, access);
+        }
+    }
+
     fn push_stack(&mut self, mmu: &mut crate::mmu::Mmu, val: u16) {
         self.sp = self.sp.wrapping_sub(1);
         self.write8(mmu, self.sp, (val >> 8) as u8);
@@ -320,8 +321,14 @@ impl Cpu {
     }
 
     fn pop_stack(&mut self, mmu: &mut crate::mmu::Mmu) -> u16 {
+        // POP performs two reads with an implied increment of SP after each read.
+        // The internal 16-bit incrementer can trigger the DMG OAM bug based on
+        // the current SP value during mode 2.
+        Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::ReadDuringIncDec);
         let lo = self.read8(mmu, self.sp) as u16;
+        // POP counts as two increments of SP.
         self.sp = self.sp.wrapping_add(1);
+        Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::ReadDuringIncDec);
         let hi = self.read8(mmu, self.sp) as u16;
         self.sp = self.sp.wrapping_add(1);
         (hi << 8) | lo
@@ -472,17 +479,24 @@ impl Cpu {
 
             self.ime = false;
 
+            // Interrupt entry pushes the return address onto the stack.
+            // If the upper-byte push targets IE ($FFFF), the write can change
+            // which interrupt is dispatched (or cancel dispatch entirely).
+            // Re-check IE/IF after the upper-byte push but before the lower-byte
+            // push to match hardware (mooneye "interrupts/ie_push").
+
+            // Upper byte push.
+            Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
             self.sp = self.sp.wrapping_sub(1);
             self.write8(mmu, self.sp, (return_pc >> 8) as u8);
 
-            let mut queue = mmu.ie_reg & 0x1F;
-
-            self.sp = self.sp.wrapping_sub(1);
-            self.write8(mmu, self.sp, return_pc as u8);
-
-            queue &= mmu.if_reg & 0x1F;
-
+            let queue = (mmu.ie_reg & mmu.if_reg) & 0x1F;
             if queue == 0 {
+                // Lower byte push still occurs, but the dispatch is cancelled.
+                Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
+                self.sp = self.sp.wrapping_sub(1);
+                self.write8(mmu, self.sp, return_pc as u8);
+
                 self.exit_halt();
                 self.pc = 0;
                 self.tick(mmu, 3);
@@ -490,8 +504,12 @@ impl Cpu {
             }
 
             let (bit, vector) = Self::next_interrupt(queue);
-
             mmu.if_reg &= !bit;
+
+            // Lower byte push.
+            Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
+            self.sp = self.sp.wrapping_sub(1);
+            self.write8(mmu, self.sp, return_pc as u8);
 
             if (self.halt_pending & bit) != 0 {
                 self.halt_pending &= !bit;
@@ -540,8 +558,12 @@ impl Cpu {
                 self.write8(mmu, addr, self.a);
             }
             0x03 => {
-                let val = self.get_bc().wrapping_add(1);
+                let old = self.get_bc();
+                let val = old.wrapping_add(1);
                 self.set_bc(val);
+                if (0xFE00..=0xFEFF).contains(&old) {
+                    mmu.ppu.oam_bug_access(old, OamBugAccess::Write);
+                }
                 self.tick(mmu, 1);
             }
             0x04 => {
@@ -600,8 +622,12 @@ impl Cpu {
                 self.a = self.read8(mmu, addr);
             }
             0x0B => {
-                let val = self.get_bc().wrapping_sub(1);
+                let old = self.get_bc();
+                let val = old.wrapping_sub(1);
                 self.set_bc(val);
+                if (0xFE00..=0xFEFF).contains(&old) {
+                    mmu.ppu.oam_bug_access(old, OamBugAccess::Write);
+                }
                 self.tick(mmu, 1);
             }
             0x0C => {
@@ -653,8 +679,12 @@ impl Cpu {
                 self.write8(mmu, addr, self.a);
             }
             0x13 => {
-                let val = self.get_de().wrapping_add(1);
+                let old = self.get_de();
+                let val = old.wrapping_add(1);
                 self.set_de(val);
+                if (0xFE00..=0xFEFF).contains(&old) {
+                    mmu.ppu.oam_bug_access(old, OamBugAccess::Write);
+                }
                 self.tick(mmu, 1);
             }
             0x14 => {
@@ -713,8 +743,12 @@ impl Cpu {
                 self.a = self.read8(mmu, addr);
             }
             0x1B => {
-                let val = self.get_de().wrapping_sub(1);
+                let old = self.get_de();
+                let val = old.wrapping_sub(1);
                 self.set_de(val);
+                if (0xFE00..=0xFEFF).contains(&old) {
+                    mmu.ppu.oam_bug_access(old, OamBugAccess::Write);
+                }
                 self.tick(mmu, 1);
             }
             0x1C => {
@@ -758,12 +792,19 @@ impl Cpu {
             }
             0x22 => {
                 let addr = self.get_hl();
+                if (0xFE00..=0xFEFF).contains(&addr) {
+                    mmu.oam_bug_next_access = Some(OamBugAccess::ReadDuringIncDec);
+                }
                 self.write8(mmu, addr, self.a);
                 self.set_hl(addr.wrapping_add(1));
             }
             0x23 => {
-                let val = self.get_hl().wrapping_add(1);
+                let old = self.get_hl();
+                let val = old.wrapping_add(1);
                 self.set_hl(val);
+                if (0xFE00..=0xFEFF).contains(&old) {
+                    mmu.ppu.oam_bug_access(old, OamBugAccess::Write);
+                }
                 self.tick(mmu, 1);
             }
             0x24 => {
@@ -830,12 +871,19 @@ impl Cpu {
             }
             0x2A => {
                 let addr = self.get_hl();
+                if (0xFE00..=0xFEFF).contains(&addr) {
+                    mmu.oam_bug_next_access = Some(OamBugAccess::ReadDuringIncDec);
+                }
                 self.a = self.read8(mmu, addr);
                 self.set_hl(addr.wrapping_add(1));
             }
             0x2B => {
-                let val = self.get_hl().wrapping_sub(1);
+                let old = self.get_hl();
+                let val = old.wrapping_sub(1);
                 self.set_hl(val);
+                if (0xFE00..=0xFEFF).contains(&old) {
+                    mmu.ppu.oam_bug_access(old, OamBugAccess::Write);
+                }
                 self.tick(mmu, 1);
             }
             0x2C => {
@@ -878,11 +926,18 @@ impl Cpu {
             }
             0x32 => {
                 let addr = self.get_hl();
+                if (0xFE00..=0xFEFF).contains(&addr) {
+                    mmu.oam_bug_next_access = Some(OamBugAccess::ReadDuringIncDec);
+                }
                 self.write8(mmu, addr, self.a);
                 self.set_hl(addr.wrapping_sub(1));
             }
             0x33 => {
+                let old = self.sp;
                 self.sp = self.sp.wrapping_add(1);
+                if (0xFE00..=0xFEFF).contains(&old) {
+                    mmu.ppu.oam_bug_access(old, OamBugAccess::Write);
+                }
                 self.tick(mmu, 1);
             }
             0x34 => {
@@ -939,11 +994,18 @@ impl Cpu {
             }
             0x3A => {
                 let addr = self.get_hl();
+                if (0xFE00..=0xFEFF).contains(&addr) {
+                    mmu.oam_bug_next_access = Some(OamBugAccess::ReadDuringIncDec);
+                }
                 self.a = self.read8(mmu, addr);
                 self.set_hl(addr.wrapping_sub(1));
             }
             0x3B => {
+                let old = self.sp;
                 self.sp = self.sp.wrapping_sub(1);
+                if (0xFE00..=0xFEFF).contains(&old) {
+                    mmu.ppu.oam_bug_access(old, OamBugAccess::Write);
+                }
                 self.tick(mmu, 1);
             }
             0x3C => {
@@ -1218,6 +1280,7 @@ impl Cpu {
             0xC4 => {
                 let addr = self.fetch16(mmu);
                 if self.f & FLAG_Z == 0 {
+                    Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                     self.tick(mmu, 1);
                     self.push_stack(mmu, self.pc);
                     self.pc = addr;
@@ -1225,6 +1288,7 @@ impl Cpu {
             }
             0xC5 => {
                 let val = self.get_bc();
+                Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                 self.tick(mmu, 1);
                 self.push_stack(mmu, val);
             }
@@ -1252,6 +1316,7 @@ impl Cpu {
                     0xFF => 0x38,
                     _ => unreachable!(),
                 };
+                Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                 self.tick(mmu, 1);
                 self.push_stack(mmu, self.pc);
                 self.pc = target;
@@ -1284,6 +1349,7 @@ impl Cpu {
             0xCC => {
                 let addr = self.fetch16(mmu);
                 if self.f & FLAG_Z != 0 {
+                    Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                     self.tick(mmu, 1);
                     self.push_stack(mmu, self.pc);
                     self.pc = addr;
@@ -1291,6 +1357,7 @@ impl Cpu {
             }
             0xCD => {
                 let addr = self.fetch16(mmu);
+                Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                 self.tick(mmu, 1);
                 self.push_stack(mmu, self.pc);
                 self.pc = addr;
@@ -1332,6 +1399,7 @@ impl Cpu {
             0xD4 => {
                 let addr = self.fetch16(mmu);
                 if self.f & FLAG_C == 0 {
+                    Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                     self.tick(mmu, 1);
                     self.push_stack(mmu, self.pc);
                     self.pc = addr;
@@ -1339,6 +1407,7 @@ impl Cpu {
             }
             0xD5 => {
                 let val = self.get_de();
+                Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                 self.tick(mmu, 1);
                 self.push_stack(mmu, val);
             }
@@ -1379,6 +1448,7 @@ impl Cpu {
             0xDC => {
                 let addr = self.fetch16(mmu);
                 if self.f & FLAG_C != 0 {
+                    Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                     self.tick(mmu, 1);
                     self.push_stack(mmu, self.pc);
                     self.pc = addr;
@@ -1414,6 +1484,7 @@ impl Cpu {
             }
             0xE5 => {
                 let val = self.get_hl();
+                Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                 self.tick(mmu, 1);
                 self.push_stack(mmu, val);
             }
@@ -1470,6 +1541,7 @@ impl Cpu {
             }
             0xF5 => {
                 let val = ((self.a as u16) << 8) | (self.f as u16 & 0xF0);
+                Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
                 self.tick(mmu, 1);
                 self.push_stack(mmu, val);
             }

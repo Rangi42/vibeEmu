@@ -1,5 +1,18 @@
 use crate::hardware::DmgRevision;
 
+fn oam_bug_trace_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("VIBEEMU_TRACE_OAMBUG")
+            .map(|v| {
+                let s = v.to_string_lossy();
+                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
+            })
+            .unwrap_or(false)
+    })
+}
+
 #[cfg(feature = "ppu-trace")]
 macro_rules! ppu_trace {
     ($($arg:tt)*) => {
@@ -51,6 +64,25 @@ const MODE_HBLANK: u8 = 0;
 const MODE_VBLANK: u8 = 1;
 const MODE_OAM: u8 = 2;
 const MODE_TRANSFER: u8 = 3;
+
+/// DMG OAM corruption bug access classification.
+///
+/// On DMG hardware, OAM can become corrupted during PPU mode 2 (OAM scan) when
+/// the CPU accesses OAM, or when the CPU's 16-bit increment/decrement unit drives
+/// an address in the OAM range. CGB hardware is not affected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OamBugAccess {
+    /// A CPU read from OAM during mode 2.
+    Read,
+    /// A CPU write to OAM during mode 2, or a glitched write caused by the CPU
+    /// IDU when incrementing/decrementing a 16-bit register in the OAM range.
+    Write,
+    /// A CPU read that is accompanied by an implied INC/DEC of the address
+    /// register (e.g. `LD A,[HL+]` / `LD A,[HL-]`) while pointing into OAM.
+    ///
+    /// This corresponds to the "Read During Increase/Decrease" corruption pattern.
+    ReadDuringIncDec,
+}
 
 const BOOT_HOLD_CYCLES_DMG0: u16 = 8192;
 const BOOT_HOLD_CYCLES_DMGA: u16 = 8192;
@@ -237,6 +269,15 @@ impl Ppu {
         self.mode_clock = 0;
         self.ly = 0;
         self.update_lyc_compare();
+    }
+
+    pub(crate) fn debug_oam_bug_snapshot(&self) -> (u8, u16, Option<usize>, Option<usize>) {
+        (
+            self.mode,
+            self.mode_clock,
+            self.oam_bug_current_accessed_oam_row(),
+            self.oam_bug_current_row(),
+        )
     }
 
     pub fn in_hblank(&self) -> bool {
@@ -445,6 +486,427 @@ impl Ppu {
             }
         }
         allow
+    }
+
+    fn oam_bug_current_row(&self) -> Option<usize> {
+        if self.cgb {
+            return None;
+        }
+        if self.mode != MODE_OAM {
+            return None;
+        }
+        // MODE2_CYCLES == 80 T-cycles == 20 M-cycles; one OAM row per M-cycle.
+        if self.mode_clock >= MODE2_CYCLES {
+            return None;
+        }
+        // Corruption is tied to the OAM row currently being scanned.
+        // We intentionally model rows 1..=19 (8..=152 bytes). The final
+        // mode-2 machine cycle does not perform a usable row access.
+        let row = (self.mode_clock / 4) as usize + 1;
+        if row > 19 {
+            return None;
+        }
+        Some(row)
+    }
+
+    #[inline]
+    fn oam_bug_current_accessed_oam_row(&self) -> Option<usize> {
+        if self.cgb {
+            return None;
+        }
+        if self.mode != MODE_OAM {
+            return None;
+        }
+        if self.mode_clock >= MODE2_CYCLES {
+            return None;
+        }
+
+        let oam_index = (self.mode_clock / 2) as usize; // 0..=39
+        let accessed_oam_row = ((oam_index & !1) * 4 + 8) as usize;
+        if accessed_oam_row >= OAM_SIZE {
+            return None;
+        }
+        Some(accessed_oam_row)
+    }
+
+    #[inline]
+    fn oam_bug_bitwise_glitch(a: u16, b: u16, c: u16) -> u16 {
+        ((a ^ c) & (b ^ c)) ^ c
+    }
+
+    #[inline]
+    fn oam_bug_bitwise_glitch_read(a: u16, b: u16, c: u16) -> u16 {
+        b | (a & c)
+    }
+
+    #[inline]
+    fn oam_bug_bitwise_glitch_read_secondary(a: u16, b: u16, c: u16, d: u16) -> u16 {
+        (b & (a | c | d)) | (a & c & d)
+    }
+
+    #[inline]
+    fn oam_bug_bitwise_glitch_tertiary_read_1(a: u16, b: u16, c: u16, d: u16, e: u16) -> u16 {
+        c | (a & b & d & e)
+    }
+
+    #[inline]
+    fn oam_bug_bitwise_glitch_tertiary_read_2(a: u16, b: u16, c: u16, d: u16, e: u16) -> u16 {
+        (c & (a | b | d | e)) | (a & b & d & e)
+    }
+
+    #[inline]
+    fn oam_bug_bitwise_glitch_tertiary_read_3(a: u16, b: u16, c: u16, d: u16, e: u16) -> u16 {
+        (c & (a | b | d | e)) | (b & d & e)
+    }
+
+    #[inline]
+    fn oam_bug_bitwise_glitch_quaternary_read_dmg(
+        a: u16,
+        b: u16,
+        c: u16,
+        d: u16,
+        e: u16,
+        f: u16,
+        g: u16,
+        h: u16,
+    ) -> u16 {
+        let _ = a;
+        (e & (h | g | ((!d) & f) | c | b)) | (c & g & h)
+    }
+
+    #[inline]
+    fn oam_get_word(&self, word_index: usize) -> u16 {
+        let b0 = self.oam[word_index * 2] as u16;
+        let b1 = self.oam[word_index * 2 + 1] as u16;
+        b0 | (b1 << 8)
+    }
+
+    #[inline]
+    fn oam_set_word(&mut self, word_index: usize, value: u16) {
+        self.oam[word_index * 2] = (value & 0x00FF) as u8;
+        self.oam[word_index * 2 + 1] = (value >> 8) as u8;
+    }
+
+    fn oam_bug_apply_write_corruption(&mut self, row: usize, word_in_row: usize) {
+        // Objects 0 and 1 (first row) are not affected.
+        if row == 0 {
+            return;
+        }
+        debug_assert!(word_in_row < 4);
+
+        let base = row * 4;
+        let prev = (row - 1) * 4;
+        let target = base + word_in_row;
+        let prev_same = prev + word_in_row;
+        let prev_plus2 = prev + ((word_in_row + 2) & 3);
+
+        let a = self.oam_get_word(target);
+        let b = self.oam_get_word(prev_same);
+        let c = self.oam_get_word(prev_plus2);
+        let new_val = ((a ^ c) & (b ^ c)) ^ c;
+
+        let prev_words = [
+            self.oam_get_word(prev),
+            self.oam_get_word(prev + 1),
+            self.oam_get_word(prev + 2),
+            self.oam_get_word(prev + 3),
+        ];
+        for i in 0..4 {
+            self.oam_set_word(base + i, prev_words[i]);
+        }
+        self.oam_set_word(target, new_val);
+    }
+
+    fn oam_bug_apply_read_corruption(&mut self, row: usize, word_in_row: usize) {
+        if row == 0 {
+            return;
+        }
+        debug_assert!(word_in_row < 4);
+
+        let base = row * 4;
+        let prev = (row - 1) * 4;
+        let target = base + word_in_row;
+        let prev_same = prev + word_in_row;
+        let prev_plus2 = prev + ((word_in_row + 2) & 3);
+
+        let a = self.oam_get_word(target);
+        let b = self.oam_get_word(prev_same);
+        let c = self.oam_get_word(prev_plus2);
+        let new_val = b | (a & c);
+
+        let prev_words = [
+            self.oam_get_word(prev),
+            self.oam_get_word(prev + 1),
+            self.oam_get_word(prev + 2),
+            self.oam_get_word(prev + 3),
+        ];
+        for i in 0..4 {
+            self.oam_set_word(base + i, prev_words[i]);
+        }
+        self.oam_set_word(target, new_val);
+    }
+
+    fn oam_bug_apply_read_during_incdec(&mut self, row: usize, word_in_row: usize) {
+        // First stage is suppressed for first four rows and the last row.
+        if (4..=18).contains(&row) {
+            let base = row * 4;
+            let prev = (row - 1) * 4;
+            let prev2 = (row - 2) * 4;
+
+            let a = self.oam_get_word(prev2);
+            let b = self.oam_get_word(prev);
+            let c = self.oam_get_word(base);
+            let d = self.oam_get_word(prev + 2);
+            let new_prev0 = (b & (a | c | d)) | (a & c & d);
+
+            self.oam_set_word(prev, new_prev0);
+
+            let row_words = [
+                self.oam_get_word(prev),
+                self.oam_get_word(prev + 1),
+                self.oam_get_word(prev + 2),
+                self.oam_get_word(prev + 3),
+            ];
+
+            for i in 0..4 {
+                self.oam_set_word(base + i, row_words[i]);
+                self.oam_set_word(prev2 + i, row_words[i]);
+            }
+        }
+
+        // Second stage is always a normal read corruption.
+        self.oam_bug_apply_read_corruption(row, word_in_row);
+    }
+
+    /// Apply the DMG OAM corruption bug if the PPU is currently in mode 2.
+    pub(crate) fn oam_bug_access(&mut self, addr: u16, access: OamBugAccess) {
+        let trace = oam_bug_trace_enabled() && !matches!(access, OamBugAccess::Write);
+        if trace {
+            eprintln!(
+                "[OAMBUG] trigger addr={:04X} access={:?} ppu_mode={} mode_clock={}",
+                addr, access, self.mode, self.mode_clock
+            );
+        }
+        if matches!(access, OamBugAccess::Read | OamBugAccess::Write) {
+            let Some(accessed_oam_row) = self.oam_bug_current_accessed_oam_row() else {
+                if trace {
+                    eprintln!("[OAMBUG] -> no accessed_oam_row (ignored)");
+                }
+                return;
+            };
+            if accessed_oam_row < 8 {
+                if trace {
+                    eprintln!("[OAMBUG] -> accessed_oam_row={accessed_oam_row} (<8, ignored)");
+                }
+                return;
+            }
+            if trace {
+                eprintln!("[OAMBUG] -> accessed_oam_row={accessed_oam_row}");
+            }
+            match access {
+                OamBugAccess::Read => self.oam_bug_trigger_read(accessed_oam_row),
+                OamBugAccess::Write => self.oam_bug_trigger_write(accessed_oam_row),
+                OamBugAccess::ReadDuringIncDec => unreachable!(),
+            }
+            return;
+        }
+
+        let Some(row) = self.oam_bug_current_row() else {
+            if trace {
+                eprintln!("[OAMBUG] -> no current_row (ignored)");
+            }
+            return;
+        };
+        let word_in_row = ((addr & 0x0006) >> 1) as usize;
+        if trace {
+            eprintln!("[OAMBUG] -> row={row} word_in_row={word_in_row}");
+        }
+        match access {
+            OamBugAccess::ReadDuringIncDec => {
+                self.oam_bug_apply_read_during_incdec(row, word_in_row)
+            }
+            OamBugAccess::Read | OamBugAccess::Write => unreachable!(),
+        }
+    }
+
+    fn oam_bug_trigger_write(&mut self, accessed_oam_row: usize) {
+        let word_index = accessed_oam_row / 2;
+        if word_index < 4 {
+            return;
+        }
+
+        let a = self.oam_get_word(word_index);
+        let b = self.oam_get_word(word_index - 4);
+        let c = self.oam_get_word(word_index - 2);
+        let new_val = Self::oam_bug_bitwise_glitch(a, b, c);
+
+        self.oam_set_word(word_index, new_val);
+
+        if accessed_oam_row >= 8 {
+            for i in 2..8 {
+                let dst = accessed_oam_row + i;
+                let src = accessed_oam_row - 8 + i;
+                if dst < OAM_SIZE && src < OAM_SIZE {
+                    self.oam[dst] = self.oam[src];
+                }
+            }
+        }
+    }
+
+    fn oam_bug_trigger_read(&mut self, accessed_oam_row: usize) {
+        let word_index = accessed_oam_row / 2;
+        if word_index < 4 {
+            return;
+        }
+
+        if (accessed_oam_row & 0x18) == 0x10 {
+            // Secondary read corruption.
+            if word_index >= 8 {
+                let a = self.oam_get_word(word_index - 8);
+                let b = self.oam_get_word(word_index - 4);
+                let c = self.oam_get_word(word_index);
+                let d = self.oam_get_word(word_index - 2);
+                let new_val = Self::oam_bug_bitwise_glitch_read_secondary(a, b, c, d);
+                self.oam_set_word(word_index - 4, new_val);
+
+                // Copy row-1 into row-2.
+                if accessed_oam_row >= 0x10 {
+                    for i in 0..8 {
+                        let dst = accessed_oam_row - 0x10 + i;
+                        let src = accessed_oam_row - 0x08 + i;
+                        if dst < OAM_SIZE && src < OAM_SIZE {
+                            self.oam[dst] = self.oam[src];
+                        }
+                    }
+                }
+            }
+        } else if (accessed_oam_row & 0x18) == 0x00 {
+            if accessed_oam_row < 0x98 {
+                match accessed_oam_row {
+                    0x20 => {
+                        self.oam_bug_tertiary_read_corruption(
+                            accessed_oam_row,
+                            Self::oam_bug_bitwise_glitch_tertiary_read_2,
+                        );
+                    }
+                    0x40 => {
+                        self.oam_bug_quaternary_read_corruption_dmg(accessed_oam_row);
+                    }
+                    0x60 => {
+                        self.oam_bug_tertiary_read_corruption(
+                            accessed_oam_row,
+                            Self::oam_bug_bitwise_glitch_tertiary_read_3,
+                        );
+                    }
+                    _ => {
+                        self.oam_bug_tertiary_read_corruption(
+                            accessed_oam_row,
+                            Self::oam_bug_bitwise_glitch_tertiary_read_1,
+                        );
+                    }
+                }
+            }
+        } else {
+            // Default read corruption.
+            let a = self.oam_get_word(word_index);
+            let b = self.oam_get_word(word_index - 4);
+            let c = self.oam_get_word(word_index - 2);
+            let new_val = Self::oam_bug_bitwise_glitch_read(a, b, c);
+            self.oam_set_word(word_index - 4, new_val);
+            self.oam_set_word(word_index, new_val);
+        }
+
+        // Copy the previous row into the accessed row.
+        if accessed_oam_row >= 8 {
+            for i in 0..8 {
+                let dst = accessed_oam_row + i;
+                let src = accessed_oam_row - 8 + i;
+                if dst < OAM_SIZE && src < OAM_SIZE {
+                    self.oam[dst] = self.oam[src];
+                }
+            }
+        }
+
+        // On DMG, for accessed row 0x80, the copied row is also mirrored into
+        // the first 8 bytes.
+        if accessed_oam_row == 0x80 {
+            for i in 0..8 {
+                self.oam[i] = self.oam[accessed_oam_row + i];
+            }
+        }
+    }
+
+    fn oam_bug_tertiary_read_corruption(
+        &mut self,
+        accessed_oam_row: usize,
+        bitwise_op: fn(u16, u16, u16, u16, u16) -> u16,
+    ) {
+        if accessed_oam_row >= 0x98 {
+            return;
+        }
+        let base = accessed_oam_row / 2;
+        if base < 16 {
+            return;
+        }
+
+        let new_val = bitwise_op(
+            self.oam_get_word(base),
+            self.oam_get_word(base - 2),
+            self.oam_get_word(base - 4),
+            self.oam_get_word(base - 8),
+            self.oam_get_word(base - 16),
+        );
+        self.oam_set_word(base - 4, new_val);
+
+        for i in 0..8 {
+            let src = accessed_oam_row - 0x08 + i;
+            let dst1 = accessed_oam_row - 0x10 + i;
+            let dst2 = accessed_oam_row - 0x20 + i;
+            if src < OAM_SIZE {
+                if dst1 < OAM_SIZE {
+                    self.oam[dst1] = self.oam[src];
+                }
+                if dst2 < OAM_SIZE {
+                    self.oam[dst2] = self.oam[src];
+                }
+            }
+        }
+    }
+
+    fn oam_bug_quaternary_read_corruption_dmg(&mut self, accessed_oam_row: usize) {
+        if accessed_oam_row >= 0x98 {
+            return;
+        }
+        let base = accessed_oam_row / 2;
+        if base < 16 {
+            return;
+        }
+
+        let new_val = Self::oam_bug_bitwise_glitch_quaternary_read_dmg(
+            self.oam_get_word(0),
+            self.oam_get_word(base),
+            self.oam_get_word(base - 2),
+            self.oam_get_word(base - 3),
+            self.oam_get_word(base - 4),
+            self.oam_get_word(base - 7),
+            self.oam_get_word(base - 8),
+            self.oam_get_word(base - 16),
+        );
+        self.oam_set_word(base - 4, new_val);
+
+        for i in 0..8 {
+            let src = accessed_oam_row - 0x08 + i;
+            let dst1 = accessed_oam_row - 0x10 + i;
+            let dst2 = accessed_oam_row - 0x20 + i;
+            if src < OAM_SIZE {
+                if dst1 < OAM_SIZE {
+                    self.oam[dst1] = self.oam[src];
+                }
+                if dst2 < OAM_SIZE {
+                    self.oam[dst2] = self.oam[src];
+                }
+            }
+        }
     }
 
     pub fn vram_accessible(&self) -> bool {

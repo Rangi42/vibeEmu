@@ -22,6 +22,7 @@ Commands executed:
 - `cargo test --release --test mem_timing_rom -- --include-ignored`
 - `cargo test --release --test mmu -- --include-ignored`
 - `cargo test --release --test mooneye_acceptance -- --include-ignored`
+- `cargo test --release --test oam_bug_rom_singles -- --include-ignored`
 - `cargo test --release --test ppu -- --include-ignored`
 - `cargo test --release --test same_suite -- --include-ignored`
 - `cargo test --release --test timer -- --include-ignored`
@@ -34,10 +35,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1596 | 2017 | 0 | 0 | 3613 | 44.2% |
+| ROM Test Suites | 1599 | 2016 | 0 | 0 | 3615 | 44.2% |
 | Integration Tests | 152 | 27 | 0 | 0 | 179 | 84.9% |
 | Unit Tests | 9 | 0 | 0 | 0 | 9 | 100.0% |
-| **Overall** | 1757 | 2044 | 0 | 0 | 3801 | 46.2% |
+| **Overall** | 1760 | 2043 | 0 | 0 | 3803 | 46.3% |
 
 ## Detailed Results
 
@@ -96,7 +97,7 @@ Combined exit code: 101
 | `dmg_sound_11_regs_after_power` | ❌ Fail |
 | `dmg_sound_12_wave_write_while_on` | ❌ Fail |
 
-#### gambatte (1440/3425 passing, 42.0%)
+#### gambatte (1442/3426 passing, 42.1%)
 
 | Test | Result |
 | --- | --- |
@@ -306,6 +307,7 @@ Combined exit code: 101
 | `irq_precedence/if_and_ie_0_vector_1_dmg08_cgb04c_out00.gbc` | ✅ Pass |
 | `irq_precedence/if_and_ie_0_vector_2_dmg08_cgb04c_out50.gbc` | ✅ Pass |
 | `irq_precedence/if_and_ie_0_vector_3_dmg08_cgb04c_out00.gbc` | ✅ Pass |
+| `irq_precedence/if_and_ie_0_vector_4_dmg08_cgb04c_out50.gbc` | ✅ Pass |
 | `irq_precedence/late_hdma_vs_ei_scx1_2_cgb04c_out1234.gbc` | ✅ Pass |
 | `irq_precedence/late_hdma_vs_ei_scx2_2_cgb04c_out1234.gbc` | ✅ Pass |
 | `irq_precedence/late_hdma_vs_ie_scx1_2_cgb04c_out1234.gbc` | ✅ Pass |
@@ -314,7 +316,6 @@ Combined exit code: 101
 | `irq_precedence/late_hdma_vs_tima_scx1_halt_1_cgb04c_out1234.gbc` | ✅ Pass |
 | `irq_precedence/late_hdma_vs_tima_scx2_1_cgb04c_out1234.gbc` | ✅ Pass |
 | `irq_precedence/late_hdma_vs_tima_scx2_halt_1_cgb04c_out1234.gbc` | ✅ Pass |
-| `irq_precedence/late_if_via_sp_if_1_dmg08_cgb04c_outFD.gbc` | ✅ Pass |
 | `irq_precedence/late_if_via_sp_if_2_dmg08_cgb04c_outE0.gbc` | ✅ Pass |
 | `irq_precedence/late_m0irq_retrigger_1_dmg08_cgb04c_outE2.gbc` | ✅ Pass |
 | `irq_precedence/late_m0irq_retrigger_ds_1_cgb04c_outE2.gbc` | ✅ Pass |
@@ -462,6 +463,7 @@ Combined exit code: 101
 | `lycEnable/lyc0_late_ff45_enable_1_dmg08_cgb04c_outE2.gbc` | ✅ Pass |
 | `lycEnable/lyc0_late_ff45_enable_3_dmg08_cgb04c_outE0.gbc` | ✅ Pass |
 | `lycEnable/lyc0_m1disable_3_dmg08_cgb04c_outE0.gbc` | ✅ Pass |
+| `lycEnable/lyc0_m1disable_ds_2_cgb04c_outE0.gbc` | ✅ Pass |
 | `lycEnable/lyc153_late_enable_m1disable_1_dmg08_cgb04c_outE2.gbc` | ✅ Pass |
 | `lycEnable/lyc153_late_enable_m1disable_3_dmg08_cgb04c_outE0.gbc` | ✅ Pass |
 | `lycEnable/lyc153_late_ff41_enable_1_dmg08_cgb04c_outE2.gbc` | ✅ Pass |
@@ -802,6 +804,7 @@ Combined exit code: 101
 | `oam_access/midwrite_3_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oam_access/postread_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oam_access/postread_ds_2_cgb04c_out0.gbc` | ✅ Pass |
+| `oam_access/postread_scx2_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oam_access/postread_scx3_2_dmg08_xout1_cgb04c_out0.gbc` | ✅ Pass |
 | `oam_access/postread_scx3_3_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `oam_access/postread_scx5_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
@@ -1900,7 +1903,6 @@ Combined exit code: 101
 | `halt/m1int_ly_3_dmg08_cgb04c_out91.gbc` | ❌ Fail |
 | `halt/noime_ifandie_m2int_m0stat_1_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `irq_precedence/hdma_vs_m0_scx2_cgb04c_out0183.gbc` | ❌ Fail |
-| `irq_precedence/if_and_ie_0_vector_4_dmg08_cgb04c_out50.gbc` | ❌ Fail |
 | `irq_precedence/late_hdma_vs_ei_scx1_1_cgb04c_out102E.gbc` | ❌ Fail |
 | `irq_precedence/late_hdma_vs_ei_scx2_1_cgb04c_out102F.gbc` | ❌ Fail |
 | `irq_precedence/late_hdma_vs_ie_scx1_1_cgb04c_out102E.gbc` | ❌ Fail |
@@ -1909,6 +1911,7 @@ Combined exit code: 101
 | `irq_precedence/late_hdma_vs_tima_scx1_halt_2_cgb04c_out11C9.gbc` | ❌ Fail |
 | `irq_precedence/late_hdma_vs_tima_scx2_2_cgb04c_out11E9.gbc` | ❌ Fail |
 | `irq_precedence/late_hdma_vs_tima_scx2_halt_2_cgb04c_out11C9.gbc` | ❌ Fail |
+| `irq_precedence/late_if_via_sp_if_1_dmg08_cgb04c_outFD.gbc` | ❌ Fail |
 | `irq_precedence/late_m0irq_retrigger_2_dmg08_cgb04c_outE0.gbc` | ❌ Fail |
 | `irq_precedence/late_m0irq_retrigger_ds_2_cgb04c_outE0.gbc` | ❌ Fail |
 | `irq_precedence/late_m0irq_retrigger_scx1_2_dmg08_cgb04c_outE0.gbc` | ❌ Fail |
@@ -2031,6 +2034,8 @@ Combined exit code: 101
 | `lycEnable/lyc0_m1disable_1_dmg08_cgb04c_outE2.gbc` | ❌ Fail |
 | `lycEnable/lyc0_m1disable_2_dmg08_outE2_cgb04c_outE0.gbc` | ❌ Fail |
 | `lycEnable/lyc0_m1disable_ds_1_cgb04c_outE2.gbc` | ❌ Fail |
+| `lycEnable/lyc153_late_enable_m1disable_2_dmg08_outE2_cgb04c_outE0.gbc` | ❌ Fail |
+| `lycEnable/lyc153_late_ff41_enable_2_dmg08_outE2_cgb04c_outE0.gbc` | ❌ Fail |
 | `lycEnable/lyc153_late_ff41_enable_ds_2_cgb04c_outE0.gbc` | ❌ Fail |
 | `lycEnable/lyc153_late_ff41_enable_ds_lcdoffset1_2_cgb04c_outE0.gbc` | ❌ Fail |
 | `lycEnable/lyc153_late_ff41_enable_lcdoffset1_2_cgb04c_outE0.gbc` | ❌ Fail |
@@ -2555,7 +2560,6 @@ Combined exit code: 101
 | `oamdma/oamdma_srcE000_busypopEFFF_dmg08_out65766576_cgb04c_outFFFF55AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypopFDFF_dmg08_out657665FF_cgb04c_outFFFF55FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypopFE9F_dmg08_out6576FFFF_cgb04c_outFFFFFFFF.gbc` | ❌ Fail |
-| `oamdma/oamdma_srcE000_busypopFEFF_dmg08_out6576FFEF_cgb04c_outFFFFFFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypopFF7F_dmg08_out6576FFAA_cgb04c_outFFFFFFAA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypopFFFF_dmg08_out65765576_cgb04c_outFFFF55FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypush0001_dmg08_out4576AA34_cgb04c_out55FFAA34.gbc` | ❌ Fail |
@@ -2582,10 +2586,8 @@ Combined exit code: 101
 | `oamdma/oamdma_srcEF00_busypopFE9F_dmg08_out6576FFFF_cgb04c_outFFFFFFFF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypopFEFF_dmg08_out6576FFEF_cgb04c_outFFFFFFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypopFF7F_dmg08_out6576FFAA_cgb04c_outFFFFFFAA.gbc` | ❌ Fail |
-| `oamdma/oamdma_srcEF00_busypopFFFF_dmg08_out65765576_cgb04c_outFFFF55FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypush0001_dmg08_out4576AA34_cgb04c_out55FFAA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypush8001_dmg08_out65221255_cgb04c_outFFAA1255.gbc` | ❌ Fail |
-| `oamdma/oamdma_srcEF00_busypushA001_2_dmg08_out4576AAFF_cgb04c_out55FFAAFF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypushA001_dmg08_out4576AA34_cgb04c_out55FFAA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypushC001_2_dmg08_out4522FF34_cgb04c_outFFAAFF55.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypushC001_dmg08_out45221234_cgb04c_outFFAA1255.gbc` | ❌ Fail |
@@ -3632,6 +3634,12 @@ Combined exit code: 101
 | `boot_regs_sgb_gb` | ❌ Fail |
 | `ppu__intr_2_mode0_timing_sprites_gb` | ❌ Fail |
 | `ppu__lcdon_write_timing_GS_gb` | ❌ Fail |
+
+#### oam_bug_rom_singles (1/1 passing, 100.0%)
+
+| Test | Result |
+| --- | --- |
+| `blargg_oam_bug_rom_singles_dmg` | ✅ Pass |
 
 #### same_suite (62/78 passing, 79.5%)
 

@@ -8,6 +8,29 @@ use crate::{
     timer::Timer,
 };
 
+use crate::ppu::OamBugAccess;
+
+fn env_flag_enabled(var: &str) -> bool {
+    use std::sync::OnceLock;
+
+    static CACHE: OnceLock<std::collections::HashMap<&'static str, bool>> = OnceLock::new();
+    // Initialize with a small fixed set; avoids repeated env parsing.
+    let cache = CACHE.get_or_init(|| {
+        let mut map = std::collections::HashMap::new();
+        for key in ["VIBEEMU_TRACE_OAMBUG", "VIBEEMU_TRACE_LCDC"] {
+            let enabled = std::env::var_os(key)
+                .map(|v| {
+                    let s = v.to_string_lossy();
+                    !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
+                })
+                .unwrap_or(false);
+            map.insert(key, enabled);
+        }
+        map
+    });
+    cache.get(var).copied().unwrap_or(false)
+}
+
 const WRAM_BANK_SIZE: usize = 0x1000;
 
 /// Transfer mode for CGB DMA operations.
@@ -68,8 +91,13 @@ pub struct Mmu {
     /// Last CPU program counter observed when the CPU performed a memory
     /// operation. This is set by the `Cpu` helpers before calling into the
     /// MMU so logs can attribute blocked accesses to the originating PC.
-    #[cfg(feature = "ppu-trace")]
     pub last_cpu_pc: Option<u16>,
+
+    /// One-shot override for the next OAM access' corruption classification.
+    ///
+    /// Used for instructions like `LD A,[HL+]` / `LD A,[HL-]` that have a
+    /// distinct corruption pattern on DMG.
+    pub(crate) oam_bug_next_access: Option<OamBugAccess>,
 }
 
 impl Mmu {
@@ -133,7 +161,7 @@ impl Mmu {
             cgb_mode: cgb,
             cgb_revision,
             dmg_revision,
-            #[cfg(feature = "ppu-trace")]
+            oam_bug_next_access: None,
             last_cpu_pc: None,
         }
     }
@@ -235,7 +263,7 @@ impl Mmu {
                             .map(|p| format!("{:04X}", p))
                             .unwrap_or_else(|| "<none>".to_string());
                         eprintln!(
-                            "[PPU] VRAM read allow addr={:04X} val={:02X} bank={} pc={} stage={:?} cycle={:?} mode={} mode_clock={}",
+                            "[PPU] VRAM read allow addr={:04X} val={:02X} bank={} pc={} stage={:?} cycle={:?} mode={} mode_clock={}\n",
                             addr, value, self.ppu.vram_bank, pc_str, stage, cycle, mode, mode_clock
                         );
                     }
@@ -263,12 +291,58 @@ impl Mmu {
             0xF000..=0xFDFF => self.wram[self.wram_bank][(addr - 0xF000) as usize],
             0xFE00..=0xFE9F => {
                 if self.ppu.oam_accessible() {
-                    self.ppu.oam[(addr - 0xFE00) as usize]
+                    self.oam_bug_next_access = None;
+                    let val = self.ppu.oam[(addr - 0xFE00) as usize];
+                    if env_flag_enabled("VIBEEMU_TRACE_OAMBUG") && self.ppu.lcd_enabled() {
+                        let pc_str = self
+                            .last_cpu_pc
+                            .map(|p| format!("{:04X}", p))
+                            .unwrap_or_else(|| "<none>".to_string());
+                        let (mode, mode_clock, accessed_row, row) =
+                            self.ppu.debug_oam_bug_snapshot();
+                        eprintln!(
+                            "[OAMBUG] read ok pc={} addr={:04X} val={:02X} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?}",
+                            pc_str, addr, val, mode, mode_clock, accessed_row, row
+                        );
+                    }
+                    val
                 } else {
+                    if !self.cgb_mode {
+                        let access = self
+                            .oam_bug_next_access
+                            .take()
+                            .unwrap_or(OamBugAccess::Read);
+                        if env_flag_enabled("VIBEEMU_TRACE_OAMBUG") {
+                            let pc_str = self
+                                .last_cpu_pc
+                                .map(|p| format!("{:04X}", p))
+                                .unwrap_or_else(|| "<none>".to_string());
+                            let (mode, mode_clock, accessed_row, row) =
+                                self.ppu.debug_oam_bug_snapshot();
+                            eprintln!(
+                                "[OAMBUG] read blocked pc={} addr={:04X} access={:?} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?}",
+                                pc_str, addr, access, mode, mode_clock, accessed_row, row
+                            );
+                        }
+                        self.ppu.oam_bug_access(addr, access);
+                    } else {
+                        self.oam_bug_next_access = None;
+                    }
                     0xFF
                 }
             }
-            0xFEA0..=0xFEFF => 0xFF,
+            0xFEA0..=0xFEFF => {
+                if !self.cgb_mode && !self.ppu.oam_accessible() {
+                    let access = self
+                        .oam_bug_next_access
+                        .take()
+                        .unwrap_or(OamBugAccess::Read);
+                    self.ppu.oam_bug_access(addr, access);
+                } else {
+                    self.oam_bug_next_access = None;
+                }
+                0xFF
+            }
             0xFF00 => self.input.read(),
             0xFF01 | 0xFF02 => self.serial.read(addr),
             0xFF04..=0xFF07 => self.timer.read(addr),
@@ -442,10 +516,48 @@ impl Mmu {
             0xF000..=0xFDFF => self.wram[self.wram_bank][(addr - 0xF000) as usize] = val,
             0xFE00..=0xFE9F => {
                 if self.ppu.oam_accessible() {
+                    self.oam_bug_next_access = None;
                     self.ppu.oam[(addr - 0xFE00) as usize] = val;
+                } else {
+                    if !self.cgb_mode {
+                        let access = self
+                            .oam_bug_next_access
+                            .take()
+                            .unwrap_or(OamBugAccess::Write);
+                        if env_flag_enabled("VIBEEMU_TRACE_OAMBUG") {
+                            let pc_str = self
+                                .last_cpu_pc
+                                .map(|p| format!("{:04X}", p))
+                                .unwrap_or_else(|| "<none>".to_string());
+                            let (mode, mode_clock, accessed_row, row) =
+                                self.ppu.debug_oam_bug_snapshot();
+                            eprintln!(
+                                "[OAMBUG] write blocked pc={} addr={:04X} val={:02X} access={:?} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?}",
+                                pc_str, addr, val, access, mode, mode_clock, accessed_row, row
+                            );
+                        }
+                        self.ppu.oam_bug_access(addr, access);
+                    } else {
+                        self.oam_bug_next_access = None;
+                    }
                 }
             }
-            0xFEA0..=0xFEFF => {}
+            0xFEA0..=0xFEFF => {
+                // Unusable region: ignore writes, but the CPU still drives the address bus.
+                // On DMG, blocked CPU accesses in $FE00-$FEFF during mode 2 can trigger
+                // the OAM corruption bug even if the address is in the unusable subrange.
+                if !self.cgb_mode && !self.ppu.oam_accessible() {
+                    let access = self
+                        .oam_bug_next_access
+                        .take()
+                        .unwrap_or(OamBugAccess::Write);
+                    // No extra tracing here; just route the blocked write to the PPU OAM-bug
+                    // handler. Tracing was removed to keep logs clean.
+                    self.ppu.oam_bug_access(addr, access);
+                } else {
+                    self.oam_bug_next_access = None;
+                }
+            }
             0xFF00 => self.input.write(val),
             0xFF01 | 0xFF02 => self.serial.write(addr, val),
             0xFF04 => {
@@ -456,6 +568,14 @@ impl Mmu {
             0xFF10..=0xFF3F => self.apu.write_reg(addr, val),
             0xFF40 => {
                 let lcd_was_on = self.ppu.lcd_enabled();
+                if env_flag_enabled("VIBEEMU_TRACE_LCDC") {
+                    let pc_str = self
+                        .last_cpu_pc
+                        .map(|p| format!("{:04X}", p))
+                        .unwrap_or_else(|| "<none>".to_string());
+                    let old = self.ppu.read_reg(0xFF40);
+                    eprintln!("[LCDC] write pc={} old={:02X} new={:02X}", pc_str, old, val);
+                }
                 self.ppu.write_reg(addr, val);
                 if lcd_was_on && !self.ppu.lcd_enabled() {
                     self.complete_active_hdma();
