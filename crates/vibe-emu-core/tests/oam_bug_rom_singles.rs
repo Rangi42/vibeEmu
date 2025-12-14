@@ -178,10 +178,10 @@ fn blargg_oam_bug_rom_singles_dmg() {
     let mut failures = Vec::new();
 
     for rel in roms {
-        if let Some(filter) = &rom_filter {
-            if !rel.contains(filter) {
-                continue;
-            }
+        if let Some(filter) = &rom_filter
+            && !rel.contains(filter)
+        {
+            continue;
         }
         let mut gb = GameBoy::new();
         let rom = std::fs::read(common::rom_path(rel)).expect("rom not found");

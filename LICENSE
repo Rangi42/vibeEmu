@@ -20,4 +20,11 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Note: The contents of the vendor/ and special_test_roms/ directory are excluded from this license and are licensed separately.
+Note: The contents of the vendor/ and special_test_roms/ directories are excluded from this license and are licensed separately.
+
+Third-party notices (non-exhaustive; see each directory for the authoritative license text):
+
+- vendor/libmobile-0.2.2 (libmobile) is licensed under LGPL-3.0-or-later.
+	See vendor/libmobile-0.2.2/COPYING.LESSER and vendor/libmobile-0.2.2/COPYING.
+- vendor/imgui-wgpu-0.24.0 is licensed under the MIT License.
+	See vendor/imgui-wgpu-0.24.0/LICENSE.md.

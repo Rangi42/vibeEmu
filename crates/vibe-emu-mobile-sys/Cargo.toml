@@ -1,0 +1,20 @@
+[package]
+name = "vibe-emu-mobile-sys"
+version = "0.1.0"
+edition = "2024"
+
+# A "-sys" crate: low-level FFI + linking/build.
+links = "mobile"
+build = "build.rs"
+
+[features]
+# Build libmobile from vendored source at vendor/libmobile.
+bundled = []
+# Link to a system-provided libmobile (e.g. -lmobile plus optional search path).
+system = []
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+

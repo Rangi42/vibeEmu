@@ -3,11 +3,11 @@
 mod audio;
 mod ui;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use cpal::traits::StreamTrait;
 use imgui::{ConfigFlags, Context as ImguiContext};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use pixels::{Pixels, SurfaceTexture};
 use rfd::FileDialog;
 use std::collections::HashMap;
@@ -15,7 +15,12 @@ use std::io::Cursor;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
+use vibe_emu_core::serial::{LinkPort, NullLinkPort};
 use vibe_emu_core::{cartridge::Cartridge, gameboy::GameBoy, hardware::CgbRevision};
+use vibe_emu_mobile::{
+    MobileAdapter, MobileAdapterDevice, MobileAddr, MobileConfig, MobileHost, MobileLinkPort,
+    MobileNumber, MobileSockType, StdMobileHost,
+};
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -75,6 +80,8 @@ struct UiState {
     spawn_debugger: bool,
     spawn_vram: bool,
     pending_action: Option<UiAction>,
+    serial_peripheral: SerialPeripheral,
+    pending_serial_peripheral: Option<SerialPeripheral>,
 }
 
 enum UiAction {
@@ -88,17 +95,49 @@ struct Speed {
     fast: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum SerialPeripheral {
+    #[default]
+    None,
+    MobileAdapter,
+}
+
 #[derive(Clone, Copy)]
 enum EmuCommand {
     SetPaused(bool),
     SetSpeed(Speed),
     UpdateInput(u8),
+    SetSerialPeripheral(SerialPeripheral),
     Shutdown,
 }
 
 enum UiToEmu {
     Command(EmuCommand),
     Action(UiAction),
+}
+
+struct EmuThreadChannels {
+    rx: mpsc::Receiver<UiToEmu>,
+    tx: mpsc::Sender<EmuEvent>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum MobileDeviceArg {
+    Blue,
+    Yellow,
+    Green,
+    Red,
+}
+
+impl From<MobileDeviceArg> for MobileAdapterDevice {
+    fn from(value: MobileDeviceArg) -> Self {
+        match value {
+            MobileDeviceArg::Blue => MobileAdapterDevice::Blue,
+            MobileDeviceArg::Yellow => MobileAdapterDevice::Yellow,
+            MobileDeviceArg::Green => MobileAdapterDevice::Green,
+            MobileDeviceArg::Red => MobileAdapterDevice::Red,
+        }
+    }
 }
 
 enum EmuEvent {
@@ -152,6 +191,205 @@ struct Args {
     /// Number of CPU cycles to run in headless mode
     #[arg(long)]
     cycles: Option<u64>,
+
+    /// Enable Mobile Adapter GB emulation via libmobile
+    #[arg(long)]
+    mobile: bool,
+
+    /// Path to the persisted MOBILE_CONFIG_SIZE blob (defaults next to ROM)
+    #[arg(long)]
+    mobile_config: Option<std::path::PathBuf>,
+
+    /// Adapter model to emulate
+    #[arg(long, value_enum, default_value_t = MobileDeviceArg::Blue)]
+    mobile_device: MobileDeviceArg,
+
+    /// Mark the connection as unmetered (used by some games)
+    #[arg(long)]
+    mobile_unmetered: bool,
+
+    /// Override DNS server 1 as ip:port (e.g. 8.8.8.8:53 or [2001:4860:4860::8888]:53)
+    #[arg(long)]
+    mobile_dns1: Option<String>,
+
+    /// Override DNS server 2 as ip:port
+    #[arg(long)]
+    mobile_dns2: Option<String>,
+
+    /// Override relay server as ip:port
+    #[arg(long)]
+    mobile_relay: Option<String>,
+
+    /// Override P2P port (defaults to libmobile's default)
+    #[arg(long)]
+    mobile_p2p_port: Option<u16>,
+
+    /// Emit Mobile Adapter diagnostics (raw serial bytes + libmobile debug + socket events)
+    #[arg(long)]
+    mobile_diag: bool,
+}
+
+struct DiagMobileHost {
+    inner: Box<dyn MobileHost>,
+}
+
+impl DiagMobileHost {
+    fn new(inner: Box<dyn MobileHost>) -> Self {
+        Self { inner }
+    }
+}
+
+impl MobileHost for DiagMobileHost {
+    fn debug_log(&mut self, line: &str) {
+        info!("[MOBILE] {line}");
+        self.inner.debug_log(line);
+    }
+
+    fn update_number(&mut self, which: MobileNumber, number: Option<&str>) {
+        info!("[MOBILE] update_number {:?} -> {:?}", which, number);
+        self.inner.update_number(which, number);
+    }
+
+    fn config_read(&mut self, dest: &mut [u8], offset: usize) -> bool {
+        self.inner.config_read(dest, offset)
+    }
+
+    fn config_write(&mut self, src: &[u8], offset: usize) -> bool {
+        self.inner.config_write(src, offset)
+    }
+
+    fn sock_open(
+        &mut self,
+        conn: u32,
+        socktype: MobileSockType,
+        addr: &MobileAddr,
+        bind_port: u16,
+    ) -> bool {
+        let ok = self.inner.sock_open(conn, socktype, addr, bind_port);
+        info!(
+            "[MOBILE] sock_open conn={} type={:?} addr={:?} bind_port={} -> {}",
+            conn, socktype, addr, bind_port, ok
+        );
+        ok
+    }
+
+    fn sock_close(&mut self, conn: u32) {
+        info!("[MOBILE] sock_close conn={conn}");
+        self.inner.sock_close(conn);
+    }
+
+    fn sock_connect(&mut self, conn: u32, addr: &MobileAddr) -> i32 {
+        let rc = self.inner.sock_connect(conn, addr);
+        info!(
+            "[MOBILE] sock_connect conn={} addr={:?} -> {}",
+            conn, addr, rc
+        );
+        rc
+    }
+
+    fn sock_listen(&mut self, conn: u32) -> bool {
+        let ok = self.inner.sock_listen(conn);
+        info!("[MOBILE] sock_listen conn={} -> {}", conn, ok);
+        ok
+    }
+
+    fn sock_accept(&mut self, conn: u32) -> bool {
+        let ok = self.inner.sock_accept(conn);
+        info!("[MOBILE] sock_accept conn={} -> {}", conn, ok);
+        ok
+    }
+
+    fn sock_send(&mut self, conn: u32, data: &[u8], addr: Option<&MobileAddr>) -> i32 {
+        let rc = self.inner.sock_send(conn, data, addr);
+        info!(
+            "[MOBILE] sock_send conn={} len={} addr={:?} -> {}",
+            conn,
+            data.len(),
+            addr,
+            rc
+        );
+        rc
+    }
+
+    fn sock_recv(
+        &mut self,
+        conn: u32,
+        mut data: Option<&mut [u8]>,
+        mut addr_out: Option<&mut MobileAddr>,
+    ) -> i32 {
+        let rc = self
+            .inner
+            .sock_recv(conn, data.as_deref_mut(), addr_out.as_deref_mut());
+
+        if rc > 0 {
+            let n = rc as usize;
+            let preview_len = n.min(32);
+            match (data.as_deref(), addr_out.as_deref()) {
+                (Some(buf), Some(addr)) => {
+                    info!(
+                        "[MOBILE] sock_recv conn={} -> {} bytes from {:?} (first {:02X?}{})",
+                        conn,
+                        rc,
+                        addr,
+                        &buf[..preview_len],
+                        if n > preview_len { "…" } else { "" }
+                    );
+                }
+                (Some(buf), None) => {
+                    info!(
+                        "[MOBILE] sock_recv conn={} -> {} bytes (first {:02X?}{})",
+                        conn,
+                        rc,
+                        &buf[..preview_len],
+                        if n > preview_len { "…" } else { "" }
+                    );
+                }
+                _ => {
+                    info!("[MOBILE] sock_recv conn={} -> {} bytes", conn, rc);
+                }
+            }
+        } else {
+            info!("[MOBILE] sock_recv conn={} -> {}", conn, rc);
+        }
+
+        rc
+    }
+}
+
+struct DiagMobileLinkPort {
+    adapter: Arc<Mutex<MobileAdapter>>,
+}
+
+impl DiagMobileLinkPort {
+    fn new(adapter: Arc<Mutex<MobileAdapter>>) -> Self {
+        Self { adapter }
+    }
+}
+
+impl LinkPort for DiagMobileLinkPort {
+    fn transfer(&mut self, byte: u8) -> u8 {
+        let mut adapter = self.adapter.lock().expect("mobile adapter mutex poisoned");
+        let rx = adapter.transfer_byte(byte).unwrap_or(0xFF);
+        debug!("[MOBILE][SIO] tx={:02X} rx={:02X}", byte, rx);
+        rx
+    }
+}
+
+fn parse_mobile_addr(s: &str) -> Result<MobileAddr, String> {
+    let sock: std::net::SocketAddr = s
+        .parse()
+        .map_err(|e| format!("invalid socket address '{s}': {e}"))?;
+
+    Ok(match sock {
+        std::net::SocketAddr::V4(v4) => MobileAddr::V4 {
+            host: v4.ip().octets(),
+            port: v4.port(),
+        },
+        std::net::SocketAddr::V6(v6) => MobileAddr::V6 {
+            host: v6.ip().octets(),
+            port: v6.port(),
+        },
+    })
 }
 
 fn cursor_in_screen(window: &winit::window::Window, pos: PhysicalPosition<f64>) -> bool {
@@ -237,15 +475,90 @@ fn run_emulator_thread(
     gb: Arc<Mutex<GameBoy>>,
     mut speed: Speed,
     debug: bool,
-    rx: mpsc::Receiver<UiToEmu>,
-    tx: mpsc::Sender<EmuEvent>,
+    mobile: Option<Arc<Mutex<MobileAdapter>>>,
+    mut serial_peripheral: SerialPeripheral,
+    mobile_diag: bool,
+    channels: EmuThreadChannels,
 ) {
+    let EmuThreadChannels { rx, tx } = channels;
+
+    fn apply_serial_peripheral(
+        gb: &mut GameBoy,
+        mobile: &Option<Arc<Mutex<MobileAdapter>>>,
+        desired: SerialPeripheral,
+        mobile_diag: bool,
+        serial_peripheral: &mut SerialPeripheral,
+        mobile_active: &mut bool,
+        mobile_time_accum_ns: &mut u128,
+    ) {
+        match desired {
+            SerialPeripheral::None => {
+                if let Some(mobile) = mobile.as_ref()
+                    && let Ok(mut adapter) = mobile.lock()
+                {
+                    let _ = adapter.stop();
+                }
+                gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
+                *mobile_active = false;
+                *serial_peripheral = SerialPeripheral::None;
+            }
+            SerialPeripheral::MobileAdapter => {
+                let Some(mobile) = mobile.as_ref() else {
+                    warn!("Mobile Adapter requested but unavailable");
+                    gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
+                    *mobile_active = false;
+                    *serial_peripheral = SerialPeripheral::None;
+                    *mobile_time_accum_ns = 0;
+                    return;
+                };
+
+                if let Ok(mut adapter) = mobile.lock() {
+                    let _ = adapter.stop();
+                    if let Err(e) = adapter.start() {
+                        warn!("Failed to start Mobile Adapter: {e}");
+                        gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
+                        *mobile_active = false;
+                        *serial_peripheral = SerialPeripheral::None;
+                        *mobile_time_accum_ns = 0;
+                        return;
+                    }
+                }
+
+                if mobile_diag {
+                    gb.mmu
+                        .serial
+                        .connect(Box::new(DiagMobileLinkPort::new(Arc::clone(mobile))));
+                } else {
+                    gb.mmu
+                        .serial
+                        .connect(Box::new(MobileLinkPort::new(Arc::clone(mobile))));
+                }
+
+                *mobile_active = true;
+                *serial_peripheral = SerialPeripheral::MobileAdapter;
+            }
+        }
+
+        *mobile_time_accum_ns = 0;
+    }
+
     let mut paused = false;
     let mut frame_count = 0u64;
     let mut next_frame = Instant::now() + FRAME_TIME;
     let mut audio_stream = None;
+    let mut mobile_time_accum_ns: u128 = 0;
+    let mut mobile_active = serial_peripheral == SerialPeripheral::MobileAdapter;
 
     if let Ok(mut gb) = gb.lock() {
+        apply_serial_peripheral(
+            &mut gb,
+            &mobile,
+            serial_peripheral,
+            mobile_diag,
+            &mut serial_peripheral,
+            &mut mobile_active,
+            &mut mobile_time_accum_ns,
+        );
         rebuild_audio_stream(&mut gb, speed, &mut audio_stream);
     }
 
@@ -271,9 +584,27 @@ fn run_emulator_thread(
                             mmu.input.update_state(state, if_reg);
                         }
                     }
+                    EmuCommand::SetSerialPeripheral(peripheral) => {
+                        if let Ok(mut gb) = gb.lock() {
+                            apply_serial_peripheral(
+                                &mut gb,
+                                &mobile,
+                                peripheral,
+                                mobile_diag,
+                                &mut serial_peripheral,
+                                &mut mobile_active,
+                                &mut mobile_time_accum_ns,
+                            );
+                        }
+                    }
                     EmuCommand::Shutdown => {
                         if let Ok(mut gb) = gb.lock() {
                             gb.mmu.save_cart_ram();
+                        }
+                        if let Some(mobile) = mobile.as_ref()
+                            && let Ok(mut adapter) = mobile.lock()
+                        {
+                            let _ = adapter.stop();
                         }
                         return;
                     }
@@ -281,6 +612,17 @@ fn run_emulator_thread(
                 UiToEmu::Action(action) => {
                     if let Ok(mut gb) = gb.lock() {
                         apply_ui_action(action, &mut gb, &mut audio_stream, speed);
+                        // GameBoy::reset rebuilds the MMU (including Serial), so restore the
+                        // currently selected serial peripheral after any reset/load.
+                        apply_serial_peripheral(
+                            &mut gb,
+                            &mobile,
+                            serial_peripheral,
+                            mobile_diag,
+                            &mut serial_peripheral,
+                            &mut mobile_active,
+                            &mut mobile_time_accum_ns,
+                        );
                         gb.mmu.ppu.clear_frame_flag();
                         frame_count = 0;
                         next_frame = Instant::now() + FRAME_TIME;
@@ -356,6 +698,19 @@ fn run_emulator_thread(
         }
 
         frame_count = frame_count.wrapping_add(1);
+
+        if mobile_active && let Some(mobile) = mobile.as_ref() {
+            // Advance emulated time by one frame and drive libmobile.
+            mobile_time_accum_ns += FRAME_TIME.as_nanos();
+            let delta_ms = (mobile_time_accum_ns / 1_000_000) as u32;
+            mobile_time_accum_ns %= 1_000_000;
+
+            if delta_ms != 0
+                && let Ok(mut adapter) = mobile.lock()
+            {
+                let _ = adapter.poll(delta_ms);
+            }
+        }
 
         if !speed.fast {
             let now = Instant::now();
@@ -471,7 +826,7 @@ fn draw_game_screen(pixels: &mut Pixels, frame: &[u32]) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_ui(state: &mut UiState, ui: &imgui::Ui) {
+fn build_ui(state: &mut UiState, ui: &imgui::Ui, mobile_available: bool) {
     if state.show_context {
         let flags = imgui::WindowFlags::NO_TITLE_BAR
             | imgui::WindowFlags::NO_MOVE
@@ -500,6 +855,31 @@ fn build_ui(state: &mut UiState, ui: &imgui::Ui) {
                     state.paused = false;
                     close_menu = true;
                 }
+
+                ui.separator();
+                ui.text("Serial Peripheral");
+
+                if mobile_available {
+                    let items = ["None", "Mobile Adapter GB"];
+                    let mut selected = match state.serial_peripheral {
+                        SerialPeripheral::None => 0,
+                        SerialPeripheral::MobileAdapter => 1,
+                    };
+                    if ui.combo_simple_string("##serial_peripheral", &mut selected, &items) {
+                        let new_value = match selected {
+                            1 => SerialPeripheral::MobileAdapter,
+                            _ => SerialPeripheral::None,
+                        };
+                        if new_value != state.serial_peripheral {
+                            state.serial_peripheral = new_value;
+                            state.pending_serial_peripheral = Some(new_value);
+                        }
+                    }
+                } else {
+                    state.serial_peripheral = SerialPeripheral::None;
+                    ui.text_disabled("Mobile Adapter GB (unavailable)");
+                }
+
                 if ui.button("Debugger") {
                     state.spawn_debugger = true;
                     close_menu = true;
@@ -682,19 +1062,126 @@ fn main() {
 
     let mut frame = vec![0u32; 160 * 144];
 
+    let mut serial_peripheral = if args.mobile {
+        SerialPeripheral::MobileAdapter
+    } else {
+        SerialPeripheral::None
+    };
+
+    let config_path = args
+        .mobile_config
+        .clone()
+        .unwrap_or_else(|| rom_path.with_extension("mobile"));
+
+    let mobile = {
+        let base_host: Box<dyn MobileHost> = Box::new(StdMobileHost::new(config_path));
+        let host: Box<dyn MobileHost> = if args.mobile_diag {
+            Box::new(DiagMobileHost::new(base_host))
+        } else {
+            base_host
+        };
+
+        match MobileAdapter::new(host) {
+            Ok(mut adapter) => {
+                let mut cfg = MobileConfig {
+                    device: args.mobile_device.into(),
+                    unmetered: args.mobile_unmetered,
+                    p2p_port: args.mobile_p2p_port,
+                    ..Default::default()
+                };
+
+                if let Some(s) = args.mobile_dns1.as_deref() {
+                    match parse_mobile_addr(s) {
+                        Ok(addr) => cfg.dns1 = addr,
+                        Err(e) => warn!("Ignoring --mobile-dns1: {e}"),
+                    }
+                }
+                if let Some(s) = args.mobile_dns2.as_deref() {
+                    match parse_mobile_addr(s) {
+                        Ok(addr) => cfg.dns2 = addr,
+                        Err(e) => warn!("Ignoring --mobile-dns2: {e}"),
+                    }
+                }
+                if let Some(s) = args.mobile_relay.as_deref() {
+                    match parse_mobile_addr(s) {
+                        Ok(addr) => cfg.relay = addr,
+                        Err(e) => warn!("Ignoring --mobile-relay: {e}"),
+                    }
+                }
+
+                let _ = adapter.apply_config(&cfg);
+                Some(Arc::new(Mutex::new(adapter)))
+            }
+            Err(e) => {
+                warn!("Mobile Adapter backend unavailable: {e}");
+                None
+            }
+        }
+    };
+
+    match serial_peripheral {
+        SerialPeripheral::None => {
+            gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
+        }
+        SerialPeripheral::MobileAdapter => {
+            if let Some(mobile) = mobile.as_ref() {
+                if let Ok(mut adapter) = mobile.lock()
+                    && let Err(e) = adapter.start()
+                {
+                    warn!("Failed to start Mobile Adapter: {e}");
+                    gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
+                    serial_peripheral = SerialPeripheral::None;
+                }
+
+                if serial_peripheral == SerialPeripheral::MobileAdapter {
+                    if args.mobile_diag {
+                        gb.mmu
+                            .serial
+                            .connect(Box::new(DiagMobileLinkPort::new(Arc::clone(mobile))));
+                    } else {
+                        gb.mmu
+                            .serial
+                            .connect(Box::new(MobileLinkPort::new(Arc::clone(mobile))));
+                    }
+                }
+            } else {
+                warn!("Mobile Adapter selected but backend not available");
+                gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
+                serial_peripheral = SerialPeripheral::None;
+            }
+        }
+    }
+
     if !headless {
         let gb = Arc::new(Mutex::new(gb));
         let mut speed = Speed {
             factor: 1.0,
             fast: false,
         };
-        let mut ui_state = UiState::default();
+        let mut ui_state = UiState {
+            serial_peripheral,
+            ..Default::default()
+        };
 
         let (to_emu_tx, to_emu_rx) = mpsc::channel();
         let (from_emu_tx, from_emu_rx) = mpsc::channel();
         let emu_gb = Arc::clone(&gb);
+        let emu_mobile = mobile.clone();
+        let emu_serial_peripheral = serial_peripheral;
+        let emu_mobile_diag = args.mobile_diag;
         let emu_handle = thread::spawn(move || {
-            run_emulator_thread(emu_gb, speed, debug_enabled, to_emu_rx, from_emu_tx);
+            run_emulator_thread(
+                emu_gb,
+                speed,
+                debug_enabled,
+                emu_mobile,
+                emu_serial_peripheral,
+                emu_mobile_diag,
+                EmuThreadChannels {
+                    rx: to_emu_rx,
+                    tx: from_emu_tx,
+                },
+            );
         });
         let mut emu_handle = Some(emu_handle);
         let mut sent_shutdown = false;
@@ -855,7 +1342,7 @@ fn main() {
 
                                 match win.kind {
                                     WindowKind::Main => {
-                                        build_ui(&mut ui_state, ui);
+                                        build_ui(&mut ui_state, ui, mobile.is_some());
                                         draw_game_screen(&mut win.pixels, &frame);
                                     }
                                     WindowKind::Debugger => draw_debugger(&mut win.pixels, &gb, ui),
@@ -975,6 +1462,12 @@ fn main() {
                         }
                     }
 
+                    if let Some(peripheral) = ui_state.pending_serial_peripheral.take() {
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetSerialPeripheral(
+                            peripheral,
+                        )));
+                    }
+
                     if let Some(action) = ui_state.pending_action.take() {
                         let _ = to_emu_tx.send(UiToEmu::Action(action));
                         ui_state.paused = false;
@@ -1001,6 +1494,8 @@ fn main() {
     } else {
         let mut frame_count = 0u64;
         let start = Instant::now();
+        let mut mobile_time_accum_ns: u128 = 0;
+        let mobile_active = serial_peripheral == SerialPeripheral::MobileAdapter;
         'headless: loop {
             while !gb.mmu.ppu.frame_ready() {
                 gb.cpu.step(&mut gb.mmu);
@@ -1038,6 +1533,17 @@ fn main() {
 
             frame_count += 1;
 
+            if mobile_active && let Some(mobile) = mobile.as_ref() {
+                mobile_time_accum_ns += FRAME_TIME.as_nanos();
+                let delta_ms = (mobile_time_accum_ns / 1_000_000) as u32;
+                mobile_time_accum_ns %= 1_000_000;
+                if delta_ms != 0
+                    && let Ok(mut adapter) = mobile.lock()
+                {
+                    let _ = adapter.poll(delta_ms);
+                }
+            }
+
             if let Some(max) = frame_limit
                 && frame_count >= max as u64
             {
@@ -1048,6 +1554,12 @@ fn main() {
             {
                 break;
             }
+        }
+
+        if let Some(mobile) = mobile.as_ref()
+            && let Ok(mut adapter) = mobile.lock()
+        {
+            let _ = adapter.stop();
         }
     }
 }

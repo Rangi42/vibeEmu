@@ -2,6 +2,8 @@
 members = [
     "crates/vibe-emu-core",
     "crates/vibe-emu-ui",
+    "crates/vibe-emu-mobile-sys",
+    "crates/vibe-emu-mobile",
 ]
 resolver = "2"
 

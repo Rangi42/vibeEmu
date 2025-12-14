@@ -518,28 +518,26 @@ impl Mmu {
                 if self.ppu.oam_accessible() {
                     self.oam_bug_next_access = None;
                     self.ppu.oam[(addr - 0xFE00) as usize] = val;
-                } else {
-                    if !self.cgb_mode {
-                        let access = self
-                            .oam_bug_next_access
-                            .take()
-                            .unwrap_or(OamBugAccess::Write);
-                        if env_flag_enabled("VIBEEMU_TRACE_OAMBUG") {
-                            let pc_str = self
-                                .last_cpu_pc
-                                .map(|p| format!("{:04X}", p))
-                                .unwrap_or_else(|| "<none>".to_string());
-                            let (mode, mode_clock, accessed_row, row) =
-                                self.ppu.debug_oam_bug_snapshot();
-                            eprintln!(
-                                "[OAMBUG] write blocked pc={} addr={:04X} val={:02X} access={:?} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?}",
-                                pc_str, addr, val, access, mode, mode_clock, accessed_row, row
-                            );
-                        }
-                        self.ppu.oam_bug_access(addr, access);
-                    } else {
-                        self.oam_bug_next_access = None;
+                } else if !self.cgb_mode {
+                    let access = self
+                        .oam_bug_next_access
+                        .take()
+                        .unwrap_or(OamBugAccess::Write);
+                    if env_flag_enabled("VIBEEMU_TRACE_OAMBUG") {
+                        let pc_str = self
+                            .last_cpu_pc
+                            .map(|p| format!("{:04X}", p))
+                            .unwrap_or_else(|| "<none>".to_string());
+                        let (mode, mode_clock, accessed_row, row) =
+                            self.ppu.debug_oam_bug_snapshot();
+                        eprintln!(
+                            "[OAMBUG] write blocked pc={} addr={:04X} val={:02X} access={:?} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?}",
+                            pc_str, addr, val, access, mode, mode_clock, accessed_row, row
+                        );
                     }
+                    self.ppu.oam_bug_access(addr, access);
+                } else {
+                    self.oam_bug_next_access = None;
                 }
             }
             0xFEA0..=0xFEFF => {

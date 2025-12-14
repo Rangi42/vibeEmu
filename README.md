@@ -7,15 +7,17 @@
 
 This repository intentionally exposes both successes *and* failures so others can judge the approach. It is **not** production‑ready software and **not** an endorsement of replacing human engineers with AI.
 
-vibeEmu is a Game Boy and Game Boy Color emulator written in Rust.  It aims to
+vibeEmu is a Game Boy and Game Boy Color emulator written in Rust. It aims to
 feature a cycle‑accurate CPU, MMU, PPU and APU along with a `winit` + `pixels`
-frontend.  An ImGui powered debug UI will expose a register viewer and a VRAM
-viewer, making the emulator useful both for playing games and for studying how
-the hardware works. The repository is organised as a Cargo workspace with two
+frontend. An ImGui powered debug UI exposes a register viewer and a VRAM viewer,
+making the emulator useful both for playing games and for studying how the
+hardware works. The repository is organised as a Cargo workspace with multiple
 crates:
 
 - `vibe-emu-core` contains the platform-agnostic emulation library.
 - `vibe-emu-ui` provides the desktop frontend built on the core crate.
+- `vibe-emu-mobile` provides Mobile Adapter GB integration (libmobile wrapper).
+- `vibe-emu-mobile-sys` builds/links libmobile and exposes minimal FFI.
 
 ## Building
 
@@ -43,6 +45,25 @@ rendering via `wgpu`. On Linux you may need X11 development packages installed
 relies on `cpal`, which requires ALSA headers. Install `libasound2-dev` as well
 if you build on Linux.
 
+### Mobile Adapter GB support (bundled by default)
+
+The UI builds with **Mobile Adapter GB** support enabled by default using the
+vendored `vendor/libmobile-0.2.2` sources. This requires a working C toolchain
+on your platform (e.g. MSVC Build Tools on Windows, or clang/gcc on Linux/macOS).
+
+If you want to build the UI without Mobile support:
+
+```bash
+cargo build -p vibe-emu-ui --no-default-features
+```
+
+If you want to link against a system-provided libmobile instead of the vendored
+copy:
+
+```bash
+cargo build -p vibe-emu-ui --no-default-features --features mobile-system
+```
+
 ## Running
 
 The emulator expects the path to a ROM file. The command below will start the emulator in CGB mode by default:
@@ -59,15 +80,33 @@ Pass `--dmg` to force DMG mode, `--cgb` to force CGB mode, or `--serial` to run 
 
 If no limit is specified the emulator runs until interrupted.
 
+### Mobile Adapter GB
+
+The desktop UI includes Mobile Adapter GB support (libmobile). You can select
+the active serial peripheral at runtime via the UI (see **Debugging UI**).
+
+To start the emulator with the Mobile Adapter selected immediately:
+
+```bash
+cargo run -p vibe-emu-ui -- --mobile path/to/rom.gbc
+```
+
+To log libmobile debug messages and socket activity:
+
+```bash
+cargo run -p vibe-emu-ui -- --mobile --mobile-diag path/to/rom.gbc
+```
+
 Test ROMs used for development are located in the `roms/` directory.
 
 ## Debugging UI
 
 Right‑click the main window to pause emulation and open a context menu.  From
-here you can load another ROM, reset the Game Boy or open the **Debugger** and
-**VRAM Viewer** windows.  The debugger shows CPU registers while the VRAM viewer
-lets you inspect background maps, tiles, OAM and palettes.  Hold **Space** to
-fast‑forward (4× speed) and press **Escape** to quit.
+here you can load another ROM, reset the Game Boy, choose the active **Serial
+Peripheral**, or open the **Debugger** and **VRAM Viewer** windows. The debugger
+shows CPU registers while the VRAM viewer lets you inspect background maps,
+tiles, OAM and palettes. Hold **Space** to fast‑forward (4× speed) and press
+**Escape** to quit.
 
 ## Controls
 

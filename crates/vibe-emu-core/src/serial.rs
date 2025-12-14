@@ -43,22 +43,30 @@ pub struct Serial {
 struct TransferState {
     remaining_bits: u8,
     outgoing: u8,
-    incoming: u8,
+    incoming: Option<u8>,
     pending_in: u8,
     internal_clock: bool,
     fast_clock: bool,
 }
 
 impl TransferState {
-    fn new(outgoing: u8, incoming: u8, internal_clock: bool, fast_clock: bool) -> Self {
+    fn new(outgoing: u8, internal_clock: bool, fast_clock: bool) -> Self {
         Self {
             remaining_bits: 8,
             outgoing,
-            incoming,
-            pending_in: incoming,
+            incoming: None,
+            pending_in: 0,
             internal_clock,
             fast_clock,
         }
+    }
+
+    fn latch_incoming(&mut self, incoming: u8) {
+        if self.incoming.is_some() {
+            return;
+        }
+        self.incoming = Some(incoming);
+        self.pending_in = incoming;
     }
 
     fn shift(&mut self, sb: &mut u8) -> bool {
@@ -109,18 +117,33 @@ impl Serial {
         match addr {
             0xFF01 => self.sb = val,
             0xFF02 => {
+                if let Some(state) = self.transfer.as_mut() {
+                    // Mid-transfer SC writes:
+                    // - If bit7 is cleared, cancel the transfer.
+                    // - If bit7 remains set, treat the write as a (re)start
+                    //   request: restart the transfer using the current SB
+                    //   value, and apply clock mode bits.
+                    if val & 0x80 == 0 {
+                        self.sc = val;
+                        self.transfer = None;
+                        return;
+                    }
+
+                    self.sc = val;
+                    state.remaining_bits = 8;
+                    state.outgoing = self.sb;
+                    state.incoming = None;
+                    state.pending_in = 0;
+                    state.internal_clock = (val & 0x01) != 0;
+                    state.fast_clock = (val & 0x02) != 0;
+                    return;
+                }
+
                 self.sc = val;
                 if val & 0x80 != 0 {
-                    let outgoing = self.sb;
-                    let incoming = self.port.transfer(self.sb);
                     let internal_clock = val & 0x01 != 0;
                     let fast_clock = val & 0x02 != 0;
-                    self.transfer = Some(TransferState::new(
-                        outgoing,
-                        incoming,
-                        internal_clock,
-                        fast_clock,
-                    ));
+                    self.transfer = Some(TransferState::new(self.sb, internal_clock, fast_clock));
                     // When using an external clock the transfer will only
                     // complete if the link partner supplies the necessary
                     // pulses, so we simply keep SC bit 7 asserted until the
@@ -128,6 +151,45 @@ impl Serial {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Deliver external clock pulses to the serial unit.
+    ///
+    /// Each pulse clocks one bit. This is only meaningful when the transfer
+    /// is in external clock mode (SC bit0 = 0).
+    pub fn external_clock_pulse(&mut self, count: u8, if_reg: &mut u8) {
+        if self.transfer.is_none() {
+            return;
+        }
+
+        let mut complete = false;
+        {
+            let state = self.transfer.as_mut().unwrap();
+            if state.internal_clock {
+                return;
+            }
+
+            if state.incoming.is_none() {
+                let incoming = self.port.transfer(state.outgoing);
+                state.latch_incoming(incoming);
+            }
+
+            for _ in 0..count {
+                if state.shift(&mut self.sb) {
+                    complete = true;
+                    break;
+                }
+            }
+        }
+
+        if complete {
+            let state = self.transfer.take().unwrap();
+            let incoming = state.incoming.unwrap_or(0xFF);
+            self.sb = incoming;
+            self.out_buf.push(state.outgoing);
+            self.sc &= 0x7F;
+            *if_reg |= 0x08;
         }
     }
 
@@ -152,6 +214,17 @@ impl Serial {
             let steps = curr_div.wrapping_sub(prev_div);
             let mut prev_clock = ((div.wrapping_sub(phase) >> clock_bit) & 1) != 0;
 
+            if state.internal_clock && state.incoming.is_none() {
+                // Defer the link exchange until the transfer actually clocks,
+                // so external-clock transfers don't consume bytes when no
+                // clock edges arrive.
+                //
+                // For internal clock mode, latch the partner byte before the
+                // first shifted bit.
+                let incoming = self.port.transfer(state.outgoing);
+                state.latch_incoming(incoming);
+            }
+
             for _ in 0..steps {
                 div = div.wrapping_add(1);
                 let clock = ((div.wrapping_sub(phase) >> clock_bit) & 1) != 0;
@@ -165,7 +238,8 @@ impl Serial {
 
         if complete {
             let state = self.transfer.take().unwrap();
-            self.sb = state.incoming;
+            let incoming = state.incoming.unwrap_or(0xFF);
+            self.sb = incoming;
             self.out_buf.push(state.outgoing);
             self.sc &= 0x7F;
             *if_reg |= 0x08;
@@ -208,5 +282,243 @@ fn clock_bit_index(cgb_mode: bool, double_speed: bool, fast_clock: bool) -> u32 
             (true, false) => 3,
             (true, true) => 2,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LinkPort, Serial};
+    use crate::hardware::DmgRevision;
+
+    struct FixedInLinkPort {
+        ret: u8,
+        calls: usize,
+        last_out: Option<u8>,
+    }
+
+    impl FixedInLinkPort {
+        fn new(ret: u8) -> Self {
+            Self {
+                ret,
+                calls: 0,
+                last_out: None,
+            }
+        }
+    }
+
+    impl LinkPort for FixedInLinkPort {
+        fn transfer(&mut self, byte: u8) -> u8 {
+            self.calls += 1;
+            self.last_out = Some(byte);
+            self.ret
+        }
+    }
+
+    #[test]
+    fn sc_write_during_active_transfer_does_not_cancel() {
+        let mut serial = Serial::new(false, DmgRevision::default());
+        serial.connect(Box::new(FixedInLinkPort::new(0x34)));
+
+        serial.write(0xFF01, 0x12);
+        serial.write(0xFF02, 0x80 | 0x01);
+
+        // Attempt to clear SC mid-transfer. The transfer should be cancelled
+        // and must not complete later.
+        serial.write(0xFF02, 0x00);
+        assert_eq!(serial.read(0xFF02) & 0x80, 0);
+
+        let mut if_reg = 0u8;
+        serial.step(0, 4096, false, &mut if_reg);
+        assert_eq!(serial.read(0xFF02) & 0x80, 0);
+        assert_eq!(if_reg & 0x08, 0);
+    }
+
+    #[test]
+    fn internal_clock_transfer_completes_and_requests_irq() {
+        let mut serial = Serial::new(false, DmgRevision::default());
+        serial.connect(Box::new(FixedInLinkPort::new(0x34)));
+
+        serial.write(0xFF01, 0x12);
+        serial.write(0xFF02, 0x80 | 0x01);
+
+        let mut if_reg = 0u8;
+        // For DMG internal clock, we clock on DIV bit 8 falling edges.
+        // 8 bits = 8 falling edges = 8 * 512 DIV increments.
+        serial.step(0, 4096, false, &mut if_reg);
+
+        assert_eq!(serial.read(0xFF02) & 0x80, 0);
+        assert_ne!(if_reg & 0x08, 0);
+        assert_eq!(serial.read(0xFF01), 0x34);
+    }
+
+    #[test]
+    fn external_clock_stalls_without_pulses() {
+        let mut serial = Serial::new(false, DmgRevision::default());
+        serial.connect(Box::new(FixedInLinkPort::new(0x34)));
+
+        serial.write(0xFF01, 0x12);
+        serial.write(0xFF02, 0x80);
+
+        let mut if_reg = 0u8;
+        serial.step(0, 60000, false, &mut if_reg);
+
+        assert_ne!(serial.read(0xFF02) & 0x80, 0);
+        assert_eq!(if_reg & 0x08, 0);
+    }
+
+    #[test]
+    fn external_clock_completes_with_pulses() {
+        let mut serial = Serial::new(false, DmgRevision::default());
+        serial.connect(Box::new(FixedInLinkPort::new(0x34)));
+
+        serial.write(0xFF01, 0x12);
+        serial.write(0xFF02, 0x80);
+
+        let mut if_reg = 0u8;
+        serial.external_clock_pulse(7, &mut if_reg);
+        assert_ne!(serial.read(0xFF02) & 0x80, 0);
+        assert_eq!(if_reg & 0x08, 0);
+
+        serial.external_clock_pulse(1, &mut if_reg);
+        assert_eq!(serial.read(0xFF02) & 0x80, 0);
+        assert_ne!(if_reg & 0x08, 0);
+        assert_eq!(serial.read(0xFF01), 0x34);
+    }
+
+    #[test]
+    fn internal_clock_irq_only_on_final_bit_dmg() {
+        let mut serial = Serial::new(false, DmgRevision::default());
+        serial.connect(Box::new(FixedInLinkPort::new(0x34)));
+
+        serial.write(0xFF01, 0x12);
+        serial.write(0xFF02, 0x80 | 0x01);
+
+        let mut if_reg = 0u8;
+        // 7 bits worth of falling edges: 7 * 512 DIV increments.
+        serial.step(0, 3584, false, &mut if_reg);
+        assert_ne!(serial.read(0xFF02) & 0x80, 0);
+        assert_eq!(if_reg & 0x08, 0);
+
+        // Final bit.
+        serial.step(3584, 4096, false, &mut if_reg);
+        assert_eq!(serial.read(0xFF02) & 0x80, 0);
+        assert_ne!(if_reg & 0x08, 0);
+        assert_eq!(serial.read(0xFF01), 0x34);
+    }
+
+    #[test]
+    fn internal_clock_rate_cgb_normal_speed() {
+        let mut serial = Serial::new(true, DmgRevision::default());
+        serial.connect(Box::new(FixedInLinkPort::new(0x34)));
+
+        serial.write(0xFF01, 0x12);
+        // CGB internal, normal clock.
+        serial.write(0xFF02, 0x80 | 0x01);
+
+        let mut if_reg = 0u8;
+        // CGB normal clock uses DIV bit 8: 8 bits -> 8 * 512 increments.
+        serial.step(0, 4095, false, &mut if_reg);
+        assert_ne!(serial.read(0xFF02) & 0x80, 0);
+        assert_eq!(if_reg & 0x08, 0);
+
+        serial.step(4095, 4096, false, &mut if_reg);
+        assert_eq!(serial.read(0xFF02) & 0x80, 0);
+        assert_ne!(if_reg & 0x08, 0);
+        assert_eq!(serial.read(0xFF01), 0x34);
+    }
+
+    #[test]
+    fn internal_clock_rate_cgb_double_speed() {
+        let mut serial = Serial::new(true, DmgRevision::default());
+        serial.connect(Box::new(FixedInLinkPort::new(0x34)));
+
+        serial.write(0xFF01, 0x12);
+        // CGB internal, normal clock (fast bit clear) in double-speed mode.
+        serial.write(0xFF02, 0x80 | 0x01);
+
+        let mut if_reg = 0u8;
+        // In double-speed, CGB normal clock uses DIV bit 7: 8 bits -> 8 * 256.
+        serial.step(0, 2047, true, &mut if_reg);
+        assert_ne!(serial.read(0xFF02) & 0x80, 0);
+        assert_eq!(if_reg & 0x08, 0);
+
+        serial.step(2047, 2048, true, &mut if_reg);
+        assert_eq!(serial.read(0xFF02) & 0x80, 0);
+        assert_ne!(if_reg & 0x08, 0);
+        assert_eq!(serial.read(0xFF01), 0x34);
+    }
+
+    #[test]
+    fn internal_clock_rate_cgb_fast_clock() {
+        let mut serial = Serial::new(true, DmgRevision::default());
+        serial.connect(Box::new(FixedInLinkPort::new(0x34)));
+
+        serial.write(0xFF01, 0x12);
+        // CGB internal + fast clock (SC bit1).
+        serial.write(0xFF02, 0x80 | 0x01 | 0x02);
+
+        let mut if_reg = 0u8;
+        // Fast clock uses DIV bit 3 in normal speed: falling edges every 16.
+        // 8 bits -> 8 * 16 = 128 increments.
+        serial.step(0, 127, false, &mut if_reg);
+        assert_ne!(serial.read(0xFF02) & 0x80, 0);
+        assert_eq!(if_reg & 0x08, 0);
+
+        serial.step(127, 128, false, &mut if_reg);
+        assert_eq!(serial.read(0xFF02) & 0x80, 0);
+        assert_ne!(if_reg & 0x08, 0);
+        assert_eq!(serial.read(0xFF01), 0x34);
+    }
+
+    #[test]
+    fn open_bus_no_partner_internal_clock_receives_ff() {
+        let mut serial = Serial::new(false, DmgRevision::default());
+        // No connect(): uses NullLinkPort which shifts in 1s.
+        serial.write(0xFF01, 0x12);
+        serial.write(0xFF02, 0x80 | 0x01);
+
+        let mut if_reg = 0u8;
+        serial.step(0, 4096, false, &mut if_reg);
+
+        assert_ne!(if_reg & 0x08, 0);
+        assert_eq!(serial.read(0xFF01), 0xFF);
+    }
+
+    #[test]
+    fn open_bus_no_partner_external_clock_receives_ff() {
+        let mut serial = Serial::new(false, DmgRevision::default());
+        // No connect(): uses NullLinkPort which shifts in 1s.
+        serial.write(0xFF01, 0x12);
+        serial.write(0xFF02, 0x80);
+
+        let mut if_reg = 0u8;
+        serial.external_clock_pulse(8, &mut if_reg);
+
+        assert_ne!(if_reg & 0x08, 0);
+        assert_eq!(serial.read(0xFF01), 0xFF);
+    }
+
+    #[test]
+    fn sc_write_with_bit7_restarts_transfer_using_current_sb() {
+        let mut serial = Serial::new(false, DmgRevision::default());
+        serial.connect(Box::new(FixedInLinkPort::new(0x34)));
+
+        serial.write(0xFF01, 0x12);
+        serial.write(0xFF02, 0x80 | 0x01);
+
+        let mut if_reg = 0u8;
+        // Advance one bit.
+        serial.step(0, 512, false, &mut if_reg);
+        assert_eq!(if_reg & 0x08, 0);
+
+        // Update SB and restart.
+        serial.write(0xFF01, 0x55);
+        serial.write(0xFF02, 0x80 | 0x01);
+
+        // Complete transfer.
+        serial.step(512, 512 + 4096, false, &mut if_reg);
+        assert_ne!(if_reg & 0x08, 0);
+        // Output buffer records the outgoing byte that was actually used.
+        assert_eq!(serial.peek_output().last().copied(), Some(0x55));
     }
 }

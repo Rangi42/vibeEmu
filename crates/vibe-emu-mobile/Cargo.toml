@@ -1,0 +1,19 @@
+[package]
+name = "vibe-emu-mobile"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Enable libmobile by building from vendor/libmobile (see vibe-emu-mobile-sys).
+bundled = ["dep:vibe-emu-mobile-sys", "vibe-emu-mobile-sys/bundled"]
+# Enable libmobile by linking to a system-provided library.
+system = ["dep:vibe-emu-mobile-sys", "vibe-emu-mobile-sys/system"]
+
+default = []
+
+[dependencies]
+vibe-emu-core = { path = "../vibe-emu-core" }
+vibe-emu-mobile-sys = { path = "../vibe-emu-mobile-sys", optional = true }
+thiserror = "2"
+socket2 = "0.5"
+

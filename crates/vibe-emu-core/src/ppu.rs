@@ -522,7 +522,7 @@ impl Ppu {
         }
 
         let oam_index = (self.mode_clock / 2) as usize; // 0..=39
-        let accessed_oam_row = ((oam_index & !1) * 4 + 8) as usize;
+        let accessed_oam_row = (oam_index & !1) * 4 + 8;
         if accessed_oam_row >= OAM_SIZE {
             return None;
         }
@@ -560,16 +560,8 @@ impl Ppu {
     }
 
     #[inline]
-    fn oam_bug_bitwise_glitch_quaternary_read_dmg(
-        a: u16,
-        b: u16,
-        c: u16,
-        d: u16,
-        e: u16,
-        f: u16,
-        g: u16,
-        h: u16,
-    ) -> u16 {
+    fn oam_bug_bitwise_glitch_quaternary_read_dmg(vals: [u16; 8]) -> u16 {
+        let [a, b, c, d, e, f, g, h] = vals;
         let _ = a;
         (e & (h | g | ((!d) & f) | c | b)) | (c & g & h)
     }
@@ -611,8 +603,8 @@ impl Ppu {
             self.oam_get_word(prev + 2),
             self.oam_get_word(prev + 3),
         ];
-        for i in 0..4 {
-            self.oam_set_word(base + i, prev_words[i]);
+        for (i, &word) in prev_words.iter().enumerate() {
+            self.oam_set_word(base + i, word);
         }
         self.oam_set_word(target, new_val);
     }
@@ -640,8 +632,8 @@ impl Ppu {
             self.oam_get_word(prev + 2),
             self.oam_get_word(prev + 3),
         ];
-        for i in 0..4 {
-            self.oam_set_word(base + i, prev_words[i]);
+        for (i, &word) in prev_words.iter().enumerate() {
+            self.oam_set_word(base + i, word);
         }
         self.oam_set_word(target, new_val);
     }
@@ -668,9 +660,9 @@ impl Ppu {
                 self.oam_get_word(prev + 3),
             ];
 
-            for i in 0..4 {
-                self.oam_set_word(base + i, row_words[i]);
-                self.oam_set_word(prev2 + i, row_words[i]);
+            for (i, &word) in row_words.iter().enumerate() {
+                self.oam_set_word(base + i, word);
+                self.oam_set_word(prev2 + i, word);
             }
         }
 
@@ -882,7 +874,7 @@ impl Ppu {
             return;
         }
 
-        let new_val = Self::oam_bug_bitwise_glitch_quaternary_read_dmg(
+        let new_val = Self::oam_bug_bitwise_glitch_quaternary_read_dmg([
             self.oam_get_word(0),
             self.oam_get_word(base),
             self.oam_get_word(base - 2),
@@ -891,7 +883,7 @@ impl Ppu {
             self.oam_get_word(base - 7),
             self.oam_get_word(base - 8),
             self.oam_get_word(base - 16),
-        );
+        ]);
         self.oam_set_word(base - 4, new_val);
 
         for i in 0..8 {
