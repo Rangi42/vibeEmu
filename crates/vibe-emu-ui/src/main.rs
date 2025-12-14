@@ -12,7 +12,7 @@ use pixels::{Pixels, SurfaceTexture};
 use rfd::FileDialog;
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, Once, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use vibe_emu_core::serial::{LinkPort, NullLinkPort};
@@ -902,6 +902,27 @@ fn configure_wgpu_backend() {
     }
 }
 
+fn log_wgpu_adapter_once(pixels: &Pixels) {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let adapter_info = pixels.adapter().get_info();
+        info!(
+            "WGPU adapter: {} (type={:?}, backend={:?}, vendor=0x{:X}, device=0x{:X}); driver='{}' driver_info='{}'",
+            adapter_info.name,
+            adapter_info.device_type,
+            adapter_info.backend,
+            adapter_info.vendor,
+            adapter_info.device,
+            adapter_info.driver,
+            adapter_info.driver_info
+        );
+
+        if let Some(forced) = std::env::var_os("WGPU_BACKEND") {
+            info!("WGPU_BACKEND={}", forced.to_string_lossy());
+        }
+    });
+}
+
 fn prime_audio_queue(gb: &mut GameBoy) -> (usize, usize) {
     let capacity = gb.mmu.apu.max_queue_capacity().max(1);
     let target_frames = ((capacity as f32) * AUDIO_WARMUP_TARGET_RATIO).ceil() as usize;
@@ -1204,6 +1225,8 @@ fn main() {
         let size = window.inner_size();
         let surface = SurfaceTexture::new(size.width, size.height, &window);
         let pixels = Pixels::new(160, 144, surface).expect("Pixels error");
+
+        log_wgpu_adapter_once(&pixels);
 
         let mut imgui = ImguiContext::create();
         imgui.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE;
