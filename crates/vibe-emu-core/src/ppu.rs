@@ -222,7 +222,7 @@ impl Ppu {
         }
     }
 
-    /// Set a runtime DMG palette. Colors are in 0x00RRGGBB order.
+    /// Updates the runtime DMG palette. Colors are in 0x00RRGGBB order.
     pub fn set_dmg_palette(&mut self, pal: [u32; 4]) {
         self.dmg_palette = pal;
     }
@@ -388,13 +388,13 @@ impl Ppu {
         self.cgb
     }
 
-    /// Get a CGB background palette color as 0x00RRGGBB.
+    /// CGB background palette color as 0x00RRGGBB.
     pub fn bg_palette_color(&self, palette: usize, color_id: usize) -> u32 {
         let off = palette * 8 + color_id * 2;
         Self::decode_cgb_color(self.bgpd[off], self.bgpd[off + 1])
     }
 
-    /// Return a 0x00RRGGBB colour from **OBJ** palette RAM.
+    /// CGB OBJ palette color as 0x00RRGGBB.
     ///
     /// * `palette` – CGB OBJ palette index (0-7)
     /// * `color_id` – colour within that palette (0-3)

@@ -14,7 +14,7 @@ fn env_flag_enabled(var: &str) -> bool {
     use std::sync::OnceLock;
 
     static CACHE: OnceLock<std::collections::HashMap<&'static str, bool>> = OnceLock::new();
-    // Initialize with a small fixed set; avoids repeated env parsing.
+    // Cache a small fixed set to avoid repeated env parsing.
     let cache = CACHE.get_or_init(|| {
         let mut map = std::collections::HashMap::new();
         for key in ["VIBEEMU_TRACE_OAMBUG", "VIBEEMU_TRACE_LCDC"] {
@@ -758,17 +758,17 @@ impl Mmu {
         }
     }
 
-    /// Return true if a DMA transfer is in progress.
+    /// Whether a DMA transfer is in progress.
     pub fn dma_active(&self) -> bool {
         self.dma_cycles > 0 || self.pending_delay > 0
     }
 
-    /// Return true if a General or HBlank DMA stall is in progress.
+    /// Whether a General DMA stall is in progress.
     pub fn gdma_active(&self) -> bool {
         self.gdma_cycles > 0
     }
 
-    /// Decrement the GDMA stall counter by the given number of m-cycles.
+    /// Advances the GDMA stall countdown by the given number of m-cycles.
     pub fn gdma_step(&mut self, cycles: u16) {
         if self.gdma_cycles > 0 {
             self.gdma_cycles = self.gdma_cycles.saturating_sub(cycles as u32);

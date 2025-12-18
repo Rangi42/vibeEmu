@@ -1214,7 +1214,7 @@ impl Apu {
             ch2_env_countdown: 0,
         };
 
-        // Initialize channels to power-on register defaults
+        // Apply power-on register defaults (boot ROM may be skipped).
         apu.ch1.duty = 2;
         apu.ch1.duty_next = 2;
         apu.ch1.length = 0x3F;
@@ -1552,8 +1552,7 @@ impl Apu {
                     self.power_off();
                 } else {
                     if self.nr52 & 0x80 == 0 {
-                        // APU is transitioning from disabled to enabled. Initialize internal timing and staging.
-                        // Set lf_div = 1 on init and ensure square staging is reset.
+                        // On 0->1 transition, reset internal timing/pipelines to match hardware startup state.
                         self.lf_div = 1;
                         self.ch1.out_latched = 0;
                         self.ch1.out_stage1 = 0;

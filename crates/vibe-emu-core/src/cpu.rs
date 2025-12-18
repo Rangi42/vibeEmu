@@ -290,7 +290,7 @@ impl Cpu {
         self.write8(mmu, addr.wrapping_add(1), (val >> 8) as u8);
     }
 
-    /// Return a formatted string of the current CPU state for debugging.
+    /// Formatted CPU state string for debugging.
     pub fn debug_state(&self) -> String {
         format!(
             "AF:{:04X} BC:{:04X} DE:{:04X} HL:{:04X} PC:{:04X} SP:{:04X} CY:{}",

@@ -121,7 +121,7 @@ fn sweep_trigger_and_step() {
     apu.write_reg(0xFF26, 0x80); // master enable
     apu.write_reg(0xFF10, 0x11); // period=1, shift=1
     apu.write_reg(0xFF12, 0xF0); // envelope (DAC on)
-    // set frequency 0x200
+    // Use a stable base frequency so the immediate sweep result is predictable.
     apu.write_reg(0xFF13, 0x00);
     apu.write_reg(0xFF14, 0x82); // high bits=2, trigger
     // immediately applied sweep -> freq should be 0x300
@@ -130,13 +130,13 @@ fn sweep_trigger_and_step() {
     let mut div = 0u16;
     for _ in 0..(8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
-    } // step 1
+    }
     for _ in 0..(8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
-    } // step 2
+    }
     for _ in 0..(8192 / 4) {
         tick_machine(&mut apu, &mut div, 4);
-    } // step 3 (sweep clocked on previous step)
+    }
     assert_eq!(apu.ch1_frequency(), 0x6C0);
 }
 
@@ -609,7 +609,7 @@ fn nr13_write_sets_frequency_low_bits_and_is_write_only() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80); // enable APU
     apu.write_reg(0xFF13, 0x34); // write low bits
-    apu.write_reg(0xFF14, 0x82); // set high bits=2 and trigger
+    apu.write_reg(0xFF14, 0x82); // trigger at frequency 0x234
     assert_eq!(apu.ch1_frequency(), 0x234);
     assert_eq!(apu.read_reg(0xFF13), 0xFF); // NR13 is write-only
 }
@@ -630,7 +630,7 @@ fn nr13_period_change_delayed_until_sample_end() {
     }
     let timer_before = apu.ch1_timer();
 
-    apu.write_reg(0xFF13, 0x40); // set new low bits -> freq 0x540
+    apu.write_reg(0xFF13, 0x40); // update low bits; frequency becomes 0x540
     assert_eq!(apu.ch1_frequency(), 0x540);
     assert_eq!(apu.ch1_timer(), timer_before); // timer unchanged immediately
 
@@ -676,9 +676,9 @@ fn nr14_write_sets_frequency_high_bits_and_is_write_only() {
 fn nr14_length_enable_read_write() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);
-    apu.write_reg(0xFF14, 0x40); // set length enable
+    apu.write_reg(0xFF14, 0x40); // enable length counter
     assert_eq!(apu.read_reg(0xFF14), 0xFF);
-    apu.write_reg(0xFF14, 0x00); // clear length enable
+    apu.write_reg(0xFF14, 0x00); // disable length counter
     assert_eq!(apu.read_reg(0xFF14), 0xBF);
 }
 
@@ -822,7 +822,7 @@ fn nr23_period_change_delayed_until_sample_end() {
     }
     let timer_before = apu.ch2_timer();
 
-    apu.write_reg(0xFF18, 0x40); // new low bits -> freq 0x540
+    apu.write_reg(0xFF18, 0x40); // update low bits; frequency becomes 0x540
     assert_eq!(apu.ch2_frequency(), 0x540);
     assert_eq!(apu.ch2_timer(), timer_before);
 
@@ -850,9 +850,9 @@ fn nr24_write_sets_frequency_high_bits_and_is_write_only() {
 fn nr24_length_enable_read_write() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);
-    apu.write_reg(0xFF19, 0x40); // set length enable
+    apu.write_reg(0xFF19, 0x40); // enable length counter
     assert_eq!(apu.read_reg(0xFF19), 0xFF);
-    apu.write_reg(0xFF19, 0x00); // clear length enable
+    apu.write_reg(0xFF19, 0x00); // disable length counter
     assert_eq!(apu.read_reg(0xFF19), 0xBF);
 }
 
@@ -1199,9 +1199,9 @@ fn nr34_write_sets_frequency_high_bits_and_is_write_only() {
 fn nr34_length_enable_read_write() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);
-    apu.write_reg(0xFF1E, 0x40); // set length enable
+    apu.write_reg(0xFF1E, 0x40); // enable length counter
     assert_eq!(apu.read_reg(0xFF1E), 0xFF);
-    apu.write_reg(0xFF1E, 0x00); // clear length enable
+    apu.write_reg(0xFF1E, 0x00); // disable length counter
     assert_eq!(apu.read_reg(0xFF1E), 0xBF);
 }
 
