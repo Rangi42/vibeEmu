@@ -2,6 +2,8 @@
 name = "vibe-emu-mobile-sys"
 version = "0.1.0"
 edition = "2024"
+authors = ["vulcandth <vulcandth@gmail.com>"]
+license = "MIT"
 
 # A "-sys" crate: low-level FFI + linking/build.
 links = "mobile"
