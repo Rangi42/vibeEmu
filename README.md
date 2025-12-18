@@ -21,29 +21,25 @@ crates:
 
 ## Building
 
-Ensure you have a recent Rust toolchain installed. You can compile the entire
-workspace from the repository root:
+Ensure you have a recent Rust toolchain installed, then build the entire workspace:
 
 ```bash
 cargo build
 ```
 
-Each crate can also be built individually. The UI depends on the core library,
-so building the frontend will build the core automatically:
+For better performance when playing games, use a release build:
 
 ```bash
-# Core library only
-cargo build -p vibe-emu-core
-
-# UI frontend (pulls in the core crate as a dependency)
-cargo build -p vibe-emu-ui
+cargo build --release
 ```
 
-The frontend uses `winit` with the `pixels` crate for window creation and
-rendering via `wgpu`. On Linux you may need X11 development packages installed
-(e.g. `libx11-dev`) and GTK development headers (`libgtk-3-dev`). Audio output
-relies on `cpal`, which requires ALSA headers. Install `libasound2-dev` as well
-if you build on Linux.
+### Platform Requirements
+
+- **Windows**: Visual Studio Build Tools with C++ support
+- **Linux**: X11, GTK3, and ALSA development packages
+- **macOS**: Xcode Command Line Tools
+
+For detailed platform-specific instructions, troubleshooting, and build configuration options, see [BUILD.md](BUILD.md).
 
 ### Mobile Adapter GB support (bundled by default)
 
@@ -51,17 +47,28 @@ The UI builds with **Mobile Adapter GB** support enabled by default using the
 vendored `vendor/libmobile-0.2.2` sources. This requires a working C toolchain
 on your platform (e.g. MSVC Build Tools on Windows, or clang/gcc on Linux/macOS).
 
-If you want to build the UI without Mobile support:
+**License Notice**: The bundled `libmobile` library is licensed under the **GNU Lesser General Public License (LGPL) v3**. See `vendor/libmobile-0.2.2/COPYING.LESSER` for the full license text. The LGPL permits linking this library into your application. If you wish to use a modified or updated version of `libmobile`, you have two options:
+
+1. **Use a pre-installed library**: If you have `libmobile` already compiled and installed on your system (e.g., via a package manager or custom build), you can link against it instead of the bundled version. The library must be findable via standard system library paths or by setting the `LIBMOBILE_LIB_DIR` environment variable to point to the directory containing the compiled library file (e.g., `libmobile.so` on Linux, `mobile.lib` on Windows).
+   ```bash
+   cargo build -p vibe-emu-ui --no-default-features --features mobile-system
+   ```
+
+2. **Replace the vendored copy**: You may replace the contents of `vendor/libmobile-0.2.2/` with your modified or updated version and rebuild. The build system will automatically compile and link your replacement.
+   
+   Alternatively, to keep multiple versions side-by-side:
+   - Rename `vendor/libmobile-0.2.2/` to something else (e.g., `vendor/libmobile-0.2.2-original/`)
+   - Place your modified version in `vendor/libmobile-0.2.2/`
+   - Or place it in `vendor/libmobile/` and set the `LIBMOBILE_SRC_DIR` environment variable:
+     ```bash
+     export LIBMOBILE_SRC_DIR=/path/to/your/libmobile
+     cargo build -p vibe-emu-ui
+     ```
+
+If you want to build the UI without Mobile Adapter GB support entirely:
 
 ```bash
 cargo build -p vibe-emu-ui --no-default-features
-```
-
-If you want to link against a system-provided libmobile instead of the vendored
-copy:
-
-```bash
-cargo build -p vibe-emu-ui --no-default-features --features mobile-system
 ```
 
 ## Running
@@ -122,15 +129,6 @@ The default controls are:
 
 Use the **right mouse button** to pause/resume and bring up the context menu.
 
-### Manual volume control
-
-The Game Boy's "zombie" mode allows adjusting the envelope while a channel is
-playing. Different models behave inconsistently, but using increase mode with a
-period of zero works reliably. Write `$V8` to `NRx2` to set the initial volume
-before triggering the channel, then repeatedly write `$08` to increment the
-volume by one. Performing this fifteen times effectively decreases the volume by
-one.
-
 ## Testing
 
 Unit tests for the emulation core can be executed with:
@@ -143,22 +141,4 @@ If you are iterating on the frontend, run its tests with:
 
 ```bash
 cargo test -p vibe-emu-ui
-```
-
-### Game Boy Compatibility Tests
-
-The gambatte (Game Boy compatibility suite) tests are **not** included in the default `cargo test` runs to keep feedback cycles fast. To run the full compatibility suite explicitly:
-
-```bash
-cargo gambatte_test
-```
-
-This will run the comprehensive gambatte test suite which validates emulation accuracy against reference implementations.
-
-### Audio Snapshots
-
-Use the wave-channel helper to capture deterministic audio for regression checks:
-
-```bash
-cargo run -p vibe-emu-core --example dump_wav -- <rom> <out.wav> --seconds=3 --cgb
 ```
