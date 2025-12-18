@@ -170,3 +170,41 @@ jobs:
 
       - name: Test release
         run: cargo test --release --verbose -p ${{ matrix.crate }}
+
+  cargo-deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Run cargo deny
+        run: cargo deny --locked check
+
+  license-report:
+    name: license diff
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      - name: Ensure THIRD_PARTY_LICENSES.html is current
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "licenses.html"
+          cargo about generate --config about.toml about.hbs -o $output
+          git diff --no-index -- THIRD_PARTY_LICENSES.html $output
