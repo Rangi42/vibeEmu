@@ -582,18 +582,17 @@ impl Cartridge {
             (
                 MbcState::Mbc1 {
                     ram_enable,
-                    ram_bank,
-                    mode,
+                    ram_bank: _,
+                    mode: _,
                     ..
                 },
                 0xA000..=0xBFFF,
             ) => {
                 if *ram_enable {
-                    let idx = if *mode == 0 {
-                        addr as usize - 0xA000
-                    } else {
-                        (*ram_bank as usize) * 0x2000 + addr as usize - 0xA000
-                    };
+                    // For small RAM sizes (e.g. 2KB/8KB), MBC1 always maps to the
+                    // single available bank regardless of bank register writes.
+                    // ram_index() handles wrapping.
+                    let idx = self.ram_index(addr);
                     if let Some(b) = self.ram.get_mut(idx) {
                         *b = val;
                     }
@@ -739,13 +738,23 @@ impl Cartridge {
     }
 
     fn ram_index(&self, addr: u16) -> usize {
+        let ram_bank_count = if self.ram.is_empty() {
+            0
+        } else {
+            (self.ram.len().saturating_add(0x1FFF)) / 0x2000
+        };
         match &self.mbc_state {
             MbcState::NoMbc => addr as usize - 0xA000,
             MbcState::Mbc1 { ram_bank, mode, .. } => {
                 if *mode == 0 {
                     addr as usize - 0xA000
                 } else {
-                    (*ram_bank as usize) * 0x2000 + addr as usize - 0xA000
+                    let bank = if ram_bank_count == 0 {
+                        0
+                    } else {
+                        (*ram_bank as usize) % ram_bank_count
+                    };
+                    bank * 0x2000 + addr as usize - 0xA000
                 }
             }
             MbcState::Mbc3 { ram_bank, .. } => {

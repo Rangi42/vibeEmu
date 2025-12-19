@@ -141,6 +141,15 @@ fn emulator_only__mbc1__multicart_rom_8Mb_gb() {
 }
 
 #[test]
+fn emulator_only__mbc1__ram_64kb_gb() {
+    let passed = run_mooneye_quit_protocol(
+        common::rom_path("mooneye-test-suite/emulator-only/mbc1/ram_64kb.gb"),
+        20_000_000,
+    );
+    assert!(passed, "test failed");
+}
+
+#[test]
 #[ignore]
 fn boot_div_S_gb() {
     let passed = run_mooneye_acceptance(
