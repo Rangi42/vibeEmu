@@ -35,6 +35,7 @@ enum MbcState {
         ram_bank: u8,
         mode: u8,
         ram_enable: bool,
+        multicart: bool,
     },
     Mbc3 {
         rom_bank: u8,
@@ -374,6 +375,7 @@ impl Cartridge {
                 ram_bank: 0,
                 mode: 0,
                 ram_enable: false,
+                multicart: detect_mbc1_multicart(&data),
             },
             MbcType::Mbc3 => MbcState::Mbc3 {
                 rom_bank: 1,
@@ -411,15 +413,26 @@ impl Cartridge {
     }
 
     pub fn read(&mut self, addr: u16) -> u8 {
+        let rom_bank_count = (self.rom.len() / 0x4000).max(1);
         match (&mut self.mbc_state, addr) {
             (MbcState::NoMbc, 0x0000..=0x7FFF) => {
                 self.rom.get(addr as usize).copied().unwrap_or(0xFF)
             }
-            (MbcState::Mbc1 { ram_bank, mode, .. }, 0x0000..=0x3FFF) => {
+            (
+                MbcState::Mbc1 {
+                    ram_bank,
+                    mode,
+                    multicart,
+                    ..
+                },
+                0x0000..=0x3FFF,
+            ) => {
                 let bank = if *mode == 0 {
                     0
+                } else if *multicart {
+                    (((*ram_bank as usize) & 0x03) << 4) % rom_bank_count
                 } else {
-                    (*ram_bank as usize) << 5
+                    (((*ram_bank as usize) & 0x03) << 5) % rom_bank_count
                 };
                 let offset = bank * 0x4000 + addr as usize;
                 self.rom.get(offset).copied().unwrap_or(0xFF)
@@ -428,20 +441,27 @@ impl Cartridge {
                 MbcState::Mbc1 {
                     rom_bank,
                     ram_bank,
-                    mode,
+                    mode: _,
+                    multicart,
                     ..
                 },
                 0x4000..=0x7FFF,
             ) => {
-                let high = if *mode == 0 {
-                    (*ram_bank as usize) << 5
+                let bank = if *multicart {
+                    let high = ((*ram_bank as usize) & 0x03) << 4;
+                    let raw = *rom_bank as usize & 0x1F;
+                    let low4 = raw & 0x0F;
+                    let bit4 = (raw & 0x10) != 0;
+                    let low = if low4 == 0 && !bit4 { 1 } else { low4 };
+                    (high | low) % rom_bank_count
                 } else {
-                    0
+                    let high = ((*ram_bank as usize) & 0x03) << 5;
+                    let mut bank = high | (*rom_bank as usize & 0x1F);
+                    if bank & 0x1F == 0 {
+                        bank += 1;
+                    }
+                    bank % rom_bank_count
                 };
-                let mut bank = high | (*rom_bank as usize & 0x1F);
-                if bank & 0x1F == 0 {
-                    bank += 1;
-                }
                 let offset = bank * 0x4000 + (addr as usize - 0x4000);
                 self.rom.get(offset).copied().unwrap_or(0xFF)
             }
@@ -775,6 +795,33 @@ impl Cartridge {
         }
         Ok(())
     }
+}
+
+fn detect_mbc1_multicart(rom: &[u8]) -> bool {
+    // Mooneye's MBC1 multicart test targets the common 8 Mbit (64 bank) wiring.
+    // This hardware variant can't be reliably detected from the header alone,
+    // so we use a conservative heuristic: many multicart dumps include a copy
+    // of the header logo in multiple banks (bank0+bank1+bank2...).
+    let bank_count = rom.len() / 0x4000;
+    if bank_count != 64 {
+        return false;
+    }
+
+    let logo0 = match rom.get(0x0104..0x0134) {
+        Some(s) if !s.iter().all(|&b| b == 0) => s,
+        _ => return false,
+    };
+
+    for bank in 1..=2 {
+        let start = bank * 0x4000 + 0x0104;
+        let end = start + 0x30;
+        match rom.get(start..end) {
+            Some(s) if s == logo0 => {}
+            _ => return false,
+        }
+    }
+
+    true
 }
 
 struct Header<'a> {

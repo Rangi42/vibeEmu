@@ -6,6 +6,58 @@ use vibe_emu_core::{
     hardware::{CgbRevision, DmgRevision},
 };
 const FIB_SEQ: [u8; 6] = [3, 5, 8, 13, 21, 34];
+const FAIL_SEQ: [u8; 6] = [0x42; 6];
+
+fn run_mooneye_quit_protocol<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bool {
+    run_mooneye_quit_protocol_with_dmg_revision(rom_path, max_cycles, DmgRevision::default())
+}
+
+fn run_mooneye_quit_protocol_with_dmg_revision<P: AsRef<std::path::Path>>(
+    rom_path: P,
+    max_cycles: u64,
+    dmg_revision: DmgRevision,
+) -> bool {
+    let rom = std::fs::read(&rom_path).expect("rom not found");
+    let cart = Cartridge::load(rom);
+    let mut gb = GameBoy::new_with_revisions(cart.cgb, dmg_revision, CgbRevision::default());
+    gb.mmu.load_cart(cart);
+
+    while gb.cpu.cycles < max_cycles {
+        let pc = gb.cpu.pc;
+        let opcode = gb.mmu.read_byte(pc);
+
+        // Mooneye quit protocol: a pass/fail is signaled by executing LD B,B (0x40)
+        // with registers B/C/D/E/H/L containing either Fibonacci numbers or 0x42.
+        if opcode == 0x40 {
+            let regs = [gb.cpu.b, gb.cpu.c, gb.cpu.d, gb.cpu.e, gb.cpu.h, gb.cpu.l];
+            if regs == FIB_SEQ {
+                return true;
+            }
+            if regs == FAIL_SEQ {
+                println!("mooneye quit protocol failed at pc={:04X}", pc);
+                println!("hram: {:?}", &gb.mmu.hram[..16]);
+                println!("serial output (partial): {:?}", gb.mmu.serial.peek_output());
+                return false;
+            }
+        }
+
+        gb.cpu.step(&mut gb.mmu);
+    }
+
+    println!("mooneye quit protocol: timeout");
+    println!(
+        "pc={:04X} opcode={:02X}",
+        gb.cpu.pc,
+        gb.mmu.read_byte(gb.cpu.pc)
+    );
+    println!(
+        "af={:02X}{:02X} bc={:02X}{:02X} de={:02X}{:02X} hl={:02X}{:02X} sp={:04X}",
+        gb.cpu.a, gb.cpu.f, gb.cpu.b, gb.cpu.c, gb.cpu.d, gb.cpu.e, gb.cpu.h, gb.cpu.l, gb.cpu.sp
+    );
+    println!("hram: {:?}", &gb.mmu.hram[..16]);
+    println!("serial output: {:?}", gb.mmu.serial.take_output());
+    false
+}
 fn run_mooneye_acceptance<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bool {
     run_mooneye_acceptance_with_dmg_revision(rom_path, max_cycles, DmgRevision::default())
 }
@@ -65,6 +117,24 @@ fn bits__reg_f_gb() {
 fn bits__unused_hwio_GS_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/bits/unused_hwio-GS.gb"),
+        20_000_000,
+    );
+    assert!(passed, "test failed");
+}
+
+#[test]
+fn emulator_only__mbc1__bits_bank2_gb() {
+    let passed = run_mooneye_quit_protocol(
+        common::rom_path("mooneye-test-suite/emulator-only/mbc1/bits_bank2.gb"),
+        20_000_000,
+    );
+    assert!(passed, "test failed");
+}
+
+#[test]
+fn emulator_only__mbc1__multicart_rom_8Mb_gb() {
+    let passed = run_mooneye_quit_protocol(
+        common::rom_path("mooneye-test-suite/emulator-only/mbc1/multicart_rom_8Mb.gb"),
         20_000_000,
     );
     assert!(passed, "test failed");
