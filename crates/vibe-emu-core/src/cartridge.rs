@@ -500,7 +500,8 @@ impl Cartridge {
                 self.rom.get(addr as usize).copied().unwrap_or(0xFF)
             }
             (MbcState::Mbc5 { rom_bank, .. }, 0x4000..=0x7FFF) => {
-                let offset = (*rom_bank as usize) * 0x4000 + (addr as usize - 0x4000);
+                let bank = (*rom_bank as usize) % rom_bank_count;
+                let offset = bank * 0x4000 + (addr as usize - 0x4000);
                 self.rom.get(offset).copied().unwrap_or(0xFF)
             }
             (MbcState::NoMbc, 0xA000..=0xBFFF) => {
