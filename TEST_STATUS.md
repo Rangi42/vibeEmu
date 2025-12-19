@@ -35,10 +35,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1599 | 2016 | 0 | 0 | 3615 | 44.2% |
+| ROM Test Suites | 1600 | 2018 | 0 | 0 | 3618 | 44.2% |
 | Integration Tests | 152 | 27 | 0 | 0 | 179 | 84.9% |
-| Unit Tests | 9 | 0 | 0 | 0 | 9 | 100.0% |
-| **Overall** | 1760 | 2043 | 0 | 0 | 3803 | 46.3% |
+| Unit Tests | 20 | 0 | 0 | 0 | 20 | 100.0% |
+| **Overall** | 1772 | 2045 | 0 | 0 | 3817 | 46.4% |
 
 ## Detailed Results
 
@@ -97,7 +97,7 @@ Combined exit code: 101
 | `dmg_sound_11_regs_after_power` | ❌ Fail |
 | `dmg_sound_12_wave_write_while_on` | ❌ Fail |
 
-#### gambatte (1442/3426 passing, 42.1%)
+#### gambatte (1443/3429 passing, 42.1%)
 
 | Test | Result |
 | --- | --- |
@@ -955,6 +955,7 @@ Combined exit code: 101
 | `serial/start_wait_restart_read_if_2_dmg08_cgb04c_outE8.gbc` | ✅ Pass |
 | `serial/start_wait_sc80_read_if_1_dmg08_cgb04c_outE0.gbc` | ✅ Pass |
 | `serial/start_wait_sc80_read_if_2_dmg08_cgb04c_outE8.gbc` | ✅ Pass |
+| `serial/start_wait_stop_read_if_1_dmg08_cgb04c_outE0.gbc` | ✅ Pass |
 | `serial/start_wait_stop_read_if_2_dmg08_cgb04c_outE8.gbc` | ✅ Pass |
 | `serial/start_wait_trigger_int8_read_if_1_dmg08_cgb04c_outE8.gbc` | ✅ Pass |
 | `serial/start_wait_trigger_int8_read_if_ds_1_cgb04c_outE8.gbc` | ✅ Pass |
@@ -2560,6 +2561,7 @@ Combined exit code: 101
 | `oamdma/oamdma_srcE000_busypopEFFF_dmg08_out65766576_cgb04c_outFFFF55AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypopFDFF_dmg08_out657665FF_cgb04c_outFFFF55FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypopFE9F_dmg08_out6576FFFF_cgb04c_outFFFFFFFF.gbc` | ❌ Fail |
+| `oamdma/oamdma_srcE000_busypopFEFF_dmg08_out6576FFEF_cgb04c_outFFFFFFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypopFF7F_dmg08_out6576FFAA_cgb04c_outFFFFFFAA.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypopFFFF_dmg08_out65765576_cgb04c_outFFFF55FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcE000_busypush0001_dmg08_out4576AA34_cgb04c_out55FFAA34.gbc` | ❌ Fail |
@@ -2586,8 +2588,10 @@ Combined exit code: 101
 | `oamdma/oamdma_srcEF00_busypopFE9F_dmg08_out6576FFFF_cgb04c_outFFFFFFFF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypopFEFF_dmg08_out6576FFEF_cgb04c_outFFFFFFEF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypopFF7F_dmg08_out6576FFAA_cgb04c_outFFFFFFAA.gbc` | ❌ Fail |
+| `oamdma/oamdma_srcEF00_busypopFFFF_dmg08_out65765576_cgb04c_outFFFF55FF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypush0001_dmg08_out4576AA34_cgb04c_out55FFAA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypush8001_dmg08_out65221255_cgb04c_outFFAA1255.gbc` | ❌ Fail |
+| `oamdma/oamdma_srcEF00_busypushA001_2_dmg08_out4576AAFF_cgb04c_out55FFAAFF.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypushA001_dmg08_out4576AA34_cgb04c_out55FFAA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypushC001_2_dmg08_out4522FF34_cgb04c_outFFAAFF55.gbc` | ❌ Fail |
 | `oamdma/oamdma_srcEF00_busypushC001_dmg08_out45221234_cgb04c_outFFAA1255.gbc` | ❌ Fail |
@@ -2834,7 +2838,6 @@ Combined exit code: 101
 | `serial/start_late_div_write_wait_read_if_4_dmg08_cgb04c_outE8.gbc` | ❌ Fail |
 | `serial/start_wait_read_sc_1_dmg08_outFF_cgb04c_outFD.gbc` | ❌ Fail |
 | `serial/start_wait_read_sc_2_dmg08_out7F_cgb04c_out7D.gbc` | ❌ Fail |
-| `serial/start_wait_stop_read_if_1_dmg08_cgb04c_outE0.gbc` | ❌ Fail |
 | `serial/start_wait_trigger_int8_read_if_2_dmg08_outE8_cgb04c_outE0.gbc` | ❌ Fail |
 | `serial/start_wait_trigger_int8_read_if_3_dmg08_cgb04c_outE0.gbc` | ❌ Fail |
 | `serial/start_wait_trigger_int8_read_if_ds_2_cgb04c_outE0.gbc` | ❌ Fail |
@@ -3962,3 +3965,19 @@ Combined exit code: 101
 | `cartridge::tests::rtc_halt_preserves_subseconds` | ✅ Pass |
 | `cartridge::tests::rtc_seconds_write_resets_phase` | ✅ Pass |
 | `cartridge::tests::rtc_ticks_through_invalid_values` | ✅ Pass |
+
+#### serial (11/11 passing, 100.0%)
+
+| Test | Result |
+| --- | --- |
+| `serial::tests::external_clock_completes_with_pulses` | ✅ Pass |
+| `serial::tests::external_clock_stalls_without_pulses` | ✅ Pass |
+| `serial::tests::internal_clock_irq_only_on_final_bit_dmg` | ✅ Pass |
+| `serial::tests::internal_clock_rate_cgb_double_speed` | ✅ Pass |
+| `serial::tests::internal_clock_rate_cgb_fast_clock` | ✅ Pass |
+| `serial::tests::internal_clock_rate_cgb_normal_speed` | ✅ Pass |
+| `serial::tests::internal_clock_transfer_completes_and_requests_irq` | ✅ Pass |
+| `serial::tests::open_bus_no_partner_external_clock_receives_ff` | ✅ Pass |
+| `serial::tests::open_bus_no_partner_internal_clock_receives_ff` | ✅ Pass |
+| `serial::tests::sc_write_during_active_transfer_does_not_cancel` | ✅ Pass |
+| `serial::tests::sc_write_with_bit7_restarts_transfer_using_current_sb` | ✅ Pass |
