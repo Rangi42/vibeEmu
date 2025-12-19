@@ -436,9 +436,6 @@ impl Cartridge {
                     bank = 1;
                 }
                 bank %= rom_bank_count;
-                if bank == 0 && rom_bank_count > 1 {
-                    bank = 1;
-                }
                 let offset = bank * 0x4000 + (addr as usize - 0x4000);
                 self.rom.get(offset).copied().unwrap_or(0xFF)
             }

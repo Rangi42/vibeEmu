@@ -168,6 +168,15 @@ fn emulator_only__mbc2__bits_romb_gb() {
 }
 
 #[test]
+fn emulator_only__mbc2__rom_1Mb_gb() {
+    let passed = run_mooneye_quit_protocol(
+        common::rom_path("mooneye-test-suite/emulator-only/mbc2/rom_1Mb.gb"),
+        20_000_000,
+    );
+    assert!(passed, "test failed");
+}
+
+#[test]
 #[ignore]
 fn boot_div_S_gb() {
     let passed = run_mooneye_acceptance(
