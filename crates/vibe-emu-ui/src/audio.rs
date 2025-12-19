@@ -39,57 +39,62 @@ pub fn start_stream(apu: &mut Apu, autoplay: bool) -> Option<cpal::Stream> {
     let err_fn = |err| error!("cpal stream error: {err}");
 
     let stream = match sample_format {
-        cpal::SampleFormat::I16 => device
-            .build_output_stream(
-                &config,
-                move |data: &mut [i16], _| {
-                    for frame in data.chunks_mut(channels) {
-                        let (left, right) = consumer.pop_stereo().unwrap_or((0, 0));
-                        frame[0] = left;
-                        if channels > 1 {
-                            frame[1] = right;
-                        }
+        cpal::SampleFormat::I16 => device.build_output_stream(
+            &config,
+            move |data: &mut [i16], _| {
+                for frame in data.chunks_mut(channels) {
+                    let (left, right) = consumer.pop_stereo().unwrap_or((0, 0));
+                    frame[0] = left;
+                    if channels > 1 {
+                        frame[1] = right;
                     }
-                },
-                err_fn,
-                None,
-            )
-            .unwrap(),
-        cpal::SampleFormat::U16 => device
-            .build_output_stream(
-                &config,
-                move |data: &mut [u16], _| {
-                    for frame in data.chunks_mut(channels) {
-                        let (left, right) = consumer.pop_stereo().unwrap_or((0, 0));
-                        frame[0] = (left as i32 + 32768) as u16;
-                        if channels > 1 {
-                            frame[1] = (right as i32 + 32768) as u16;
-                        }
+                }
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::U16 => device.build_output_stream(
+            &config,
+            move |data: &mut [u16], _| {
+                for frame in data.chunks_mut(channels) {
+                    let (left, right) = consumer.pop_stereo().unwrap_or((0, 0));
+                    frame[0] = (left as i32 + 32768) as u16;
+                    if channels > 1 {
+                        frame[1] = (right as i32 + 32768) as u16;
                     }
-                },
-                err_fn,
-                None,
-            )
-            .unwrap(),
-        cpal::SampleFormat::F32 => device
-            .build_output_stream(
-                &config,
-                move |data: &mut [f32], _| {
-                    for frame in data.chunks_mut(channels) {
-                        let (left, right) = consumer.pop_stereo().unwrap_or((0, 0));
-                        let left = left as f32 / 32768.0;
-                        let right = right as f32 / 32768.0;
-                        frame[0] = left;
-                        if channels > 1 {
-                            frame[1] = right;
-                        }
+                }
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::F32 => device.build_output_stream(
+            &config,
+            move |data: &mut [f32], _| {
+                for frame in data.chunks_mut(channels) {
+                    let (left, right) = consumer.pop_stereo().unwrap_or((0, 0));
+                    let left = left as f32 / 32768.0;
+                    let right = right as f32 / 32768.0;
+                    frame[0] = left;
+                    if channels > 1 {
+                        frame[1] = right;
                     }
-                },
-                err_fn,
-                None,
-            )
-            .unwrap(),
-        _ => panic!("Unsupported sample format"),
+                }
+            },
+            err_fn,
+            None,
+        ),
+        other => {
+            error!("Unsupported sample format: {other:?}");
+            return None;
+        }
+    };
+
+    let stream = match stream {
+        Ok(stream) => stream,
+        Err(e) => {
+            error!("Failed to build audio output stream: {e}");
+            return None;
+        }
     };
 
     if autoplay {

@@ -691,6 +691,66 @@ impl Renderer {
         self.split_render(draw_data, self.render_data.as_ref().unwrap(), rpass)
     }
 
+    /// Render the current imgui frame, clamping scissor rects to the render target size.
+    ///
+    /// This is a safety valve for multi-window / DPI edge cases where ImGui's computed framebuffer
+    /// size (`draw_data.display_size * draw_data.framebuffer_scale`) can temporarily disagree with
+    /// the actual swapchain / surface texture extent.
+    pub fn render_clamped<'r>(
+        &'r mut self,
+        draw_data: &DrawData,
+        queue: &Queue,
+        device: &Device,
+        rpass: &mut RenderPass<'r>,
+        render_target_size: [u32; 2],
+    ) -> RendererResult<()> {
+        let render_data = self.render_data.take();
+        self.render_data = Some(self.prepare(draw_data, render_data, queue, device));
+        self.split_render_clamped(
+            draw_data,
+            self.render_data.as_ref().unwrap(),
+            rpass,
+            render_target_size,
+        )
+    }
+
+    fn split_render_clamped<'r>(
+        &'r self,
+        draw_data: &DrawData,
+        render_data: &'r RenderData,
+        rpass: &mut RenderPass<'r>,
+        render_target_size: [u32; 2],
+    ) -> RendererResult<()> {
+        if !render_data.render {
+            return Ok(());
+        }
+
+        rpass.set_pipeline(&self.pipeline);
+        rpass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        rpass.set_vertex_buffer(0, render_data.vertex_buffer.as_ref().unwrap().slice(..));
+        rpass.set_index_buffer(
+            render_data.index_buffer.as_ref().unwrap().slice(..),
+            IndexFormat::Uint16,
+        );
+
+        for (draw_list, bases) in draw_data
+            .draw_lists()
+            .zip(render_data.draw_list_offsets.iter())
+        {
+            self.render_draw_list_clamped(
+                rpass,
+                draw_list,
+                render_data.fb_size,
+                draw_data.display_pos,
+                draw_data.framebuffer_scale,
+                *bases,
+                render_target_size,
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Render a given `DrawList` from imgui onto a wgpu frame.
     fn render_draw_list<'render>(
         &'render self,
@@ -749,6 +809,71 @@ impl Renderer {
 
                 // Increment the index regardless of whether or not this batch
                 // of vertices was drawn.
+                start = end;
+            }
+        }
+        Ok(())
+    }
+
+    fn render_draw_list_clamped<'render>(
+        &'render self,
+        rpass: &mut RenderPass<'render>,
+        draw_list: &DrawList,
+        fb_size: [f32; 2],
+        clip_off: [f32; 2],
+        clip_scale: [f32; 2],
+        (vertex_base, index_base): (i32, u32),
+        render_target_size: [u32; 2],
+    ) -> RendererResult<()> {
+        let mut start = index_base;
+        let max_w = render_target_size[0];
+        let max_h = render_target_size[1];
+
+        if max_w == 0 || max_h == 0 {
+            return Ok(());
+        }
+
+        for cmd in draw_list.commands() {
+            if let Elements { count, cmd_params } = cmd {
+                let clip_rect = [
+                    (cmd_params.clip_rect[0] - clip_off[0]) * clip_scale[0],
+                    (cmd_params.clip_rect[1] - clip_off[1]) * clip_scale[1],
+                    (cmd_params.clip_rect[2] - clip_off[0]) * clip_scale[0],
+                    (cmd_params.clip_rect[3] - clip_off[1]) * clip_scale[1],
+                ];
+
+                let texture_id = cmd_params.texture_id;
+                let tex = self
+                    .textures
+                    .get(texture_id)
+                    .ok_or(RendererError::BadTexture(texture_id))?;
+                rpass.set_bind_group(1, &tex.bind_group, &[]);
+
+                let end = start + count as u32;
+                if clip_rect[0] < fb_size[0]
+                    && clip_rect[1] < fb_size[1]
+                    && clip_rect[2] >= 0.0
+                    && clip_rect[3] >= 0.0
+                {
+                    let x = clip_rect[0].max(0.0).floor() as u32;
+                    let y = clip_rect[1].max(0.0).floor() as u32;
+                    let mut w = (clip_rect[2] - clip_rect[0]).abs().ceil() as u32;
+                    let mut h = (clip_rect[3] - clip_rect[1]).abs().ceil() as u32;
+
+                    if x >= max_w || y >= max_h {
+                        start = end;
+                        continue;
+                    }
+
+                    w = w.min(max_w - x);
+                    h = h.min(max_h - y);
+
+                    if w > 0 && h > 0 {
+                        rpass.set_scissor_rect(x, y, w, h);
+                        rpass.draw_indexed(start..end, vertex_base, 0..1);
+                    }
+                }
+
                 start = end;
             }
         }

@@ -1,5 +1,8 @@
 /target
+*.gbc
 *.sav
 *.rtc
+*.mobile
+*.sym
 test_roms/
 imgui.ini

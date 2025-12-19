@@ -12,19 +12,19 @@ This file lists problems and improvement opportunities observed in the current d
 
 ## P0 — Stability / Correctness
 
-- **P0: Unbounded frame queue can grow without bound (memory risk).**
+- ✅ **P0 COMPLETE:** Unbounded frame queue can grow without bound (memory risk).
   - **Where:** `crates/vibe-emu-ui/src/main.rs` → `run_emulator_thread()` sends `EmuEvent::Frame` on an unbounded `std::sync::mpsc::channel()`; UI drains via `try_recv()` in `Event::AboutToWait`.
   - **Problem:** If the UI thread can’t keep up (debugger open, GPU stall, OS hiccup), frames accumulate indefinitely.
   - **Improve:** Use a bounded channel (e.g., crossbeam channel) or a “latest-frame only” shared buffer (swap `Arc<[u32]>` / double-buffer) and drop intermediate frames.
 
-- **P0: Frequent `unwrap/expect/panic` paths in UI/audio can crash the process.**
+- ✅ **P0 COMPLETE:** Frequent `unwrap/expect/panic` paths in UI/audio can crash the process.
   - **Where:**
     - `crates/vibe-emu-ui/src/main.rs`: window creation, `Pixels::new(..).expect("Pixels error")`, `platform.prepare_frame(...).unwrap()`, imgui `render(...).expect(...)`, mutex `.expect("... poisoned")`.
     - `crates/vibe-emu-ui/src/audio.rs`: `build_output_stream(...).unwrap()`, `panic!("Unsupported sample format")`.
     - `crates/vibe-emu-ui/src/ui/vram_viewer.rs`: texture id `.unwrap()`.
   - **Improve:** Return/propagate errors and degrade gracefully (disable feature, show in-UI message, or log + continue). Convert panics to `Result`/`Option` and handle at the callsite.
 
-- **P0: Main loop forces `ControlFlow::Poll` and redraws all windows every tick (high idle CPU).**
+- ✅ **P0 COMPLETE:** Main loop forces `ControlFlow::Poll` and redraws all windows every tick (high idle CPU).
   - **Where:** `crates/vibe-emu-ui/src/main.rs` → `event_loop.run(...)` sets `ControlFlow::Poll`, and `Event::AboutToWait` calls `request_redraw()` on every window.
   - **Problem:** Busy polling can peg a core even when paused / no new frames.
   - **Improve:** Use `ControlFlow::Wait` / `WaitUntil` and request redraw only when:
@@ -32,7 +32,7 @@ This file lists problems and improvement opportunities observed in the current d
     - UI state changes,
     - window events occur.
 
-- **P0: Input hit-testing uses a fixed SCALE constant, not the actual drawable rect.**
+- ✅ **P0 COMPLETE:** Input hit-testing uses a fixed SCALE constant, not the actual drawable rect.
   - **Where:** `crates/vibe-emu-ui/src/main.rs` → `cursor_in_screen()`.
   - **Problem:** If the window is resized or DPI/scaling changes, “inside screen” detection becomes incorrect.
   - **Improve:** Compute the game-viewport rectangle from the `pixels` scaling renderer output (or track the final blit/scale) and test against that.
@@ -41,13 +41,13 @@ This file lists problems and improvement opportunities observed in the current d
 
 ## P1 — Performance / Responsiveness
 
-- **P1: Per-frame allocation + full framebuffer clone in emulator thread.**
+- ✅ **P1 COMPLETE:** Per-frame allocation + full framebuffer clone in emulator thread.
   - **Where:** `crates/vibe-emu-ui/src/main.rs` → inside `run_emulator_thread()`:
     - `frame_buf = Some(mmu.ppu.framebuffer().to_vec());`
   - **Problem:** Allocates and copies every frame; increases GC/allocator pressure and can hurt pacing.
   - **Improve:** Reuse a preallocated buffer, send a pooled buffer, or share a ring buffer with a “latest frame” pointer.
 
-- **P1: UI consumes frames only during `AboutToWait` (can add latency).**
+- ✅ **P1 COMPLETE:** UI consumes frames only during `AboutToWait` (can add latency).
   - **Where:** `Event::AboutToWait` drains `from_emu_rx.try_recv()`.
   - **Problem:** Depending on event cadence, frames may sit queued until the next `AboutToWait`.
   - **Improve:** Trigger a redraw immediately when a frame is received (via `EventLoopProxy` + custom user event), or switch to a channel integration approach that wakes the loop.
@@ -57,7 +57,7 @@ This file lists problems and improvement opportunities observed in the current d
   - **Problem:** It’s small (160×144) but still pure CPU work every frame.
   - **Improve:** Consider storing the framebuffer in RGBA8888 already, or use a faster conversion path (SIMD / bytemuck if representation matches).
 
-- **P1: VRAM viewer rebuilds textures frequently; tab switching can cause redundant work.**
+- ✅ **P1 COMPLETE:** VRAM viewer rebuilds textures frequently; tab switching can cause redundant work.
   - **Where:** `crates/vibe-emu-ui/src/ui/vram_viewer.rs`.
   - **Improve:** Consider caching per-tab timestamps/dirty flags more consistently and rebuilding only when the underlying data changes.
 

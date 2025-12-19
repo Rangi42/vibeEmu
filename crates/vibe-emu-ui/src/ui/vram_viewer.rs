@@ -2,7 +2,7 @@ use imgui::{self, TextureId};
 use imgui_wgpu::{Renderer, Texture, TextureConfig};
 use wgpu::{Extent3d, TextureFormat};
 
-use vibe_emu_core::ppu::Ppu;
+use crate::ui::snapshot::PpuSnapshot;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum VramTab {
@@ -23,14 +23,17 @@ pub struct VramViewerWindow {
     /* Tiles */
     tiles_tex: Option<TextureId>,
     tiles_buf: Vec<u8>,
+    tiles_banks: u8,
 
     /* Palettes */
-    palettes_tex: Option<TextureId>,
-    palettes_buf: Vec<u8>,
+    palette_sel_is_bg: bool,
+    palette_sel_pal: u8,
+    palette_sel_col: u8,
 
     last_frame: u64,
+    tiles_last_frame: u64,
     oam_last_frame: u64,
-    palettes_last_frame: u64,
+    oam_sprite_h: u8,
 }
 
 impl VramViewerWindow {
@@ -53,68 +56,115 @@ impl VramViewerWindow {
             /* Tiles */
             tiles_tex: None,
             tiles_buf: vec![0; MAX_TILES_W * TILES_H * 4],
+            tiles_banks: 1,
 
             /* Palettes — 32 × 128 px, 4 RGBA bytes each */
-            palettes_tex: None,
-            palettes_buf: vec![0; 32 * 128 * 4],
+            palette_sel_is_bg: true,
+            palette_sel_pal: 0,
+            palette_sel_col: 0,
 
             last_frame: 0,
+            tiles_last_frame: 0,
             oam_last_frame: 0,
-            palettes_last_frame: 0,
+            oam_sprite_h: 0,
         }
+    }
+
+    fn rgb888_to_gb_word(rgb: u32) -> u16 {
+        let r5 = ((rgb >> 16) & 0xFF) as u16 >> 3;
+        let g5 = ((rgb >> 8) & 0xFF) as u16 >> 3;
+        let b5 = (rgb & 0xFF) as u16 >> 3;
+        r5 | (g5 << 5) | (b5 << 10)
+    }
+
+    fn palette_color_rgb(ppu: &PpuSnapshot, is_bg: bool, pal: usize, col: usize) -> u32 {
+        const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
+
+        if ppu.cgb {
+            if is_bg {
+                ppu.cgb_bg_colors[pal][col]
+            } else {
+                ppu.cgb_ob_colors[pal][col]
+            }
+        } else {
+            let reg = if is_bg {
+                ppu.bgp
+            } else if pal == 0 {
+                ppu.obp(0)
+            } else {
+                ppu.obp(1)
+            };
+            let shade = ((reg >> (col * 2)) & 0x03) as usize;
+            DMG_COLORS[shade]
+        }
+    }
+
+    fn palette_color_word(ppu: &PpuSnapshot, is_bg: bool, pal: usize, col: usize) -> u16 {
+        Self::rgb888_to_gb_word(Self::palette_color_rgb(ppu, is_bg, pal, col))
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn ui(
         &mut self,
         ui: &imgui::Ui,
-        ppu: &mut Ppu,
+        ppu: &PpuSnapshot,
         renderer: &mut Renderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) {
-        if let Some(_bar) = imgui::TabBar::new("VRAMTabs").begin(ui) {
-            self.tab_item(
-                ui,
-                renderer,
-                ppu,
-                device,
-                queue,
-                VramTab::BgMap,
-                "BG Map",
-                Self::draw_bg_map,
-            );
-            self.tab_item(
-                ui,
-                renderer,
-                ppu,
-                device,
-                queue,
-                VramTab::Tiles,
-                "Tiles",
-                Self::draw_tiles,
-            );
-            self.tab_item(
-                ui,
-                renderer,
-                ppu,
-                device,
-                queue,
-                VramTab::Oam,
-                "OAM",
-                Self::draw_oam,
-            );
-            self.tab_item(
-                ui,
-                renderer,
-                ppu,
-                device,
-                queue,
-                VramTab::Palettes,
-                "Palettes",
-                Self::draw_palettes,
-            );
-        }
+        let display = ui.io().display_size;
+        let flags = imgui::WindowFlags::NO_MOVE
+            | imgui::WindowFlags::NO_RESIZE
+            | imgui::WindowFlags::NO_COLLAPSE;
+
+        ui.window("VRAM")
+            .position([0.0, 0.0], imgui::Condition::Always)
+            .size(display, imgui::Condition::Always)
+            .flags(flags)
+            .build(|| {
+                if let Some(_bar) = imgui::TabBar::new("VRAMTabs").begin(ui) {
+                    self.tab_item(
+                        ui,
+                        renderer,
+                        ppu,
+                        device,
+                        queue,
+                        VramTab::BgMap,
+                        "BG Map",
+                        Self::draw_bg_map,
+                    );
+                    self.tab_item(
+                        ui,
+                        renderer,
+                        ppu,
+                        device,
+                        queue,
+                        VramTab::Tiles,
+                        "Tiles",
+                        Self::draw_tiles,
+                    );
+                    self.tab_item(
+                        ui,
+                        renderer,
+                        ppu,
+                        device,
+                        queue,
+                        VramTab::Oam,
+                        "OAM",
+                        Self::draw_oam,
+                    );
+                    self.tab_item(
+                        ui,
+                        renderer,
+                        ppu,
+                        device,
+                        queue,
+                        VramTab::Palettes,
+                        "Palettes",
+                        Self::draw_palettes,
+                    );
+                }
+            });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -122,14 +172,14 @@ impl VramViewerWindow {
         &mut self,
         ui: &imgui::Ui,
         renderer: &mut Renderer,
-        ppu: &mut Ppu,
+        ppu: &PpuSnapshot,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         which: VramTab,
         label: &str,
         draw: F,
     ) where
-        F: Fn(&mut Self, &imgui::Ui, &mut Renderer, &mut Ppu, &wgpu::Device, &wgpu::Queue),
+        F: Fn(&mut Self, &imgui::Ui, &mut Renderer, &PpuSnapshot, &wgpu::Device, &wgpu::Queue),
     {
         if let Some(_tab) = imgui::TabItem::new(label).begin(ui) {
             self.current = which;
@@ -142,17 +192,25 @@ impl VramViewerWindow {
         &mut self,
         ui: &imgui::Ui,
         renderer: &mut Renderer,
-        ppu: &mut Ppu,
+        ppu: &PpuSnapshot,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) {
-        let frame = ppu.frames();
-        if self.bg_map_tex.is_none() || frame != self.last_frame {
+        let frame = ppu.frame_counter;
+        if self.bg_map_tex.is_none() {
             self.bg_map_tex = Some(self.build_bg_map_texture(ppu, renderer, device, queue));
+            self.last_frame = frame;
+        } else if frame != self.last_frame {
+            let tex_id = self.bg_map_tex.unwrap();
+            if !self.update_bg_map_texture(tex_id, ppu, renderer, queue) {
+                self.bg_map_tex = Some(self.build_bg_map_texture(ppu, renderer, device, queue));
+            }
             self.last_frame = frame;
         }
 
-        let tex_id = self.bg_map_tex.unwrap();
+        let Some(tex_id) = self.bg_map_tex else {
+            return;
+        };
         let size = [256.0, 256.0];
         let avail = ui.content_region_avail();
         let scale = (avail[0] / size[0]).min(2.0);
@@ -161,8 +219,8 @@ impl VramViewerWindow {
         let cursor = ui.cursor_screen_pos();
         imgui::Image::new(tex_id, draw_size).build(ui);
 
-        let scx = ppu.read_reg(0xFF43);
-        let scy = ppu.read_reg(0xFF42);
+        let scx = ppu.scx;
+        let scy = ppu.scy;
         let mut sx = scx as f32;
         if sx > 160.0 {
             sx -= 256.0;
@@ -204,37 +262,30 @@ impl VramViewerWindow {
         }
     }
 
-    fn build_bg_map_texture(
-        &mut self,
-        ppu: &mut Ppu,
-        renderer: &mut Renderer,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) -> TextureId {
+    fn fill_bg_map_buf(&mut self, ppu: &PpuSnapshot) {
         const MAP_W: usize = 32;
         const MAP_H: usize = 32;
         const TILE: usize = 8;
         const IMG_W: usize = MAP_W * TILE;
-        const IMG_H: usize = MAP_H * TILE;
         const DMG_PALETTE: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
 
         let rgba = &mut self.bg_map_buf;
         rgba.fill(0);
 
-        let lcdc = ppu.read_reg(0xFF40);
+        let lcdc = ppu.lcdc;
         let map_base = if lcdc & 0x08 != 0 { 0x1C00 } else { 0x1800 };
         // When bit 4 of LCDC is clear we use signed tile indices relative to
         // address 0x9000 (offset 0x1000 in VRAM). Otherwise indices are
         // unsigned from 0x8000.
         let signed_mode = lcdc & 0x10 == 0;
-        let bgp = ppu.read_reg(0xFF47);
-        let cgb = ppu.is_cgb();
+        let bgp = ppu.bgp;
+        let cgb = ppu.cgb;
 
         for tile_y in 0..MAP_H {
             for tile_x in 0..MAP_W {
-                let tile_idx = ppu.vram[0][map_base + tile_y * MAP_W + tile_x];
+                let tile_idx = ppu.vram0[map_base + tile_y * MAP_W + tile_x];
                 let attr = if cgb {
-                    ppu.vram[1][map_base + tile_y * MAP_W + tile_x]
+                    ppu.vram1[map_base + tile_y * MAP_W + tile_x]
                 } else {
                     0
                 };
@@ -254,18 +305,19 @@ impl VramViewerWindow {
                 };
 
                 let bank = if cgb && attr & 0x08 != 0 { 1 } else { 0 };
-                if tile_addr + 16 > ppu.vram[bank].len() {
+                let vram = ppu.vram_bank(bank);
+                if tile_addr + 16 > vram.len() {
                     continue;
                 }
                 for row in 0..TILE {
-                    let lo = ppu.vram[bank][tile_addr + row * 2];
-                    let hi = ppu.vram[bank][tile_addr + row * 2 + 1];
+                    let lo = vram[tile_addr + row * 2];
+                    let hi = vram[tile_addr + row * 2 + 1];
                     for col in 0..TILE {
                         let bit = 7 - col;
                         let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
                         let color = if cgb {
                             let pal = (attr & 0x07) as usize;
-                            ppu.bg_palette_color(pal, idx as usize)
+                            ppu.cgb_bg_colors[pal][idx as usize]
                         } else {
                             let shade = (bgp >> (idx * 2)) & 0x03;
                             DMG_PALETTE[shade as usize]
@@ -281,6 +333,19 @@ impl VramViewerWindow {
                 }
             }
         }
+    }
+
+    fn build_bg_map_texture(
+        &mut self,
+        ppu: &PpuSnapshot,
+        renderer: &mut Renderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> TextureId {
+        const IMG_W: usize = 256;
+        const IMG_H: usize = 256;
+
+        self.fill_bg_map_buf(ppu);
 
         let config = TextureConfig {
             size: Extent3d {
@@ -293,25 +358,57 @@ impl VramViewerWindow {
             ..Default::default()
         };
         let texture = Texture::new(device, renderer, config);
-        texture.write(queue, rgba, IMG_W as u32, IMG_H as u32);
+        texture.write(queue, &self.bg_map_buf, IMG_W as u32, IMG_H as u32);
         renderer.textures.insert(texture)
+    }
+
+    fn update_bg_map_texture(
+        &mut self,
+        tex_id: TextureId,
+        ppu: &PpuSnapshot,
+        renderer: &mut Renderer,
+        queue: &wgpu::Queue,
+    ) -> bool {
+        const IMG_W: u32 = 256;
+        const IMG_H: u32 = 256;
+
+        let Some(texture) = renderer.textures.get_mut(tex_id) else {
+            return false;
+        };
+
+        self.fill_bg_map_buf(ppu);
+        texture.write(queue, &self.bg_map_buf, IMG_W, IMG_H);
+        true
     }
 
     fn draw_tiles(
         &mut self,
         ui: &imgui::Ui,
         renderer: &mut Renderer,
-        ppu: &mut Ppu,
+        ppu: &PpuSnapshot,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) {
-        let frame = ppu.frames();
-        if self.tiles_tex.is_none() || frame != self.last_frame {
-            self.tiles_tex = Some(self.build_tiles_texture(ppu, renderer, device, queue));
-            self.last_frame = frame;
+        let frame = ppu.frame_counter;
+        let banks = if ppu.cgb { 2 } else { 1 };
+        if banks != self.tiles_banks {
+            self.tiles_banks = banks;
+            self.tiles_tex = None;
+            self.tiles_last_frame = 0;
         }
 
-        let banks = if ppu.is_cgb() { 2 } else { 1 };
+        if self.tiles_tex.is_none() {
+            self.tiles_tex = Some(self.build_tiles_texture(ppu, renderer, device, queue));
+            self.tiles_last_frame = frame;
+        } else if frame != self.tiles_last_frame {
+            let tex_id = self.tiles_tex.unwrap();
+            if !self.update_tiles_texture(tex_id, ppu, renderer, queue) {
+                self.tiles_tex = Some(self.build_tiles_texture(ppu, renderer, device, queue));
+            }
+            self.tiles_last_frame = frame;
+        }
+
+        let banks = self.tiles_banks;
         let size = [128.0 * banks as f32, 192.0];
         let avail = ui.content_region_avail();
         let scale = (avail[0] / size[0]).min(3.0);
@@ -325,7 +422,7 @@ impl VramViewerWindow {
     #[allow(clippy::too_many_arguments)]
     fn build_tiles_texture(
         &mut self,
-        ppu: &mut Ppu,
+        ppu: &PpuSnapshot,
         renderer: &mut Renderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -336,14 +433,14 @@ impl VramViewerWindow {
         const ROWS: usize = 24; // 24 × 8 px  = 192 px
         const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
 
-        let banks = if ppu.is_cgb() { 2 } else { 1 };
+        let banks = if ppu.cgb { 2 } else { 1 };
         let img_w = TILES_PER_ROW * TILE_W * banks;
         let img_h = ROWS * TILE_H;
 
         let buf = &mut self.tiles_buf[..img_w * img_h * 4];
         buf.fill(0);
 
-        let bgp = ppu.read_reg(0xFF47);
+        let bgp = ppu.bgp;
 
         for bank in 0..banks {
             for tile_idx in 0..384 {
@@ -352,16 +449,17 @@ impl VramViewerWindow {
 
                 let tile_addr = tile_idx * 16; // 16 bytes per tile
                 for y in 0..TILE_H {
-                    let lo = ppu.vram[bank][tile_addr + y * 2];
-                    let hi = ppu.vram[bank][tile_addr + y * 2 + 1];
+                    let vram = ppu.vram_bank(bank);
+                    let lo = vram[tile_addr + y * 2];
+                    let hi = vram[tile_addr + y * 2 + 1];
 
                     for x in 0..TILE_W {
                         let bit = 7 - x;
                         let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
 
                         // Palette choose: CGB → BG palette 0, DMG → BGP shades
-                        let rgb = if ppu.is_cgb() {
-                            ppu.bg_palette_color(0, idx as usize)
+                        let rgb = if ppu.cgb {
+                            ppu.cgb_bg_colors[0][idx as usize]
                         } else {
                             let shade = (bgp >> (idx * 2)) & 0x03;
                             DMG_COLORS[shade as usize]
@@ -394,20 +492,102 @@ impl VramViewerWindow {
         texture.write(queue, buf, img_w as u32, img_h as u32);
         renderer.textures.insert(texture)
     }
+
+    fn update_tiles_texture(
+        &mut self,
+        tex_id: TextureId,
+        ppu: &PpuSnapshot,
+        renderer: &mut Renderer,
+        queue: &wgpu::Queue,
+    ) -> bool {
+        let Some(texture) = renderer.textures.get_mut(tex_id) else {
+            return false;
+        };
+
+        // Recompute tiles into the existing buffer and write into the existing texture.
+        let banks = self.tiles_banks as usize;
+        let img_w = 16 * 8 * banks;
+        let img_h = 24 * 8;
+        let buf = &mut self.tiles_buf[..img_w * img_h * 4];
+        buf.fill(0);
+
+        let bgp = ppu.bgp;
+        const TILE_W: usize = 8;
+        const TILE_H: usize = 8;
+        const TILES_PER_ROW: usize = 16;
+        const ROWS: usize = 24;
+        const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
+
+        for bank in 0..banks {
+            for tile_idx in 0..384 {
+                let col = tile_idx % TILES_PER_ROW;
+                let row = tile_idx / TILES_PER_ROW;
+
+                let tile_addr = tile_idx * 16;
+                for y in 0..TILE_H {
+                    let vram = ppu.vram_bank(bank);
+                    let lo = vram[tile_addr + y * 2];
+                    let hi = vram[tile_addr + y * 2 + 1];
+
+                    for x in 0..TILE_W {
+                        let bit = 7 - x;
+                        let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+
+                        let rgb = if ppu.cgb {
+                            ppu.cgb_bg_colors[0][idx as usize]
+                        } else {
+                            let shade = (bgp >> (idx * 2)) & 0x03;
+                            DMG_COLORS[shade as usize]
+                        };
+
+                        let px = (bank * 128) + (col * TILE_W) + x;
+                        let py = row * TILE_H + y;
+                        let off = (py * img_w + px) * 4;
+
+                        buf[off] = ((rgb >> 16) & 0xFF) as u8;
+                        buf[off + 1] = ((rgb >> 8) & 0xFF) as u8;
+                        buf[off + 2] = (rgb & 0xFF) as u8;
+                        buf[off + 3] = 0xFF;
+                    }
+                }
+            }
+        }
+
+        texture.write(queue, buf, img_w as u32, img_h as u32);
+        true
+    }
     fn build_oam_texture(
         &mut self,
-        ppu: &mut Ppu,
+        ppu: &PpuSnapshot,
         renderer: &mut Renderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> TextureId {
+        let (img_w, img_h) = self.fill_oam_buf(ppu);
+        let rgba = &self.oam_buf;
+        let config = TextureConfig {
+            size: Extent3d {
+                width: img_w,
+                height: img_h,
+                depth_or_array_layers: 1,
+            },
+            label: Some("OAM"),
+            format: Some(TextureFormat::Rgba8UnormSrgb),
+            ..Default::default()
+        };
+        let texture = Texture::new(device, renderer, config);
+        texture.write(queue, rgba, img_w, img_h);
+        renderer.textures.insert(texture)
+    }
+
+    fn fill_oam_buf(&mut self, ppu: &PpuSnapshot) -> (u32, u32) {
         const COLS: usize = 10; // 10 sprites per row → 4 rows
         const TOTAL: usize = 40;
         const TILE_W: usize = 8;
         const DMG_PALETTE: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
 
-        let cgb = ppu.is_cgb();
-        let lcdc = ppu.read_reg(0xFF40);
+        let cgb = ppu.cgb;
+        let lcdc = ppu.lcdc;
         let sprite_h: usize = if lcdc & 0x04 != 0 { 16 } else { 8 };
         let rows = TOTAL / COLS;
         let img_w = COLS * TILE_W;
@@ -427,9 +607,9 @@ impl VramViewerWindow {
 
             let pal_idx_cgb = (attr & 0x07) as usize;
             let dmg_pal = if attr & 0x10 != 0 {
-                ppu.read_reg(0xFF49)
+                ppu.obp(1)
             } else {
-                ppu.read_reg(0xFF48)
+                ppu.obp(0)
             };
             let bank = if cgb && attr & 0x08 != 0 { 1 } else { 0 };
             let x_flip = attr & 0x20 != 0;
@@ -454,9 +634,9 @@ impl VramViewerWindow {
                     src_row -= 8;
                 }
                 let tile_addr = tile_offset * 16 + src_row * 2;
-
-                let lo = ppu.vram[bank][tile_addr];
-                let hi = ppu.vram[bank][tile_addr + 1];
+                let vram = ppu.vram_bank(bank);
+                let lo = vram[tile_addr];
+                let hi = vram[tile_addr + 1];
 
                 for col in 0..TILE_W {
                     let src_col = if x_flip { col } else { 7 - col };
@@ -469,7 +649,7 @@ impl VramViewerWindow {
                     }
 
                     let color = if cgb {
-                        ppu.ob_palette_color(pal_idx_cgb, color_id as usize)
+                        ppu.cgb_ob_colors[pal_idx_cgb][color_id as usize]
                     } else {
                         let shade = (dmg_pal >> (color_id * 2)) & 0x03;
                         DMG_PALETTE[shade as usize]
@@ -486,42 +666,56 @@ impl VramViewerWindow {
             }
         }
 
-        let config = TextureConfig {
-            size: Extent3d {
-                width: img_w as u32,
-                height: img_h as u32,
-                depth_or_array_layers: 1,
-            },
-            label: Some("OAM"),
-            format: Some(TextureFormat::Rgba8UnormSrgb),
-            ..Default::default()
+        (img_w as u32, img_h as u32)
+    }
+
+    fn update_oam_texture(
+        &mut self,
+        tex_id: TextureId,
+        ppu: &PpuSnapshot,
+        renderer: &mut Renderer,
+        queue: &wgpu::Queue,
+    ) -> bool {
+        let Some(texture) = renderer.textures.get_mut(tex_id) else {
+            return false;
         };
-        let texture = Texture::new(device, renderer, config);
-        texture.write(queue, rgba, img_w as u32, img_h as u32);
-        renderer.textures.insert(texture)
+        let (img_w, img_h) = self.fill_oam_buf(ppu);
+        texture.write(queue, &self.oam_buf, img_w, img_h);
+        true
     }
 
     fn draw_oam(
         &mut self,
         ui: &imgui::Ui,
         renderer: &mut Renderer,
-        ppu: &mut Ppu,
+        ppu: &PpuSnapshot,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) {
-        let frame = ppu.frames();
-        if self.oam_tex.is_none() || frame != self.oam_last_frame {
+        let frame = ppu.frame_counter;
+        let sprite_h = if ppu.lcdc & 0x04 != 0 { 16 } else { 8 };
+        if self.oam_sprite_h != sprite_h {
+            self.oam_sprite_h = sprite_h;
+            self.oam_tex = None;
+            self.oam_last_frame = 0;
+        }
+
+        if self.oam_tex.is_none() {
             self.oam_tex = Some(self.build_oam_texture(ppu, renderer, device, queue));
+            self.oam_last_frame = frame;
+        } else if frame != self.oam_last_frame {
+            let tex_id = self.oam_tex.unwrap();
+            if !self.update_oam_texture(tex_id, ppu, renderer, queue) {
+                self.oam_tex = Some(self.build_oam_texture(ppu, renderer, device, queue));
+            }
             self.oam_last_frame = frame;
         }
 
-        let tex_id = self.oam_tex.unwrap();
-        // Logical size of the generated bitmap – recompute every call
-        let sprite_h = if ppu.read_reg(0xFF40) & 0x04 != 0 {
-            16.0
-        } else {
-            8.0
+        let Some(tex_id) = self.oam_tex else {
+            return;
         };
+        // Logical size of the generated bitmap – recompute every call
+        let sprite_h = sprite_h as f32;
         let size = [80.0, 4.0 * sprite_h];
 
         let avail = ui.content_region_avail();
@@ -533,115 +727,183 @@ impl VramViewerWindow {
     fn draw_palettes(
         &mut self,
         ui: &imgui::Ui,
-        renderer: &mut Renderer,
-        ppu: &mut Ppu,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _renderer: &mut Renderer,
+        ppu: &PpuSnapshot,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
     ) {
-        let frame = ppu.frames();
-        if self.palettes_tex.is_none() || frame != self.palettes_last_frame {
-            self.palettes_tex = Some(self.build_palettes_texture(ppu, renderer, device, queue));
-            self.palettes_last_frame = frame;
+        let bg_pals = if ppu.cgb { 8 } else { 1 };
+        let ob_pals = if ppu.cgb { 8 } else { 2 };
+
+        // Keep selection within valid ranges.
+        if self.palette_sel_is_bg {
+            self.palette_sel_pal = self.palette_sel_pal.min((bg_pals - 1) as u8);
+        } else {
+            self.palette_sel_pal = self.palette_sel_pal.min((ob_pals - 1) as u8);
         }
+        self.palette_sel_col = self.palette_sel_col.min(3);
 
-        let tex_id = self.palettes_tex.unwrap();
-        let size = [32.0, 128.0];
-        let avail = ui.content_region_avail();
-        let scale = (avail[0] / size[0]).clamp(1.0, 4.0);
-        let draw_size = [size[0] * scale, size[1] * scale];
-        let cursor = ui.cursor_screen_pos();
+        let draw_swatch = |ui: &imgui::Ui,
+                           this: &mut Self,
+                           ppu: &PpuSnapshot,
+                           is_bg: bool,
+                           pal: usize,
+                           col: usize| {
+            let rgb = Self::palette_color_rgb(ppu, is_bg, pal, col);
+            let word = Self::rgb888_to_gb_word(rgb);
+            let r = ((rgb >> 16) & 0xFF) as u8;
+            let g = ((rgb >> 8) & 0xFF) as u8;
+            let b = (rgb & 0xFF) as u8;
 
-        imgui::Image::new(tex_id, draw_size).build(ui);
+            let pos0 = ui.cursor_screen_pos();
+            let square = [22.0, 22.0];
+            let id = format!(
+                "##pal_{}_{}_{}_{}",
+                if is_bg { 'b' } else { 'o' },
+                pal,
+                col,
+                0
+            );
+            let clicked = ui.invisible_button(id, square);
+            let pos1 = [pos0[0] + square[0], pos0[1] + square[1]];
 
-        let draw_list = ui.get_window_draw_list();
-        for row in 0..16 {
-            let label = if row < 8 {
-                format!("BG{row}")
-            } else {
-                format!("OBJ{}", row - 8)
-            };
-            let pos = [
-                cursor[0] + draw_size[0] + 6.0,
-                cursor[1] + row as f32 * 8.0 * scale + 2.0,
-            ];
-            draw_list.add_text(pos, imgui::ImColor32::from_rgb(255, 255, 255), label);
-        }
-    }
+            let selected = this.palette_sel_is_bg == is_bg
+                && this.palette_sel_pal as usize == pal
+                && this.palette_sel_col as usize == col;
+            let draw_list = ui.get_window_draw_list();
+            draw_list
+                .add_rect(pos0, pos1, imgui::ImColor32::from_rgb(r, g, b))
+                .filled(true)
+                .build();
+            draw_list
+                .add_rect(pos0, pos1, imgui::ImColor32::from_rgb(0xFF, 0xFF, 0xFF))
+                .build();
+            if selected {
+                draw_list
+                    .add_rect(
+                        [pos0[0] - 1.0, pos0[1] - 1.0],
+                        [pos1[0] + 1.0, pos1[1] + 1.0],
+                        imgui::ImColor32::from_rgb(0xFF, 0xFF, 0xFF),
+                    )
+                    .thickness(2.0)
+                    .build();
+            }
 
-    fn build_palettes_texture(
-        &mut self,
-        ppu: &mut Ppu,
-        renderer: &mut Renderer,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) -> TextureId {
-        const SWATCH: usize = 8;
-        const COLORS: usize = 4;
-        const PALETTES: usize = 16;
-        const IMG_W: usize = SWATCH * COLORS;
-        const IMG_H: usize = SWATCH * PALETTES;
-        const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
+            let text_pos = [pos0[0], pos0[1] + square[1] + 2.0];
+            ui.set_cursor_screen_pos(text_pos);
+            ui.text(format!("{:04X}", word));
 
-        let buf = &mut self.palettes_buf[..IMG_W * IMG_H * 4];
-        buf.fill(0);
+            if clicked {
+                this.palette_sel_is_bg = is_bg;
+                this.palette_sel_pal = pal as u8;
+                this.palette_sel_col = col as u8;
+            }
+        };
 
-        let cgb = ppu.is_cgb();
-        for row in 0..PALETTES {
-            let (is_bg, pal_idx) = if row < 8 {
-                (true, row)
-            } else {
-                (false, row - 8)
-            };
-            for col in 0..COLORS {
-                let rgb = if cgb {
-                    if is_bg {
-                        ppu.bg_palette_color(pal_idx, col)
-                    } else {
-                        ppu.ob_palette_color(pal_idx, col)
-                    }
-                } else {
-                    let reg = if is_bg {
-                        ppu.read_reg(0xFF47)
-                    } else if pal_idx == 0 {
-                        ppu.read_reg(0xFF48)
-                    } else {
-                        ppu.read_reg(0xFF49)
-                    };
-                    let shade = ((reg >> (col * 2)) & 0x03) as usize;
-                    DMG_COLORS[shade]
-                };
+        let layout_flags = imgui::TableFlags::SIZING_STRETCH_PROP
+            | imgui::TableFlags::NO_SAVED_SETTINGS
+            | imgui::TableFlags::BORDERS_INNER_V;
 
-                let r = ((rgb >> 16) & 0xFF) as u8;
-                let g = ((rgb >> 8) & 0xFF) as u8;
-                let b = (rgb & 0xFF) as u8;
+        if let Some(_layout) = ui.begin_table_with_flags("pal_layout", 3, layout_flags) {
+            ui.table_next_row();
 
-                let x0 = col * SWATCH;
-                let y0 = row * SWATCH;
-                for y in 0..SWATCH {
-                    for x in 0..SWATCH {
-                        let off = ((y0 + y) * IMG_W + (x0 + x)) * 4;
-                        buf[off] = r;
-                        buf[off + 1] = g;
-                        buf[off + 2] = b;
-                        buf[off + 3] = 0xFF;
+            // BG palettes
+            ui.table_next_column();
+            let pal_table_flags = imgui::TableFlags::SIZING_FIXED_FIT
+                | imgui::TableFlags::NO_SAVED_SETTINGS
+                | imgui::TableFlags::BORDERS_INNER_V;
+            if let Some(_bg) = ui.begin_table_with_flags("bg_pals", 5, pal_table_flags) {
+                for pal in 0..bg_pals {
+                    ui.table_next_row();
+                    ui.table_next_column();
+                    ui.text(format!("BG {pal}"));
+                    for col in 0..4 {
+                        ui.table_next_column();
+                        draw_swatch(ui, self, ppu, true, pal, col);
                     }
                 }
             }
+
+            // OBJ palettes
+            ui.table_next_column();
+            if let Some(_ob) = ui.begin_table_with_flags("ob_pals", 5, pal_table_flags) {
+                for pal in 0..ob_pals {
+                    ui.table_next_row();
+                    ui.table_next_column();
+                    ui.text(format!("OBJ {pal}"));
+                    for col in 0..4 {
+                        ui.table_next_column();
+                        draw_swatch(ui, self, ppu, false, pal, col);
+                    }
+                }
+            }
+
+            // Selected color details
+            ui.table_next_column();
+            let is_bg = self.palette_sel_is_bg;
+            let pal = self.palette_sel_pal as usize;
+            let col = self.palette_sel_col as usize;
+            let rgb = Self::palette_color_rgb(ppu, is_bg, pal, col);
+            let word = Self::rgb888_to_gb_word(rgb);
+            let r5 = (word & 0x1F) as u8;
+            let g5 = ((word >> 5) & 0x1F) as u8;
+            let b5 = ((word >> 10) & 0x1F) as u8;
+
+            ui.text(if is_bg { "BG" } else { "OBJ" });
+            ui.same_line();
+            ui.text(format!("{}", pal));
+            ui.same_line();
+            ui.text(format!("[{}]", col));
+            ui.separator();
+
+            // Preview swatch
+            let pos0 = ui.cursor_screen_pos();
+            let square = [40.0, 40.0];
+            let r = ((rgb >> 16) & 0xFF) as u8;
+            let g = ((rgb >> 8) & 0xFF) as u8;
+            let b = (rgb & 0xFF) as u8;
+            let pos1 = [pos0[0] + square[0], pos0[1] + square[1]];
+            let draw_list = ui.get_window_draw_list();
+            draw_list
+                .add_rect(pos0, pos1, imgui::ImColor32::from_rgb(r, g, b))
+                .filled(true)
+                .build();
+            draw_list
+                .add_rect(pos0, pos1, imgui::ImColor32::from_rgb(0xFF, 0xFF, 0xFF))
+                .build();
+            ui.dummy(square);
+
+            ui.text(format!("{:04X}", word));
+            ui.separator();
+
+            if let Some(_t) = ui.begin_table("rgb", 2) {
+                ui.table_next_row();
+                ui.table_next_column();
+                ui.text("Red:");
+                ui.table_next_column();
+                ui.text(format!("{:02X}", r5));
+
+                ui.table_next_row();
+                ui.table_next_column();
+                ui.text("Green:");
+                ui.table_next_column();
+                ui.text(format!("{:02X}", g5));
+
+                ui.table_next_row();
+                ui.table_next_column();
+                ui.text("Blue:");
+                ui.table_next_column();
+                ui.text(format!("{:02X}", b5));
+            }
+
+            ui.separator();
+            if ui.button("copy dw") {
+                let vals: Vec<String> = (0..4)
+                    .map(|c| format!("${:04X}", Self::palette_color_word(ppu, is_bg, pal, c)))
+                    .collect();
+                let text = format!("dw {}", vals.join(", "));
+                ui.set_clipboard_text(text);
+            }
         }
-
-        let config = TextureConfig {
-            size: Extent3d {
-                width: IMG_W as u32,
-                height: IMG_H as u32,
-                depth_or_array_layers: 1,
-            },
-            label: Some("Palettes"),
-            format: Some(TextureFormat::Rgba8UnormSrgb),
-            ..Default::default()
-        };
-
-        let texture = Texture::new(device, renderer, config);
-        texture.write(queue, buf, IMG_W as u32, IMG_H as u32);
-        renderer.textures.insert(texture)
     }
 }
