@@ -228,6 +228,10 @@ impl Cpu {
         mmu.dot_div = mmu.dot_div.wrapping_add(dot_cycles);
         let curr_dot_div = mmu.dot_div;
 
+        if let Some(cart) = mmu.cart.as_mut() {
+            cart.step_rtc(cpu_cycles);
+        }
+
         mmu.timer.step(cpu_cycles, &mut mmu.if_reg);
         // Advance 2 MHz domain first so duty edges and suppression changes
         // are visible to the subsequent 1 MHz staging/PCM update in the

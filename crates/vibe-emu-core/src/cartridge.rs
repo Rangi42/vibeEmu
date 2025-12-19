@@ -73,8 +73,10 @@ struct Mbc3Rtc {
     regs: RtcRegisters,
     latched: RtcRegisters,
     last_update: SystemTime,
-    subsecond: Duration,
+    subsecond_cycles: u32,
 }
+
+const RTC_CYCLES_PER_SECOND: u32 = 4_194_304;
 
 const RTC_FILE_MAGIC: &[u8; 4] = b"RTC1";
 const RTC_FILE_VERSION: u8 = 1;
@@ -99,12 +101,11 @@ impl Mbc3Rtc {
             regs,
             latched: regs,
             last_update: now,
-            subsecond: Duration::ZERO,
+            subsecond_cycles: 0,
         }
     }
 
-    fn latch(&mut self, now: SystemTime) {
-        self.update(now);
+    fn latch(&mut self) {
         self.refresh_latch();
     }
 
@@ -123,12 +124,11 @@ impl Mbc3Rtc {
         }
     }
 
-    fn write_register(&mut self, reg: u8, value: u8, now: SystemTime) {
-        self.update(now);
+    fn write_register(&mut self, reg: u8, value: u8) {
         match reg {
             0x08 => {
                 self.regs.seconds = value & 0x3F;
-                self.subsecond = Duration::ZERO;
+                self.subsecond_cycles = 0;
             }
             0x09 => {
                 self.regs.minutes = value & 0x3F;
@@ -149,16 +149,47 @@ impl Mbc3Rtc {
         self.refresh_latch();
     }
 
-    fn update(&mut self, now: SystemTime) {
+    fn step(&mut self, cpu_cycles: u64) {
+        if self.regs.halt {
+            return;
+        }
+
+        self.add_cycles(cpu_cycles);
+    }
+
+    fn sync_wall(&mut self, now: SystemTime) {
         let elapsed = now.duration_since(self.last_update).unwrap_or_default();
         self.last_update = now;
         if self.regs.halt {
             return;
         }
 
-        let total = elapsed + self.subsecond;
-        let seconds = total.as_secs();
-        self.subsecond = total - Duration::from_secs(seconds);
+        let elapsed_cycles = (elapsed.as_secs() as u128)
+            .saturating_mul(RTC_CYCLES_PER_SECOND as u128)
+            .saturating_add(
+                (elapsed.subsec_nanos() as u128).saturating_mul(RTC_CYCLES_PER_SECOND as u128)
+                    / 1_000_000_000u128,
+            );
+        self.add_cycles(elapsed_cycles.min(u64::MAX as u128) as u64);
+    }
+
+    fn mark_persisted(&mut self, now: SystemTime) {
+        self.last_update = now;
+    }
+
+    fn add_cycles(&mut self, cycles: u64) {
+        debug_assert!(self.subsecond_cycles < RTC_CYCLES_PER_SECOND);
+
+        let mut seconds = cycles / RTC_CYCLES_PER_SECOND as u64;
+        let rem = (cycles % RTC_CYCLES_PER_SECOND as u64) as u32;
+
+        let mut sub = self.subsecond_cycles + rem;
+        if sub >= RTC_CYCLES_PER_SECOND {
+            sub -= RTC_CYCLES_PER_SECOND;
+            seconds += 1;
+        }
+        self.subsecond_cycles = sub;
+
         if seconds > 0 {
             self.advance_seconds(seconds);
         }
@@ -225,7 +256,11 @@ impl Mbc3Rtc {
             .unwrap_or_default()
             .as_secs();
         data.extend_from_slice(&saved_time.to_le_bytes());
-        data.extend_from_slice(&self.subsecond.subsec_nanos().to_le_bytes());
+
+        let subsecond_nanos = ((self.subsecond_cycles as u128).saturating_mul(1_000_000_000u128)
+            / (RTC_CYCLES_PER_SECOND as u128))
+            .min(u32::MAX as u128) as u32;
+        data.extend_from_slice(&subsecond_nanos.to_le_bytes());
         data.push(self.regs.seconds & 0x3F);
         data.push(self.regs.minutes & 0x3F);
         data.push(self.regs.hours & 0x1F);
@@ -252,7 +287,9 @@ impl Mbc3Rtc {
         let nanos = u32::from_le_bytes(data[13..17].try_into().unwrap()).min(999_999_999);
 
         self.last_update = UNIX_EPOCH + Duration::from_secs(secs);
-        self.subsecond = Duration::from_nanos(nanos as u64);
+        self.subsecond_cycles = ((nanos as u128).saturating_mul(RTC_CYCLES_PER_SECOND as u128)
+            / 1_000_000_000u128)
+            .min((RTC_CYCLES_PER_SECOND - 1) as u128) as u32;
         self.regs.seconds = data[17] & 0x3F;
         self.regs.minutes = data[18] & 0x3F;
         self.regs.hours = data[19] & 0x1F;
@@ -267,6 +304,12 @@ impl Mbc3Rtc {
 }
 
 impl Cartridge {
+    pub fn step_rtc(&mut self, cpu_cycles: u16) {
+        if let Some(rtc) = self.rtc_mut() {
+            rtc.step(cpu_cycles as u64);
+        }
+    }
+
     pub fn from_bytes_with_ram(data: Vec<u8>, ram_size: usize) -> Self {
         let mut c = Self::load(data);
         c.ram = vec![0; ram_size];
@@ -298,7 +341,9 @@ impl Cartridge {
                 {
                     eprintln!("Failed to parse RTC data from {}", rtc_path.display());
                 }
-                rtc.latch(SystemTime::now());
+                let now = SystemTime::now();
+                rtc.sync_wall(now);
+                rtc.latch();
             }
         }
 
@@ -566,7 +611,7 @@ impl Cartridge {
                     *latch_pending = true;
                 } else if val == 1 && *latch_pending {
                     if let Some(rtc) = rtc {
-                        rtc.latch(SystemTime::now());
+                        rtc.latch();
                     }
                     *latch_pending = false;
                 } else {
@@ -583,7 +628,7 @@ impl Cartridge {
                     *latch_pending = true;
                 } else if val == 1 && *latch_pending {
                     if let Some(rtc) = rtc {
-                        rtc.latch(SystemTime::now());
+                        rtc.latch();
                     }
                     *latch_pending = false;
                 } else {
@@ -609,7 +654,7 @@ impl Cartridge {
                         }
                         0x08..=0x0C => {
                             if let Some(rtc) = rtc.as_mut() {
-                                rtc.write_register(*ram_bank, val, SystemTime::now());
+                                rtc.write_register(*ram_bank, val);
                             }
                         }
                         _ => {}
@@ -635,7 +680,7 @@ impl Cartridge {
                         }
                         0x08..=0x0C => {
                             if let Some(rtc) = rtc.as_mut() {
-                                rtc.write_register(*ram_bank, val, SystemTime::now());
+                                rtc.write_register(*ram_bank, val);
                             }
                         }
                         _ => {}
@@ -725,7 +770,7 @@ impl Cartridge {
 
         let rtc_path = self.rtc_path.clone();
         if let (Some(path), Some(rtc)) = (rtc_path, self.rtc_mut()) {
-            rtc.update(SystemTime::now());
+            rtc.mark_persisted(SystemTime::now());
             fs::write(path, rtc.serialize())?;
         }
         Ok(())
@@ -806,6 +851,10 @@ impl<'a> Header<'a> {
 mod tests {
     use super::*;
 
+    fn ms_to_cycles(ms: u64) -> u32 {
+        ((ms as u128).saturating_mul(RTC_CYCLES_PER_SECOND as u128) / 1000u128) as u32
+    }
+
     #[test]
     fn rtc_ticks_through_invalid_values() {
         let now = SystemTime::UNIX_EPOCH;
@@ -836,17 +885,16 @@ mod tests {
     fn rtc_halt_preserves_subseconds() {
         let start = SystemTime::UNIX_EPOCH;
         let mut rtc = Mbc3Rtc::new(start);
-        rtc.subsecond = Duration::from_millis(600);
+        rtc.subsecond_cycles = RTC_CYCLES_PER_SECOND - 10_000;
 
-        rtc.write_register(0x0C, 0x40, start);
-        rtc.update(start + Duration::from_secs(2));
+        rtc.write_register(0x0C, 0x40);
+        rtc.step(RTC_CYCLES_PER_SECOND as u64 * 2);
         assert_eq!(rtc.regs.seconds, 0);
 
-        let resume_time = start + Duration::from_secs(2);
-        rtc.write_register(0x0C, 0x00, resume_time);
-        rtc.update(resume_time + Duration::from_millis(300));
+        rtc.write_register(0x0C, 0x00);
+        rtc.step(9_999);
         assert_eq!(rtc.regs.seconds, 0);
-        rtc.update(resume_time + Duration::from_millis(400));
+        rtc.step(1);
         assert_eq!(rtc.regs.seconds, 1);
     }
 
@@ -854,13 +902,15 @@ mod tests {
     fn rtc_seconds_write_resets_phase() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
         let mut rtc = Mbc3Rtc::new(now);
-        rtc.subsecond = Duration::from_millis(750);
+        rtc.subsecond_cycles = ms_to_cycles(750);
 
-        rtc.write_register(0x09, 0x01, now + Duration::from_millis(10));
-        assert_eq!(rtc.subsecond, Duration::from_millis(760));
+        rtc.step(ms_to_cycles(10) as u64);
 
-        rtc.write_register(0x08, 0x02, now + Duration::from_millis(20));
-        assert_eq!(rtc.subsecond, Duration::ZERO);
+        rtc.write_register(0x09, 0x01);
+        assert_eq!(rtc.subsecond_cycles, ms_to_cycles(760));
+
+        rtc.write_register(0x08, 0x02);
+        assert_eq!(rtc.subsecond_cycles, 0);
     }
 
     #[test]
