@@ -605,12 +605,13 @@ impl Cartridge {
                 },
                 0x0000..=0x3FFF,
             ) => {
-                // MBC2 RAMG is selected when address bit 8 is 0.
-                // ROM bank select (ROMB) is selected when bit 8 is 1, but only in the
-                // 0x2000-0x3FFF range (Mooneye uses ROMB=$2100).
+                // MBC2 uses address bit 8 to select between RAMG and ROMB across the
+                // entire 0x0000-0x3FFF range:
+                // - bit8=0: RAM enable (RAMG)
+                // - bit8=1: ROM bank select (ROMB)
                 if (addr & 0x0100) == 0 {
                     *ram_enable = val & 0x0F == 0x0A;
-                } else if (0x2000..=0x3FFF).contains(&addr) {
+                } else {
                     *rom_bank = val & 0x0F;
                     if *rom_bank == 0 {
                         *rom_bank = 1;
