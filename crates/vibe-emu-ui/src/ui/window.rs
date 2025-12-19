@@ -1,7 +1,9 @@
+use crate::GameScaler;
 use crate::ui::vram_viewer::VramViewerWindow;
 use imgui_wgpu::{Renderer, RendererConfig};
 use log::warn;
 use pixels::Pixels;
+use std::sync::Arc;
 use winit::{dpi::PhysicalSize, window::Window};
 
 /// Wrapper for each editor window
@@ -16,6 +18,8 @@ pub struct UiWindow {
     pub kind: WindowKind,
     /// Optional VRAM viewer state
     pub vram_viewer: Option<VramViewerWindow>,
+    /// Optional custom scaler for the main game view (used to avoid UI overlap)
+    pub game_scaler: Option<Arc<GameScaler>>,
     buffer_width: u32,
     buffer_height: u32,
     surface_width: u32,
@@ -26,6 +30,7 @@ pub struct UiWindow {
 pub enum WindowKind {
     Debugger,
     VramViewer,
+    Options,
     Main,
 }
 
@@ -52,12 +57,22 @@ impl UiWindow {
         } else {
             None
         };
+
+        let game_scaler = if matches!(kind, WindowKind::Main) {
+            Some(Arc::new(GameScaler::new(
+                pixels.device(),
+                pixels.surface_texture_format(),
+            )))
+        } else {
+            None
+        };
         Self {
             win,
             pixels,
             renderer,
             kind,
             vram_viewer,
+            game_scaler,
             buffer_width: buffer_size.0,
             buffer_height: buffer_size.1,
             // Unknown until we've successfully called Pixels::resize_surface.
@@ -69,6 +84,10 @@ impl UiWindow {
 
     pub fn surface_size(&self) -> (u32, u32) {
         (self.surface_width, self.surface_height)
+    }
+
+    pub fn buffer_size(&self) -> (u32, u32) {
+        (self.buffer_width, self.buffer_height)
     }
 
     pub fn ensure_surface_matches_window(&mut self) {

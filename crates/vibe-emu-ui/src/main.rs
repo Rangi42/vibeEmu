@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 mod audio;
+mod keybinds;
+mod scaler;
 mod ui;
 
 use clap::{Parser, ValueEnum};
@@ -21,13 +23,14 @@ use vibe_emu_mobile::{
     MobileAdapter, MobileAdapterDevice, MobileAddr, MobileConfig, MobileHost, MobileLinkPort,
     MobileNumber, MobileSockType, StdMobileHost,
 };
-use winit::dpi::PhysicalPosition;
-use winit::event::{ElementState, Event, MouseButton, WindowEvent};
+use winit::event::{ElementState, Event, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 use winit::window::{Icon, Window, WindowAttributes};
 
 use crossbeam_channel as cb;
+use keybinds::KeyBindings;
+pub use scaler::GameScaler;
 use ui::snapshot::UiSnapshot;
 
 fn load_window_icon() -> Option<Icon> {
@@ -67,7 +70,36 @@ fn load_window_icon() -> Option<Icon> {
     Icon::from_rgba(rgba, info.width, info.height).ok()
 }
 
+fn default_keybinds_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return std::path::PathBuf::from(appdata)
+                .join("vibeemu")
+                .join("keybinds.cfg");
+        }
+    }
+
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        return std::path::PathBuf::from(xdg)
+            .join("vibeemu")
+            .join("keybinds.cfg");
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        return std::path::PathBuf::from(home)
+            .join(".config")
+            .join("vibeemu")
+            .join("keybinds.cfg");
+    }
+
+    std::path::PathBuf::from("keybinds.cfg")
+}
+
 const SCALE: u32 = 2;
+// The top menu bar consumes vertical space; ensure the default window is tall enough
+// to still fit a 2x (or SCALEx) Game Boy frame below it.
+const DEFAULT_MENU_BAR_HEIGHT_PX: u32 = 32;
 const GB_FPS: f64 = 59.7275;
 const FRAME_TIME: Duration = Duration::from_nanos((1e9_f64 / GB_FPS) as u64);
 const FF_MULT: f32 = 4.0;
@@ -78,13 +110,26 @@ const AUDIO_WARMUP_TIMEOUT_MS: u64 = 200;
 #[derive(Default)]
 struct UiState {
     paused: bool,
-    show_context: bool,
-    ctx_pos: [f32; 2],
     spawn_debugger: bool,
     spawn_vram: bool,
+    spawn_options: bool,
     pending_action: Option<UiAction>,
+    pending_pause: Option<bool>,
+    menu_pause_active: bool,
+    menu_resume_armed: bool,
+    rebinding: Option<RebindTarget>,
     serial_peripheral: SerialPeripheral,
     pending_serial_peripheral: Option<SerialPeripheral>,
+
+    last_main_inner_size: Option<(u32, u32)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RebindTarget {
+    Joypad(u8),
+    Pause,
+    FastForward,
+    Quit,
 }
 
 enum UiAction {
@@ -239,6 +284,10 @@ struct Args {
     /// Emit Mobile Adapter diagnostics (raw serial bytes + libmobile debug + socket events)
     #[arg(long)]
     mobile_diag: bool,
+
+    /// Path to a keybind configuration file (see README/UI_TODO for format)
+    #[arg(long)]
+    keybinds: Option<std::path::PathBuf>,
 }
 
 struct DiagMobileHost {
@@ -410,39 +459,6 @@ fn parse_mobile_addr(s: &str) -> Result<MobileAddr, String> {
     })
 }
 
-fn game_viewport_rect(
-    window: &winit::window::Window,
-    fb_w: u32,
-    fb_h: u32,
-) -> Option<(f64, f64, f64, f64)> {
-    let size = window.inner_size();
-    if size.width == 0 || size.height == 0 || fb_w == 0 || fb_h == 0 {
-        return None;
-    }
-
-    // Approximate Pixels' scaling behavior: preserve aspect ratio, integer scale,
-    // centered with letterboxing.
-    let scale_x = size.width / fb_w;
-    let scale_y = size.height / fb_h;
-    let scale = scale_x.min(scale_y);
-    if scale == 0 {
-        return None;
-    }
-
-    let vp_w = (fb_w * scale) as f64;
-    let vp_h = (fb_h * scale) as f64;
-    let x0 = ((size.width as f64) - vp_w) / 2.0;
-    let y0 = ((size.height as f64) - vp_h) / 2.0;
-    Some((x0, y0, x0 + vp_w, y0 + vp_h))
-}
-
-fn cursor_in_screen(window: &winit::window::Window, pos: PhysicalPosition<f64>) -> bool {
-    let Some((x0, y0, x1, y1)) = game_viewport_rect(window, 160, 144) else {
-        return false;
-    };
-    pos.x >= x0 && pos.x < x1 && pos.y >= y0 && pos.y < y1
-}
-
 fn sync_imgui_display_for_window(imgui: &mut ImguiContext, window: &winit::window::Window) {
     // imgui-winit-support updates these fields from *events* and stores them in the global Io.
     // With multiple OS windows sharing one ImGuiContext, resizing one window can therefore
@@ -472,6 +488,26 @@ fn enforce_square_corners(attrs: WindowAttributes) -> WindowAttributes {
 #[cfg(not(target_os = "windows"))]
 fn enforce_square_corners(attrs: WindowAttributes) -> WindowAttributes {
     attrs
+}
+
+fn desired_main_inner_size(top_padding_px: u32) -> winit::dpi::PhysicalSize<u32> {
+    winit::dpi::PhysicalSize::new(160 * SCALE, top_padding_px + 144 * SCALE)
+}
+
+fn enforce_main_window_inner_size(
+    ui_state: &mut UiState,
+    window: &winit::window::Window,
+    top_padding_px: u32,
+) -> bool {
+    let desired = desired_main_inner_size(top_padding_px);
+    let desired_pair = (desired.width, desired.height);
+    if ui_state.last_main_inner_size == Some(desired_pair) {
+        return false;
+    }
+
+    ui_state.last_main_inner_size = Some(desired_pair);
+    let _ = window.request_inner_size(desired);
+    true
 }
 
 fn spawn_debugger_window(
@@ -549,6 +585,47 @@ fn spawn_vram_window(
     platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
 
     let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, (1, 1), imgui);
+    let id = ui_win.win.id();
+    windows.insert(id, ui_win);
+    if let Some(win) = windows.get_mut(&id) {
+        win.resize(win.win.inner_size());
+    }
+}
+
+fn spawn_options_window(
+    event_loop: &ActiveEventLoop,
+    platform: &mut WinitPlatform,
+    imgui: &mut ImguiContext,
+    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
+) {
+    use winit::dpi::LogicalSize;
+    let attrs = enforce_square_corners(
+        Window::default_attributes()
+            .with_title("vibeEmu \u{2013} Options")
+            .with_window_icon(load_window_icon())
+            .with_inner_size(LogicalSize::new(520.0, 420.0)),
+    );
+    let w = match event_loop.create_window(attrs) {
+        Ok(w) => w,
+        Err(e) => {
+            error!("Failed to create Options window: {e}");
+            return;
+        }
+    };
+
+    let size = w.inner_size();
+    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
+    let pixels = match pixels::Pixels::new(1, 1, surface) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Pixels init failed (Options window): {e}");
+            return;
+        }
+    };
+
+    platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
+
+    let ui_win = UiWindow::new(WindowKind::Options, w, pixels, (1, 1), imgui);
     let id = ui_win.win.id();
     windows.insert(id, ui_win);
     if let Some(win) = windows.get_mut(&id) {
@@ -749,7 +826,15 @@ fn run_emulator_thread(
                 // Avoid allocating every frame. If no free buffers are
                 // available, drop this frame rather than allocating.
                 if let Ok(mut buf) = frame_pool_rx.try_recv() {
-                    buf.as_mut_slice().copy_from_slice(mmu.ppu.framebuffer());
+                    // Core framebuffer is 0x00RRGGBB; convert to a u32 layout whose
+                    // *in-memory bytes* match Pixels RGBA8 on little-endian: [R,G,B,A].
+                    for (dst, &src) in buf.iter_mut().zip(mmu.ppu.framebuffer().iter()) {
+                        // 0x00RRGGBB -> 0xFFBBGGRR (bytes RR GG BB FF)
+                        *dst = 0xFF00_0000
+                            | ((src & 0x0000_00FF) << 16)
+                            | (src & 0x0000_FF00)
+                            | ((src & 0x00FF_0000) >> 16);
+                    }
                     frame_buf = Some(buf);
                 }
                 mmu.ppu.clear_frame_flag();
@@ -939,83 +1024,194 @@ fn draw_vram(win: &mut ui::window::UiWindow, snapshot: &UiSnapshot, ui: &imgui::
 }
 
 fn draw_game_screen(pixels: &mut Pixels, frame: &[u32]) {
-    for (dst, &src) in pixels.frame_mut().chunks_exact_mut(4).zip(frame.iter()) {
-        let r = ((src >> 16) & 0xFF) as u8;
-        let g = ((src >> 8) & 0xFF) as u8;
-        let b = (src & 0xFF) as u8;
-        dst[0] = r;
-        dst[1] = g;
-        dst[2] = b;
-        dst[3] = 0xFF;
+    // Frames are pre-converted to a u32 layout that matches Pixels' RGBA8
+    // byte buffer on little-endian platforms: 0xAABBGGRR in u32.
+    let dst = pixels.frame_mut();
+    if dst.len() == frame.len() * 4 {
+        // SAFETY: `frame` is a `[u32]` stored contiguously; we only view its bytes.
+        // The emulator thread writes pixels as 0xAABBGGRR so little-endian memory
+        // order matches RGBA8 ([R, G, B, A]) expected by Pixels.
+        let src =
+            unsafe { std::slice::from_raw_parts(frame.as_ptr().cast::<u8>(), frame.len() * 4) };
+        dst.copy_from_slice(src);
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_ui(state: &mut UiState, ui: &imgui::Ui, mobile_available: bool) {
-    if state.show_context {
-        let flags = imgui::WindowFlags::NO_TITLE_BAR
-            | imgui::WindowFlags::NO_MOVE
-            | imgui::WindowFlags::NO_DECORATION;
-        let mut open = state.show_context;
-        let mut close_menu = false;
-        ui.window("ctx")
-            .position(state.ctx_pos, imgui::Condition::Always)
-            .flags(flags)
-            .always_auto_resize(true)
-            .opened(&mut open)
-            .build(|| {
-                if ui.button("Load ROM") {
-                    if let Some(path) = FileDialog::new()
-                        .add_filter("Game Boy ROM", &["gb", "gbc"])
-                        .pick_file()
-                        && let Ok(cart) = Cartridge::from_file(&path)
-                    {
-                        state.pending_action = Some(UiAction::Load(cart));
-                        state.paused = false;
-                    }
-                    close_menu = true;
-                }
-                if ui.button("Reset GB") {
-                    state.pending_action = Some(UiAction::Reset);
-                    state.paused = false;
-                    close_menu = true;
-                }
+    let mut any_menu_open = false;
 
-                ui.separator();
-                ui.text("Serial Peripheral");
+    // Top menu bar (replaces the old right-click context menu).
+    if let Some(_bar) = ui.begin_main_menu_bar() {
+        if let Some(_menu) = ui.begin_menu("File") {
+            any_menu_open = true;
+            if ui.menu_item("Load ROM...")
+                && let Some(path) = FileDialog::new()
+                    .add_filter("Game Boy ROM", &["gb", "gbc"])
+                    .pick_file()
+                && let Ok(cart) = Cartridge::from_file(&path)
+            {
+                state.pending_action = Some(UiAction::Load(cart));
+            }
+            if ui.menu_item("Reset") {
+                state.pending_action = Some(UiAction::Reset);
+            }
+        }
 
+        if let Some(_menu) = ui.begin_menu("Emulation") {
+            any_menu_open = true;
+
+            let pause_label = if state.paused { "Resume" } else { "Pause" };
+            if ui.menu_item(pause_label) {
+                let new_paused = !state.paused;
+                state.paused = new_paused;
+                state.pending_pause = Some(new_paused);
+                // Manual pause overrides menu auto-resume.
+                state.menu_resume_armed = false;
+            }
+
+            if let Some(_serial_menu) = ui.begin_menu("Serial Peripheral") {
+                any_menu_open = true;
                 if mobile_available {
-                    let items = ["None", "Mobile Adapter GB"];
-                    let mut selected = match state.serial_peripheral {
-                        SerialPeripheral::None => 0,
-                        SerialPeripheral::MobileAdapter => 1,
-                    };
-                    if ui.combo_simple_string("##serial_peripheral", &mut selected, &items) {
-                        let new_value = match selected {
-                            1 => SerialPeripheral::MobileAdapter,
-                            _ => SerialPeripheral::None,
-                        };
-                        if new_value != state.serial_peripheral {
-                            state.serial_peripheral = new_value;
-                            state.pending_serial_peripheral = Some(new_value);
-                        }
+                    let none_selected = state.serial_peripheral == SerialPeripheral::None;
+                    if ui.menu_item_config("None").selected(none_selected).build() && !none_selected
+                    {
+                        state.serial_peripheral = SerialPeripheral::None;
+                        state.pending_serial_peripheral = Some(SerialPeripheral::None);
+                    }
+
+                    let mob_selected = state.serial_peripheral == SerialPeripheral::MobileAdapter;
+                    if ui
+                        .menu_item_config("Mobile Adapter GB")
+                        .selected(mob_selected)
+                        .build()
+                        && !mob_selected
+                    {
+                        state.serial_peripheral = SerialPeripheral::MobileAdapter;
+                        state.pending_serial_peripheral = Some(SerialPeripheral::MobileAdapter);
                     }
                 } else {
                     state.serial_peripheral = SerialPeripheral::None;
                     ui.text_disabled("Mobile Adapter GB (unavailable)");
                 }
+            }
+        }
 
-                if ui.button("Debugger") {
-                    state.spawn_debugger = true;
-                    close_menu = true;
-                }
-                if ui.button("VRAM Viewer") {
-                    state.spawn_vram = true;
-                    close_menu = true;
-                }
-            });
-        state.show_context = open && !close_menu;
+        if let Some(_menu) = ui.begin_menu("Tools") {
+            any_menu_open = true;
+            if ui.menu_item("Debugger") {
+                state.spawn_debugger = true;
+                state.paused = true;
+                state.pending_pause = Some(true);
+                state.menu_resume_armed = false;
+            }
+            if ui.menu_item("VRAM Viewer") {
+                state.spawn_vram = true;
+                state.paused = true;
+                state.pending_pause = Some(true);
+                state.menu_resume_armed = false;
+            }
+        }
+
+        if let Some(_menu) = ui.begin_menu("Options") {
+            any_menu_open = true;
+            if ui.menu_item("Options...") {
+                state.spawn_options = true;
+            }
+        }
     }
+
+    // Auto-pause while the top menu is open, and resume when it closes.
+    if any_menu_open {
+        if !state.menu_pause_active {
+            state.menu_pause_active = true;
+            state.menu_resume_armed = !state.paused;
+            if !state.paused {
+                state.paused = true;
+                state.pending_pause = Some(true);
+            }
+        }
+    } else if state.menu_pause_active {
+        state.menu_pause_active = false;
+        if state.menu_resume_armed {
+            state.menu_resume_armed = false;
+            state.paused = false;
+            state.pending_pause = Some(false);
+        }
+    }
+}
+
+fn draw_options_window(state: &mut UiState, keybinds: &KeyBindings, ui: &imgui::Ui) {
+    let display = ui.io().display_size;
+    let flags = imgui::WindowFlags::NO_MOVE
+        | imgui::WindowFlags::NO_RESIZE
+        | imgui::WindowFlags::NO_COLLAPSE;
+
+    ui.window("Options")
+        .position([0.0, 0.0], imgui::Condition::Always)
+        .size(display, imgui::Condition::Always)
+        .flags(flags)
+        .build(|| {
+            if let Some(_tabs) = imgui::TabBar::new("OptionsTabs").begin(ui)
+                && let Some(_tab) = imgui::TabItem::new("Keybinds").begin(ui)
+            {
+                ui.text("Click Rebind, then press a key.");
+
+                if state.rebinding.is_some() {
+                    ui.text_colored([1.0, 0.8, 0.2, 1.0], "Waiting for key...");
+                    ui.same_line();
+                    if ui.button("Cancel") {
+                        state.rebinding = None;
+                    }
+                    ui.separator();
+                }
+
+                let mut row = |label: &str, current: String, target: RebindTarget| {
+                    ui.text(label);
+                    ui.same_line();
+                    ui.text_disabled(current);
+                    ui.same_line();
+                    let btn = format!("Rebind##{label}");
+                    if ui.button(btn) {
+                        state.rebinding = Some(target);
+                    }
+                };
+
+                let fmt_joy = |mask: u8| {
+                    keybinds
+                        .key_for_joypad_mask(mask)
+                        .map(|c| format!("{c:?}"))
+                        .unwrap_or_else(|| "<unbound>".to_string())
+                };
+
+                row("Up", fmt_joy(0x04), RebindTarget::Joypad(0x04));
+                row("Down", fmt_joy(0x08), RebindTarget::Joypad(0x08));
+                row("Left", fmt_joy(0x02), RebindTarget::Joypad(0x02));
+                row("Right", fmt_joy(0x01), RebindTarget::Joypad(0x01));
+
+                ui.separator();
+                row("A", fmt_joy(0x10), RebindTarget::Joypad(0x10));
+                row("B", fmt_joy(0x20), RebindTarget::Joypad(0x20));
+                row("Select", fmt_joy(0x40), RebindTarget::Joypad(0x40));
+                row("Start", fmt_joy(0x80), RebindTarget::Joypad(0x80));
+
+                ui.separator();
+                row(
+                    "Pause",
+                    format!("{:?}", keybinds.pause_key()),
+                    RebindTarget::Pause,
+                );
+                row(
+                    "Fast Forward",
+                    format!("{:?}", keybinds.fast_forward_key()),
+                    RebindTarget::FastForward,
+                );
+                row(
+                    "Quit",
+                    format!("{:?}", keybinds.quit_key()),
+                    RebindTarget::Quit,
+                );
+            }
+        });
 }
 
 fn configure_wgpu_backend() {
@@ -1212,7 +1408,29 @@ fn main() {
     let cycle_limit = args.cycles;
     let second_limit = args.seconds.map(Duration::from_secs);
 
+    // UI frames are stored as u32 in a byte layout matching Pixels' RGBA8 buffer.
     let mut frame = vec![0u32; 160 * 144];
+
+    let keybinds_path = {
+        let from_args = args.keybinds.clone();
+        let from_env = std::env::var_os("VIBEEMU_KEYBINDS").map(std::path::PathBuf::from);
+        from_args.or(from_env).unwrap_or_else(default_keybinds_path)
+    };
+
+    let mut keybinds = if keybinds_path.exists() {
+        KeyBindings::load_from_file(&keybinds_path)
+    } else {
+        KeyBindings::defaults()
+    };
+
+    if !keybinds_path.exists()
+        && let Err(e) = keybinds.save_to_file(&keybinds_path)
+    {
+        warn!(
+            "Failed to write default keybinds file {}: {e}",
+            keybinds_path.display()
+        );
+    }
 
     let mut serial_peripheral = if args.mobile {
         SerialPeripheral::MobileAdapter
@@ -1367,9 +1585,10 @@ fn main() {
             Window::default_attributes()
                 .with_title("vibeEmu")
                 .with_window_icon(load_window_icon())
+                .with_resizable(false)
                 .with_inner_size(winit::dpi::LogicalSize::new(
                     (160 * SCALE) as f64,
-                    (144 * SCALE) as f64,
+                    (144 * SCALE + DEFAULT_MENU_BAR_HEIGHT_PX) as f64,
                 )),
         );
         #[allow(deprecated)]
@@ -1407,7 +1626,6 @@ fn main() {
         }
 
         let mut state = 0xFFu8;
-        let mut cursor_pos = PhysicalPosition::new(0.0, 0.0);
 
         #[allow(deprecated)]
         let _ = event_loop.run(move |event, target| {
@@ -1465,22 +1683,22 @@ fn main() {
 
                         // Ensure auxiliary windows (debugger/VRAM) stay responsive even if
                         // emulation frames are being dropped due to backpressure.
-                        if !matches!(win.kind, WindowKind::Main)
-                            && matches!(
-                                win_event,
-                                WindowEvent::CursorMoved { .. }
-                                    | WindowEvent::MouseInput { .. }
-                                    | WindowEvent::MouseWheel { .. }
-                                    | WindowEvent::KeyboardInput { .. }
-                            )
-                        {
-                            win.win.request_redraw();
-                        }
-                        if ui_state.show_context
-                            && imgui.io().want_capture_mouse
-                            && matches!(win_event, WindowEvent::MouseInput { .. })
-                        {
-                            return;
+                        if matches!(
+                            win_event,
+                            WindowEvent::CursorMoved { .. }
+                                | WindowEvent::MouseInput { .. }
+                                | WindowEvent::MouseWheel { .. }
+                                | WindowEvent::KeyboardInput { .. }
+                        ) {
+                            // When paused, the UI must still redraw on input so menu bars and
+                            // auxiliary tools remain interactive.
+                            if !matches!(win.kind, WindowKind::Main)
+                                || ui_state.paused
+                                || imgui.io().want_capture_mouse
+                                || imgui.io().want_capture_keyboard
+                            {
+                                win.win.request_redraw();
+                            }
                         }
                         match win_event {
                             WindowEvent::CloseRequested => {
@@ -1507,73 +1725,82 @@ fn main() {
                                 win.resize(win.win.inner_size());
                                 win.win.request_redraw();
                             }
-                            WindowEvent::CursorMoved { position, .. }
-                                if matches!(win.kind, WindowKind::Main) =>
-                            {
-                                cursor_pos = *position;
-                            }
-                            WindowEvent::MouseInput {
-                                state: ElementState::Pressed,
-                                button: MouseButton::Right,
-                                ..
-                            } if matches!(win.kind, WindowKind::Main) => {
-                                if !ui_state.paused && cursor_in_screen(&win.win, cursor_pos) {
-                                    ui_state.paused = true;
-                                    ui_state.show_context = true;
-                                    ui_state.ctx_pos = [cursor_pos.x as f32, cursor_pos.y as f32];
-                                    let _ = to_emu_tx
-                                        .send(UiToEmu::Command(EmuCommand::SetPaused(true)));
-                                    win.win.request_redraw();
-                                }
-                            }
-                            WindowEvent::MouseInput {
-                                state: ElementState::Pressed,
-                                button: MouseButton::Left,
-                                ..
-                            } if matches!(win.kind, WindowKind::Main) => {
-                                if ui_state.show_context && imgui.io().want_capture_mouse {
-                                    // Menu click handled by ImGui
-                                } else if cursor_in_screen(&win.win, cursor_pos) {
-                                    ui_state.paused = false;
-                                    ui_state.show_context = false;
-                                    let _ = to_emu_tx
-                                        .send(UiToEmu::Command(EmuCommand::SetPaused(false)));
-                                    win.win.request_redraw();
-                                }
-                            }
                             WindowEvent::KeyboardInput { event, .. }
-                                if matches!(win.kind, WindowKind::Main) =>
+                                if matches!(win.kind, WindowKind::Main | WindowKind::Options) =>
                             {
-                                if !(ui_state.paused || imgui.io().want_text_input)
-                                    && let PhysicalKey::Code(code) = event.physical_key
-                                {
+                                if let PhysicalKey::Code(code) = event.physical_key {
                                     let pressed = event.state == ElementState::Pressed;
-                                    let mask = if code == KeyCode::Space {
+
+                                    // Key rebinding takes precedence over all bindings.
+                                    if pressed && let Some(target) = ui_state.rebinding.take() {
+                                        match target {
+                                            RebindTarget::Joypad(mask) => {
+                                                keybinds.set_joypad_binding(mask, code);
+                                            }
+                                            RebindTarget::Pause => {
+                                                keybinds.set_pause_key(code);
+                                            }
+                                            RebindTarget::FastForward => {
+                                                keybinds.set_fast_forward_key(code);
+                                            }
+                                            RebindTarget::Quit => {
+                                                keybinds.set_quit_key(code);
+                                            }
+                                        }
+
+                                        if let Err(e) = keybinds.save_to_file(&keybinds_path) {
+                                            warn!(
+                                                "Failed to save keybinds file {}: {e}",
+                                                keybinds_path.display()
+                                            );
+                                        }
+
+                                        win.win.request_redraw();
+                                        return;
+                                    }
+
+                                    // In the Options window we only care about rebinding capture.
+                                    if matches!(win.kind, WindowKind::Options) {
+                                        return;
+                                    }
+
+                                    // Quit is always honored.
+                                    if code == keybinds.quit_key() {
+                                        if pressed {
+                                            target.exit();
+                                        }
+                                        return;
+                                    }
+
+                                    // Pause toggle is always honored (unless ImGui is typing into a widget).
+                                    if code == keybinds.pause_key()
+                                        && pressed
+                                        && !imgui.io().want_text_input
+                                        && !ui_state.menu_pause_active
+                                    {
+                                        ui_state.paused = !ui_state.paused;
+                                        let _ = to_emu_tx.send(UiToEmu::Command(
+                                            EmuCommand::SetPaused(ui_state.paused),
+                                        ));
+                                        win.win.request_redraw();
+                                        return;
+                                    }
+
+                                    // Fast-forward is a hold action.
+                                    if code == keybinds.fast_forward_key() {
                                         speed.fast = pressed;
                                         speed.factor = if speed.fast { FF_MULT } else { 1.0 };
                                         let _ = to_emu_tx
                                             .send(UiToEmu::Command(EmuCommand::SetSpeed(speed)));
-                                        None
-                                    } else {
-                                        match code {
-                                            KeyCode::ArrowRight => Some(0x01),
-                                            KeyCode::ArrowLeft => Some(0x02),
-                                            KeyCode::ArrowUp => Some(0x04),
-                                            KeyCode::ArrowDown => Some(0x08),
-                                            KeyCode::KeyS => Some(0x10),
-                                            KeyCode::KeyA => Some(0x20),
-                                            KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(0x40),
-                                            KeyCode::Enter => Some(0x80),
-                                            KeyCode::Escape => {
-                                                if pressed {
-                                                    target.exit();
-                                                }
-                                                None
-                                            }
-                                            _ => None,
-                                        }
-                                    };
-                                    if let Some(mask) = mask {
+                                        return;
+                                    }
+
+                                    // Joypad input is disabled while paused or while ImGui is consuming text.
+                                    if ui_state.paused || imgui.io().want_text_input {
+                                        return;
+                                    }
+
+                                    if let Some(mask) = keybinds.joypad_mask_for(code) {
                                         if pressed {
                                             state &= !mask;
                                         } else {
@@ -1597,7 +1824,32 @@ fn main() {
                                     error!("imgui prepare_frame failed: {e}");
                                     return;
                                 }
+
+                                let fb_scale_y = imgui.io().display_framebuffer_scale[1];
                                 let ui = imgui.frame();
+
+                                let top_padding_px = if matches!(win.kind, WindowKind::Main) {
+                                    (ui.frame_height() * fb_scale_y).ceil().max(0.0) as u32
+                                } else {
+                                    0
+                                };
+
+                                if matches!(win.kind, WindowKind::Main)
+                                    && enforce_main_window_inner_size(
+                                        &mut ui_state,
+                                        &win.win,
+                                        top_padding_px,
+                                    )
+                                {
+                                    // The window size change will trigger a resize and a redraw.
+                                    // Skip GPU rendering this frame to avoid using a stale surface,
+                                    // but still end the ImGui frame (Render) to keep its internal
+                                    // frame counters consistent.
+                                    platform.prepare_render(ui, &win.win);
+                                    let _ = imgui.render();
+                                    win.win.request_redraw();
+                                    return;
+                                }
 
                                 match win.kind {
                                     WindowKind::Main => {
@@ -1614,16 +1866,45 @@ fn main() {
                                             ui_snapshot.read().unwrap_or_else(|e| e.into_inner());
                                         draw_vram(win, &snap, ui)
                                     }
+                                    WindowKind::Options => {
+                                        draw_options_window(&mut ui_state, &keybinds, ui);
+                                    }
                                 }
 
                                 platform.prepare_render(ui, &win.win);
                                 let draw_data = imgui.render();
 
                                 let (surface_w, surface_h) = win.surface_size();
+                                let is_main = matches!(win.kind, WindowKind::Main);
+                                let game_scaler = if is_main {
+                                    win.game_scaler.clone()
+                                } else {
+                                    None
+                                };
+                                let (buffer_w, buffer_h) = win.buffer_size();
 
                                 let render_result =
                                     win.pixels.render_with(|encoder, render_target, context| {
-                                        context.scaling_renderer.render(encoder, render_target);
+                                        if is_main {
+                                            if let Some(game_scaler) = game_scaler.as_deref() {
+                                                game_scaler.render(
+                                                    encoder,
+                                                    render_target,
+                                                    context,
+                                                    surface_w,
+                                                    surface_h,
+                                                    buffer_w,
+                                                    buffer_h,
+                                                    top_padding_px,
+                                                );
+                                            } else {
+                                                context
+                                                    .scaling_renderer
+                                                    .render(encoder, render_target);
+                                            }
+                                        } else {
+                                            context.scaling_renderer.render(encoder, render_target);
+                                        }
 
                                         if draw_data.total_vtx_count > 0 {
                                             let mut rpass = encoder.begin_render_pass(
@@ -1725,6 +2006,20 @@ fn main() {
                                         .send(UiToEmu::Command(EmuCommand::SetPaused(true)));
                                     ui_state.spawn_vram = false;
                                 }
+
+                                if ui_state.spawn_options
+                                    && !windows
+                                        .values()
+                                        .any(|w| matches!(w.kind, WindowKind::Options))
+                                {
+                                    spawn_options_window(
+                                        target,
+                                        &mut platform,
+                                        &mut imgui,
+                                        &mut windows,
+                                    );
+                                    ui_state.spawn_options = false;
+                                }
                             }
                             _ => {}
                         }
@@ -1768,15 +2063,18 @@ fn main() {
                         )));
                     }
 
+                    if let Some(paused) = ui_state.pending_pause.take() {
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(paused)));
+                    }
+
                     if let Some(action) = ui_state.pending_action.take() {
                         let _ = to_emu_tx.send(UiToEmu::Action(action));
                         ui_state.paused = false;
-                        ui_state.show_context = false;
                         let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(false)));
                         got_frame = true;
                     }
 
-                    if got_frame || ui_state.show_context {
+                    if got_frame {
                         for win in windows.values() {
                             win.win.request_redraw();
                         }

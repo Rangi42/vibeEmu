@@ -52,10 +52,9 @@ This file lists problems and improvement opportunities observed in the current d
   - **Problem:** Depending on event cadence, frames may sit queued until the next `AboutToWait`.
   - **Improve:** Trigger a redraw immediately when a frame is received (via `EventLoopProxy` + custom user event), or switch to a channel integration approach that wakes the loop.
 
-- **P1: Converting `u32` pixels to RGBA bytes each redraw.**
-  - **Where:** `crates/vibe-emu-ui/src/main.rs` → `draw_game_screen()`.
-  - **Problem:** It’s small (160×144) but still pure CPU work every frame.
-  - **Improve:** Consider storing the framebuffer in RGBA8888 already, or use a faster conversion path (SIMD / bytemuck if representation matches).
+- ✅ **P1 COMPLETE:** Avoid per-redraw `u32`→RGBA conversion.
+  - **Where:** `crates/vibe-emu-ui/src/main.rs` → emulator thread pre-converts to RGBA layout; `draw_game_screen()` does a fast copy.
+  - **Fix:** Convert 0x00RRGGBB → a `u32` byte layout matching Pixels RGBA8, then `bytemuck::cast_slice` + `copy_from_slice`.
 
 - ✅ **P1 COMPLETE:** VRAM viewer rebuilds textures frequently; tab switching can cause redundant work.
   - **Where:** `crates/vibe-emu-ui/src/ui/vram_viewer.rs`.
@@ -65,18 +64,17 @@ This file lists problems and improvement opportunities observed in the current d
 
 ## P1 — UX / Interaction
 
-- **P1: Discoverability is low (critical actions hidden behind right-click).**
-  - **Where:** `crates/vibe-emu-ui/src/main.rs` → `build_ui()` context menu.
-  - **Problem:** Loading ROM/reset/debugger/VRAM viewer are only accessible via right-click pause menu.
-  - **Improve:** Provide a simple always-available menu bar (ImGui main menu) or a small overlay button/shortcut to open the menu.
+- ✅ **P1 COMPLETE:** Add always-visible menu bar for critical actions.
+  - **Where:** `crates/vibe-emu-ui/src/main.rs` → `build_ui()`.
+  - **Fix:** ImGui main menu bar exposes Load/Reset/Pause/Tools without needing right-click.
 
-- **P1: Pause/menu behavior is surprising (right-click pauses; left-click unpauses).**
-  - **Where:** `WindowEvent::MouseInput` handlers.
-  - **Improve:** Separate “open menu” from “pause” semantics, and make the behavior consistent even when already paused.
+- ✅ **P1 COMPLETE:** Make pause/menu behavior consistent.
+  - **Where:** `crates/vibe-emu-ui/src/main.rs` → `WindowEvent::MouseInput` handlers.
+  - **Fix:** Right-click opens the context menu without pausing; left-click closes the menu without implicitly resuming.
 
-- **P1: No configurable key bindings; limited input device support.**
-  - **Where:** `WindowEvent::KeyboardInput` mapping.
-  - **Improve:** Add a basic keybind config (file/env) and optionally gamepad support via winit/gamepad crate.
+- ✅ **P1 COMPLETE:** Add basic configurable key bindings.
+  - **Where:** `crates/vibe-emu-ui/src/main.rs` + `crates/vibe-emu-ui/src/keybinds.rs`.
+  - **Fix:** Supports `--keybinds <path>` or `VIBEEMU_KEYBINDS` to remap joypad + pause/fast-forward/quit.
 
 ---
 
