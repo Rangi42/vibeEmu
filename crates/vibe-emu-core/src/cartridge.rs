@@ -8,6 +8,7 @@ use std::{
 pub enum MbcType {
     NoMbc,
     Mbc1,
+    Mbc2,
     Mbc3,
     Mbc30,
     Mbc5,
@@ -36,6 +37,10 @@ enum MbcState {
         mode: u8,
         ram_enable: bool,
         multicart: bool,
+    },
+    Mbc2 {
+        rom_bank: u8,
+        ram_enable: bool,
     },
     Mbc3 {
         rom_bank: u8,
@@ -377,6 +382,10 @@ impl Cartridge {
                 ram_enable: false,
                 multicart: detect_mbc1_multicart(&data),
             },
+            MbcType::Mbc2 => MbcState::Mbc2 {
+                rom_bank: 1,
+                ram_enable: false,
+            },
             MbcType::Mbc3 => MbcState::Mbc3 {
                 rom_bank: 1,
                 ram_bank: 0,
@@ -417,6 +426,21 @@ impl Cartridge {
         match (&mut self.mbc_state, addr) {
             (MbcState::NoMbc, 0x0000..=0x7FFF) => {
                 self.rom.get(addr as usize).copied().unwrap_or(0xFF)
+            }
+            (MbcState::Mbc2 { .. }, 0x0000..=0x3FFF) => {
+                self.rom.get(addr as usize).copied().unwrap_or(0xFF)
+            }
+            (MbcState::Mbc2 { rom_bank, .. }, 0x4000..=0x7FFF) => {
+                let mut bank = (*rom_bank & 0x0F) as usize;
+                if bank == 0 {
+                    bank = 1;
+                }
+                bank %= rom_bank_count;
+                if bank == 0 && rom_bank_count > 1 {
+                    bank = 1;
+                }
+                let offset = bank * 0x4000 + (addr as usize - 0x4000);
+                self.rom.get(offset).copied().unwrap_or(0xFF)
             }
             (
                 MbcState::Mbc1 {
@@ -485,6 +509,16 @@ impl Cartridge {
             (MbcState::NoMbc, 0xA000..=0xBFFF) => {
                 let idx = self.ram_index(addr);
                 self.ram.get(idx).copied().unwrap_or(0xFF)
+            }
+            (MbcState::Mbc2 { ram_enable, .. }, 0xA000..=0xBFFF) => {
+                if !*ram_enable {
+                    0xFF
+                } else {
+                    // MBC2 has 512x4-bit internal RAM, mirrored across 0xA000-0xBFFF.
+                    let idx = (addr as usize - 0xA000) & 0x01FF;
+                    let nibble = self.ram.get(idx).copied().unwrap_or(0x0F) & 0x0F;
+                    0xF0 | nibble
+                }
             }
             (MbcState::Mbc1 { ram_enable, .. }, 0xA000..=0xBFFF) => {
                 if !*ram_enable {
@@ -562,6 +596,33 @@ impl Cartridge {
                 let idx = addr as usize - 0xA000;
                 if let Some(b) = self.ram.get_mut(idx) {
                     *b = val;
+                }
+            }
+            (
+                MbcState::Mbc2 {
+                    rom_bank,
+                    ram_enable,
+                },
+                0x0000..=0x3FFF,
+            ) => {
+                // MBC2 RAMG is selected when address bit 8 is 0.
+                // ROM bank select (ROMB) is selected when bit 8 is 1, but only in the
+                // 0x2000-0x3FFF range (Mooneye uses ROMB=$2100).
+                if (addr & 0x0100) == 0 {
+                    *ram_enable = val & 0x0F == 0x0A;
+                } else if (0x2000..=0x3FFF).contains(&addr) {
+                    *rom_bank = val & 0x0F;
+                    if *rom_bank == 0 {
+                        *rom_bank = 1;
+                    }
+                }
+            }
+            (MbcState::Mbc2 { ram_enable, .. }, 0xA000..=0xBFFF) => {
+                if *ram_enable {
+                    let idx = (addr as usize - 0xA000) & 0x01FF;
+                    if let Some(b) = self.ram.get_mut(idx) {
+                        *b = val & 0x0F;
+                    }
                 }
             }
             (MbcState::Mbc1 { ram_enable, .. }, 0x0000..=0x1FFF) => {
@@ -745,6 +806,7 @@ impl Cartridge {
         };
         match &self.mbc_state {
             MbcState::NoMbc => addr as usize - 0xA000,
+            MbcState::Mbc2 { .. } => (addr as usize - 0xA000) & 0x01FF,
             MbcState::Mbc1 { ram_bank, mode, .. } => {
                 if *mode == 0 {
                     addr as usize - 0xA000
@@ -864,6 +926,7 @@ impl<'a> Header<'a> {
         match cart {
             0x00 => MbcType::NoMbc,
             0x01..=0x03 => MbcType::Mbc1,
+            0x05 | 0x06 => MbcType::Mbc2,
             0x0F..=0x13 => {
                 if ram_code == 0x05 {
                     MbcType::Mbc30
@@ -891,6 +954,12 @@ impl<'a> Header<'a> {
         if self.data.len() < 0x150 {
             return 0x2000;
         }
+
+        // MBC2 has 512x4-bit internal RAM regardless of header RAM size.
+        if matches!(self.cart_type(), 0x05 | 0x06) {
+            return 0x200;
+        }
+
         match self.data.get(0x0149).copied().unwrap_or(0) {
             0x00 => 0,
             0x01 => 0x800,   // 2KB
