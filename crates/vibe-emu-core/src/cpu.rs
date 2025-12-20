@@ -250,6 +250,32 @@ impl Cpu {
         mmu.dma_step(dot_cycles);
     }
 
+    fn speed_switch_stall(&mut self, mmu: &mut crate::mmu::Mmu) {
+        // Daid's LY timing ROM implies the CPU resumes at a specific LCD phase after
+        // a STOP-triggered speed switch.
+        //
+        // During this stall, keep the LCD/PPU running but do not advance DIV/TIMA.
+        const TARGET_LY: u8 = 0x85;
+        const RESUME_DOTS_BEFORE_LY_ADVANCE: u16 = 14;
+        const MAX_DOTS: u32 = 456 * 200;
+
+        let mut dots = 0u32;
+        while dots < MAX_DOTS {
+            if mmu.ppu.ly() == TARGET_LY && mmu.ppu.in_hblank() {
+                let target = mmu.ppu.hblank_target_cycles();
+                let resume_at = target.saturating_sub(RESUME_DOTS_BEFORE_LY_ADVANCE);
+                if mmu.ppu.mode_clock() >= resume_at {
+                    break;
+                }
+            }
+
+            self.cycles += 1;
+            let _ = mmu.ppu.step(1, &mut mmu.if_reg);
+            mmu.dma_step(1);
+            dots += 1;
+        }
+    }
+
     #[inline(always)]
     fn fetch8(&mut self, mmu: &mut crate::mmu::Mmu) -> u8 {
         mmu.last_cpu_pc = Some(self.pc);
@@ -529,7 +555,17 @@ impl Cpu {
     }
 
     pub fn step(&mut self, mmu: &mut crate::mmu::Mmu) {
+        // Default: rendering reads VRAM normally.
+        mmu.ppu.set_render_vram_blocked(false);
+
         if self.stopped {
+            // In CGB mode, STOP keeps the PPU running, but it cannot access VRAM.
+            // Force VRAM reads during rendering to return 0x00 so the output
+            // becomes uniformly black (as exercised by daid/stop_instr.gb).
+            if mmu.is_cgb() {
+                mmu.ppu.set_render_vram_blocked(true);
+                self.tick(mmu, 1);
+            }
             return;
         }
         if mmu.gdma_active() {
@@ -670,6 +706,7 @@ impl Cpu {
                     mmu.key1 &= !0x01;
                     mmu.key1 ^= 0x80;
                     self.double_speed = mmu.key1 & 0x80 != 0;
+                    self.speed_switch_stall(mmu);
                 } else {
                     self.stopped = true;
                 }

@@ -101,6 +101,10 @@ pub struct Mmu {
 }
 
 impl Mmu {
+    pub fn is_cgb(&self) -> bool {
+        self.cgb_mode
+    }
+
     pub fn new_with_mode(cgb: bool) -> Self {
         Self::new_with_revisions(cgb, DmgRevision::default(), CgbRevision::default())
     }
@@ -927,12 +931,12 @@ impl Mmu {
             4 * m_cycles as u16
         };
 
-        // CPU clock cycles: always 4 cycles per M-cycle regardless of CGB speed.
-        let cpu_cycles = 4u16.saturating_mul(m_cycles as u16);
-
         let prev_dot_div = self.dot_div;
         self.dot_div = self.dot_div.wrapping_add(dot_cycles);
         let curr_dot_div = self.dot_div;
+
+        // CPU clock cycles: always 4 cycles per M-cycle regardless of CGB speed.
+        let cpu_cycles = 4u16.saturating_mul(m_cycles as u16);
 
         self.timer.step(cpu_cycles, &mut self.if_reg);
         // Advance 2 MHz domain before 1 MHz staging to match APU internal ordering

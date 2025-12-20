@@ -19,21 +19,125 @@ static INIT: OnceCell<()> = OnceCell::new();
 fn ensure_test_roms() {
     INIT.get_or_init(|| {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_roms");
-        if dir.exists() {
-            return;
-        }
         fs::create_dir_all(&dir).expect("failed to create test_roms directory");
-        let url = "https://github.com/c-sp/game-boy-test-roms/releases/download/v7.0/game-boy-test-roms-v7.0.zip";
-        let resp = reqwest::blocking::get(url).expect("failed to download test roms");
-        let status = resp.status();
-        if !status.is_success() {
-            panic!("failed to download test roms: {status}");
-        }
-        let bytes = resp.bytes().expect("failed to read rom bytes");
-        let reader = std::io::Cursor::new(bytes);
-        let mut archive = zip::ZipArchive::new(reader).expect("failed to open zip archive");
-        archive.extract(&dir).expect("failed to extract test roms");
+
+        ensure_c_sp_test_rom_bundle(&dir);
+        ensure_daid_test_roms(&dir);
     });
+}
+
+fn ensure_c_sp_test_rom_bundle(dir: &Path) {
+    // The repository intentionally does not check in ROM binaries; CI/dev machines
+    // download a known bundle on-demand.
+    // If the directory already contains extracted content, don't re-download.
+    let has_core_tree = dir.join("blargg").exists()
+        && dir.join("mooneye-test-suite").exists()
+        && dir.join("gambatte").exists();
+    if has_core_tree {
+        return;
+    }
+
+    let url = "https://github.com/c-sp/game-boy-test-roms/releases/download/v7.0/game-boy-test-roms-v7.0.zip";
+    let resp = reqwest::blocking::get(url).expect("failed to download test roms");
+    let status = resp.status();
+    if !status.is_success() {
+        panic!("failed to download test roms: {status}");
+    }
+    let bytes = resp.bytes().expect("failed to read rom bytes");
+    let reader = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(reader).expect("failed to open zip archive");
+    archive.extract(dir).expect("failed to extract test roms");
+}
+
+fn download_file(url: &str, dest: &Path) {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).expect("failed to create destination directory");
+    }
+
+    let resp = reqwest::blocking::get(url).expect("failed to download file");
+    let status = resp.status();
+    if !status.is_success() {
+        panic!("failed to download {url}: {status}");
+    }
+
+    let bytes = resp.bytes().expect("failed to read response body");
+    let tmp = dest.with_extension("tmp");
+    fs::write(&tmp, &bytes).expect("failed to write temporary file");
+    fs::rename(&tmp, dest).unwrap_or_else(|_| {
+        // On Windows rename can fail if the destination already exists.
+        let _ = fs::remove_file(dest);
+        fs::rename(&tmp, dest).expect("failed to move downloaded file into place")
+    });
+}
+
+fn ensure_daid_test_roms(dir: &Path) {
+    // Daid's ROMs are hosted in the GBEmulatorShootout repo and aren't included
+    // in the c-sp bundle we download above.
+    //
+    // Keep these downloaded ROMs under test_roms/daid/ so they don't collide with
+    // other suites.
+    let base = dir.join("daid");
+
+    let rom_path = base.join("speed_switch_timing_div.gbc");
+    let png_path = base.join("speed_switch_timing_div.png");
+
+    if !rom_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/daid/GBEmulatorShootout/main/testroms/daid/speed_switch_timing_div.gbc",
+            &rom_path,
+        );
+    }
+    if !png_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/daid/GBEmulatorShootout/main/testroms/daid/speed_switch_timing_div.png",
+            &png_path,
+        );
+    }
+
+    let ly_rom_path = base.join("speed_switch_timing_ly.gbc");
+    if !ly_rom_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/daid/GBEmulatorShootout/main/testroms/daid/speed_switch_timing_ly.gbc",
+            &ly_rom_path,
+        );
+    }
+
+    let stat_rom_path = base.join("speed_switch_timing_stat.gbc");
+    let stat_png_path = base.join("speed_switch_timing_stat.png");
+    if !stat_rom_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/daid/GBEmulatorShootout/main/testroms/daid/speed_switch_timing_stat.gbc",
+            &stat_rom_path,
+        );
+    }
+    if !stat_png_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/daid/GBEmulatorShootout/main/testroms/daid/speed_switch_timing_stat.png",
+            &stat_png_path,
+        );
+    }
+
+    let stop_rom_path = base.join("stop_instr.gb");
+    let stop_dmg_png_path = base.join("stop_instr.dmg.png");
+    let stop_cgb_png_path = base.join("stop_instr.gbc.png");
+    if !stop_rom_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/daid/GBEmulatorShootout/main/testroms/daid/stop_instr.gb",
+            &stop_rom_path,
+        );
+    }
+    if !stop_dmg_png_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/daid/GBEmulatorShootout/main/testroms/daid/stop_instr.dmg.png",
+            &stop_dmg_png_path,
+        );
+    }
+    if !stop_cgb_png_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/daid/GBEmulatorShootout/main/testroms/daid/stop_instr.gbc.png",
+            &stop_cgb_png_path,
+        );
+    }
 }
 
 pub fn roms_dir() -> PathBuf {

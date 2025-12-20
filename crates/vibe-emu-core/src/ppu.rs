@@ -111,6 +111,8 @@ pub struct Ppu {
     pub vram_bank: usize,
     pub oam: [u8; OAM_SIZE],
 
+    render_vram_blocked: bool,
+
     cgb: bool,
     /// True when running a DMG cartridge on CGB hardware (DMG compatibility mode).
     dmg_compat: bool,
@@ -141,6 +143,8 @@ pub struct Ppu {
 
     mode_clock: u16,
     pub mode: u8,
+    stat_mode: u8,
+    stat_mode_delay: u8,
     mode3_target_cycles: u16,
     mode0_target_cycles: u16,
     boot_hold_cycles: u16,
@@ -203,6 +207,8 @@ impl Ppu {
             vram: [[0; VRAM_BANK_SIZE]; 2],
             vram_bank: 0,
             oam: [0; OAM_SIZE],
+
+            render_vram_blocked: false,
             cgb,
             dmg_compat: false,
             lcdc: 0,
@@ -226,6 +232,8 @@ impl Ppu {
             opri: 0,
             mode_clock: 0,
             mode: MODE_OAM,
+            stat_mode: MODE_OAM,
+            stat_mode_delay: 0,
             mode3_target_cycles: MODE3_CYCLES,
             mode0_target_cycles: MODE0_CYCLES,
             boot_hold_cycles: 0,
@@ -250,6 +258,53 @@ impl Ppu {
             debug_lcd_enable_timer: None,
             #[cfg(feature = "ppu-trace")]
             debug_prev_mode: MODE_OAM,
+        }
+    }
+
+    fn set_mode(&mut self, new_mode: u8) {
+        let old_mode = self.mode;
+        self.mode = new_mode;
+
+        // In CGB mode, the STAT mode bits can lag very slightly behind the
+        // internal mode transition at the end of HBlank. Daid's
+        // speed_switch_timing_stat test expects this behavior.
+        if self.cgb && !self.dmg_compat {
+            // CGB STAT mode bits can lag very slightly behind internal mode
+            // transitions (as exercised by Daid's speed_switch_timing_stat).
+            if old_mode == MODE_HBLANK && new_mode == MODE_OAM {
+                self.stat_mode = MODE_HBLANK;
+                self.stat_mode_delay = 1;
+                return;
+            }
+            if old_mode == MODE_OAM && new_mode == MODE_TRANSFER {
+                self.stat_mode = MODE_OAM;
+                self.stat_mode_delay = 1;
+                return;
+            }
+        }
+
+        self.stat_mode = new_mode;
+        self.stat_mode_delay = 0;
+    }
+
+    fn tick_stat_mode_delay(&mut self) {
+        if self.stat_mode_delay > 0 {
+            self.stat_mode_delay -= 1;
+            if self.stat_mode_delay == 0 {
+                self.stat_mode = self.mode;
+            }
+        }
+    }
+
+    pub fn set_render_vram_blocked(&mut self, blocked: bool) {
+        self.render_vram_blocked = blocked;
+    }
+
+    fn vram_read_for_render(&self, bank: usize, addr: usize) -> u8 {
+        if self.render_vram_blocked {
+            0
+        } else {
+            self.vram[bank][addr]
         }
     }
 
@@ -647,7 +702,7 @@ impl Ppu {
         self.dmg_startup_cycle = None;
         self.dmg_startup_stage = None;
         self.dmg_post_startup_line2 = false;
-        self.mode = MODE_OAM;
+        self.set_mode(MODE_OAM);
         self.mode_clock = 0;
         self.ly = 0;
         self.update_lyc_compare();
@@ -664,6 +719,18 @@ impl Ppu {
 
     pub fn in_hblank(&self) -> bool {
         self.mode == MODE_HBLANK
+    }
+
+    pub fn ly(&self) -> u8 {
+        self.ly
+    }
+
+    pub fn mode_clock(&self) -> u16 {
+        self.mode_clock
+    }
+
+    pub fn hblank_target_cycles(&self) -> u16 {
+        self.mode0_target_cycles
     }
 
     pub fn lcd_enabled(&self) -> bool {
@@ -688,19 +755,19 @@ impl Ppu {
 
         if self.cgb {
             self.stat = 0x85;
-            self.mode = MODE_VBLANK;
+            self.set_mode(MODE_VBLANK);
             self.ly = 0;
             self.boot_hold_cycles = 0;
         } else {
             self.stat = 0x00;
             match dmg_revision.unwrap_or_default() {
                 DmgRevision::Rev0 => {
-                    self.mode = MODE_TRANSFER;
+                    self.set_mode(MODE_TRANSFER);
                     self.ly = 0x01;
                     self.boot_hold_cycles = BOOT_HOLD_CYCLES_DMG0;
                 }
                 DmgRevision::RevA | DmgRevision::RevB | DmgRevision::RevC => {
-                    self.mode = MODE_HBLANK;
+                    self.set_mode(MODE_HBLANK);
                     self.ly = 0x0A;
                     self.boot_hold_cycles = BOOT_HOLD_CYCLES_DMGA;
                 }
@@ -1419,7 +1486,7 @@ impl Ppu {
             0xFF41 => {
                 (self.stat & 0x78)
                     | 0x80
-                    | (self.mode & 0x03)
+                    | (self.stat_mode & 0x03)
                     | if self.lyc_eq_ly { 0x04 } else { 0 }
             }
             0xFF42 => self.scy,
@@ -1515,7 +1582,7 @@ impl Ppu {
                 let was_on = self.lcdc & 0x80 != 0;
                 self.lcdc = val;
                 if was_on && self.lcdc & 0x80 == 0 {
-                    self.mode = MODE_HBLANK;
+                    self.set_mode(MODE_HBLANK);
                     self.mode_clock = 0;
                     self.mode3_target_cycles = MODE3_CYCLES;
                     self.mode0_target_cycles = MODE0_CYCLES;
@@ -1546,7 +1613,7 @@ impl Ppu {
                         self.dmg_startup_cycle = Some(0);
                         self.dmg_startup_stage = Some(0);
                         self.dmg_post_startup_line2 = false;
-                        self.mode = MODE_HBLANK;
+                        self.set_mode(MODE_HBLANK);
                         self.mode_clock = 0;
                         self.mode3_target_cycles = MODE3_CYCLES;
                         self.mode0_target_cycles = MODE0_CYCLES;
@@ -1698,7 +1765,8 @@ impl Ppu {
                 let tile_row = (((self.ly as u16 + self.scy as u16) & 0xFF) / 8) as usize;
                 let mut tile_y = (((self.ly as u16 + self.scy as u16) & 0xFF) % 8) as usize;
 
-                let tile_index = self.vram[0][tile_map_base + tile_row * 32 + tile_col];
+                let tile_index =
+                    self.vram_read_for_render(0, tile_map_base + tile_row * 32 + tile_col);
                 let addr = if self.lcdc & 0x10 != 0 {
                     tile_data_base + tile_index as usize * 16
                 } else {
@@ -1709,7 +1777,8 @@ impl Ppu {
                 let mut palette = 0usize;
                 let mut bank = 0usize;
                 if cgb_render {
-                    let attr = self.vram[1][tile_map_base + tile_row * 32 + tile_col];
+                    let attr =
+                        self.vram_read_for_render(1, tile_map_base + tile_row * 32 + tile_col);
                     palette = (attr & 0x07) as usize;
                     bank = if attr & 0x08 != 0 { 1 } else { 0 };
                     if attr & 0x20 != 0 {
@@ -1720,8 +1789,8 @@ impl Ppu {
                     }
                     priority = attr & 0x80 != 0;
                 }
-                let lo = self.vram[bank][addr + tile_y * 2];
-                let hi = self.vram[bank][addr + tile_y * 2 + 1];
+                let lo = self.vram_read_for_render(bank, addr + tile_y * 2);
+                let hi = self.vram_read_for_render(bank, addr + tile_y * 2 + 1);
                 let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
                 let (color, color_idx) = if cgb_render {
                     let off = palette * 8 + color_id as usize * 2;
@@ -1762,7 +1831,8 @@ impl Ppu {
                     let tile_row = window_y / 8;
                     let mut tile_y = window_y % 8;
                     let tile_x = window_x % 8;
-                    let tile_index = self.vram[0][window_map_base + tile_row * 32 + tile_col];
+                    let tile_index =
+                        self.vram_read_for_render(0, window_map_base + tile_row * 32 + tile_col);
                     let addr = if self.lcdc & 0x10 != 0 {
                         tile_data_base + tile_index as usize * 16
                     } else {
@@ -1773,7 +1843,8 @@ impl Ppu {
                     let mut palette = 0usize;
                     let mut bank = 0usize;
                     if cgb_render {
-                        let attr = self.vram[1][window_map_base + tile_row * 32 + tile_col];
+                        let attr = self
+                            .vram_read_for_render(1, window_map_base + tile_row * 32 + tile_col);
                         palette = (attr & 0x07) as usize;
                         bank = if attr & 0x08 != 0 { 1 } else { 0 };
                         if attr & 0x20 != 0 {
@@ -1784,8 +1855,8 @@ impl Ppu {
                         }
                         priority = attr & 0x80 != 0;
                     }
-                    let lo = self.vram[bank][addr + tile_y * 2];
-                    let hi = self.vram[bank][addr + tile_y * 2 + 1];
+                    let lo = self.vram_read_for_render(bank, addr + tile_y * 2);
+                    let hi = self.vram_read_for_render(bank, addr + tile_y * 2 + 1);
                     let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
                     let (color, color_idx) = if cgb_render {
                         let off = palette * 8 + color_id as usize * 2;
@@ -1840,8 +1911,8 @@ impl Ppu {
                     let bit = if s.flags & 0x20 != 0 { px } else { 7 - px };
                     let addr = (tile + ((line_idx as usize) >> 3) as u8) as usize * 16
                         + (line_idx as usize & 7) * 2;
-                    let lo = self.vram[bank][addr];
-                    let hi = self.vram[bank][addr + 1];
+                    let lo = self.vram_read_for_render(bank, addr);
+                    let hi = self.vram_read_for_render(bank, addr + 1);
                     let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
                     if color_id == 0 {
                         continue;
@@ -1906,6 +1977,9 @@ impl Ppu {
             let increment = 1;
             remaining -= 1;
 
+            // Apply STAT mode-bit latency (one tick per dot).
+            self.tick_stat_mode_delay();
+
             #[cfg(feature = "ppu-trace")]
             let mut debug_cycles_after = None;
             #[cfg(feature = "ppu-trace")]
@@ -1917,7 +1991,7 @@ impl Ppu {
             }
 
             if self.lcdc & 0x80 == 0 {
-                self.mode = MODE_HBLANK;
+                self.set_mode(MODE_HBLANK);
                 self.ly = 0;
                 self.mode_clock = 0;
                 self.win_line_counter = 0;
@@ -1961,7 +2035,7 @@ impl Ppu {
                         self.update_lyc_compare();
                         if self.ly == SCREEN_HEIGHT as u8 {
                             self.frame_ready = true;
-                            self.mode = MODE_VBLANK;
+                            self.set_mode(MODE_VBLANK);
                             if !self.cgb {
                                 self.dmg_mode2_vblank_irq_pending = true;
                             }
@@ -1973,7 +2047,7 @@ impl Ppu {
                                 ppu_trace!("entering VBlank at ly={} @{}", self.ly, after);
                             }
                         } else {
-                            self.mode = MODE_OAM;
+                            self.set_mode(MODE_OAM);
                             #[cfg(feature = "ppu-trace")]
                             if let Some(after) = debug_cycles_after
                                 && after <= 512
@@ -1997,7 +2071,7 @@ impl Ppu {
                             self.frame_ready = false;
                             self.win_line_counter = 0;
                             self.frame_counter = self.frame_counter.wrapping_add(1);
-                            self.mode = MODE_OAM;
+                            self.set_mode(MODE_OAM);
                             self.update_lyc_compare();
                         }
                     }
@@ -2006,7 +2080,7 @@ impl Ppu {
                     if self.mode_clock >= MODE2_CYCLES {
                         self.mode_clock -= MODE2_CYCLES;
                         self.oam_scan();
-                        self.mode = MODE_TRANSFER;
+                        self.set_mode(MODE_TRANSFER);
                         self.mode3_target_cycles = self.compute_mode3_cycles_for_line();
                         self.mode0_target_cycles = LINE_CYCLES
                             .saturating_sub(MODE2_CYCLES.saturating_add(self.mode3_target_cycles));
@@ -2034,7 +2108,7 @@ impl Ppu {
                     if self.mode_clock >= target {
                         self.mode_clock -= target;
                         self.render_scanline();
-                        self.mode = MODE_HBLANK;
+                        self.set_mode(MODE_HBLANK);
                         hblank_triggered = true;
                         #[cfg(feature = "ppu-trace")]
                         if let Some(after) = debug_cycles_after
@@ -2141,24 +2215,24 @@ impl Ppu {
 
             match stage {
                 0 => {
-                    self.mode = MODE_HBLANK;
+                    self.set_mode(MODE_HBLANK);
                     self.mode_clock = segment_end - stage_start;
                     if segment_end == stage_end {
-                        self.mode = MODE_TRANSFER;
+                        self.set_mode(MODE_TRANSFER);
                         self.mode_clock = 0;
                     }
                 }
                 1 => {
-                    self.mode = MODE_TRANSFER;
+                    self.set_mode(MODE_TRANSFER);
                     self.mode_clock = segment_end - stage_start;
                     if segment_end == stage_end {
                         self.render_scanline();
-                        self.mode = MODE_HBLANK;
+                        self.set_mode(MODE_HBLANK);
                         self.mode_clock = 0;
                     }
                 }
                 2 => {
-                    self.mode = MODE_HBLANK;
+                    self.set_mode(MODE_HBLANK);
                     self.mode_clock = segment_end - stage_start;
                     if self.ly == 0
                         && prev_cycle < DMG_STAGE2_LY1_TICK
@@ -2171,14 +2245,14 @@ impl Ppu {
                         ppu_trace!("startup ly->1 at {}", DMG_STAGE2_LY1_TICK);
                     }
                     if segment_end == stage_end {
-                        self.mode = MODE_OAM;
+                        self.set_mode(MODE_OAM);
                         self.mode_clock = 0;
                         self.dmg_startup_cycle = Some(segment_end);
                         self.update_lyc_compare();
                     }
                 }
                 3 => {
-                    self.mode = MODE_OAM;
+                    self.set_mode(MODE_OAM);
                     self.mode_clock = segment_end - stage_start;
                     if self.ly == 0
                         && prev_cycle < DMG_STAGE2_LY1_TICK
@@ -2190,21 +2264,21 @@ impl Ppu {
                         ppu_trace!("startup ly->1 at {}", DMG_STAGE2_LY1_TICK);
                     }
                     if segment_end == stage_end {
-                        self.mode = MODE_TRANSFER;
+                        self.set_mode(MODE_TRANSFER);
                         self.mode_clock = 0;
                     }
                 }
                 4 => {
-                    self.mode = MODE_TRANSFER;
+                    self.set_mode(MODE_TRANSFER);
                     self.mode_clock = segment_end - stage_start;
                     if segment_end == stage_end {
                         self.render_scanline();
-                        self.mode = MODE_HBLANK;
+                        self.set_mode(MODE_HBLANK);
                         self.mode_clock = 0;
                     }
                 }
                 5 => {
-                    self.mode = MODE_HBLANK;
+                    self.set_mode(MODE_HBLANK);
                     self.mode_clock = segment_end - stage_start;
                     if self.ly == 1
                         && prev_cycle < DMG_STAGE5_LY2_TICK
@@ -2217,7 +2291,7 @@ impl Ppu {
                         ppu_trace!("startup ly->2 at {}", DMG_STAGE5_LY2_TICK);
                     }
                     if segment_end == stage_end {
-                        self.mode = MODE_OAM;
+                        self.set_mode(MODE_OAM);
                         self.mode_clock = 0;
                         self.dmg_startup_stage = None;
                     }
