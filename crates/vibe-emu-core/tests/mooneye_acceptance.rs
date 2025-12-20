@@ -35,7 +35,7 @@ fn run_mooneye_quit_protocol_with_dmg_revision<P: AsRef<std::path::Path>>(
             }
             if regs == FAIL_SEQ {
                 println!("mooneye quit protocol failed at pc={:04X}", pc);
-                println!("hram: {:?}", &gb.mmu.hram[..16]);
+                println!("hram (first 40 bytes): {:?}", &gb.mmu.hram[..40]);
                 println!("serial output (partial): {:?}", gb.mmu.serial.peek_output());
                 return false;
             }
@@ -54,7 +54,7 @@ fn run_mooneye_quit_protocol_with_dmg_revision<P: AsRef<std::path::Path>>(
         "af={:02X}{:02X} bc={:02X}{:02X} de={:02X}{:02X} hl={:02X}{:02X} sp={:04X}",
         gb.cpu.a, gb.cpu.f, gb.cpu.b, gb.cpu.c, gb.cpu.d, gb.cpu.e, gb.cpu.h, gb.cpu.l, gb.cpu.sp
     );
-    println!("hram: {:?}", &gb.mmu.hram[..16]);
+    println!("hram (first 40 bytes): {:?}", &gb.mmu.hram[..40]);
     println!("serial output: {:?}", gb.mmu.serial.take_output());
     false
 }
@@ -82,7 +82,7 @@ fn run_mooneye_acceptance_with_dmg_revision<P: AsRef<std::path::Path>>(
             }
             if regs == FAIL_SEQ {
                 println!("mooneye quit protocol failed at pc={:04X}", pc);
-                println!("hram: {:?}", &gb.mmu.hram[..16]);
+                println!("hram (first 40 bytes): {:?}", &gb.mmu.hram[..40]);
                 println!("serial output (partial): {:?}", gb.mmu.serial.peek_output());
                 return false;
             }
@@ -99,7 +99,7 @@ fn run_mooneye_acceptance_with_dmg_revision<P: AsRef<std::path::Path>>(
     let success = out.windows(FIB_SEQ.len()).any(|window| window == FIB_SEQ);
     if !success {
         println!("serial output: {:?}", out);
-        println!("hram: {:?}", &gb.mmu.hram[..16]);
+        println!("hram (first 40 bytes): {:?}", &gb.mmu.hram[..40]);
     }
     success
 }

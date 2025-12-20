@@ -104,8 +104,7 @@ const DMG_STAGE2_LY1_TICK: u16 = 452;
 // by machine cycle 226 (904 T-cycles) on the second pass. Transitioning LY at
 // 908 T-cycles satisfies both observations.
 const DMG_STAGE5_LY2_TICK: u16 = 908;
-const DMG_STAGE3_VRAM_BLOCK_TICK: u16 = 532;
-const DMG_POST_STARTUP_LINE2_VRAM_BLOCK_START: u16 = MODE2_CYCLES - 4;
+// (no DMG-specific VRAM block ticks currently modeled here)
 
 pub struct Ppu {
     pub vram: [[u8; VRAM_BANK_SIZE]; 2],
@@ -830,17 +829,34 @@ impl Ppu {
         }
     }
 
+    pub fn oam_read_accessible(&self) -> bool {
+        self.oam_accessible_internal(true)
+    }
+
+    pub fn oam_write_accessible(&self) -> bool {
+        self.oam_accessible_internal(false)
+    }
+
     pub fn oam_accessible(&self) -> bool {
-        if self.mode == MODE_OAM || self.mode == MODE_TRANSFER {
-            #[cfg(feature = "ppu-trace")]
-            if let Some(stage) = self.dmg_startup_stage
-                && stage <= 5
+        // Backwards-compatible helper (historically used for both reads and writes).
+        self.oam_read_accessible()
+    }
+
+    fn oam_accessible_internal(&self, is_read: bool) -> bool {
+        if self.mode == MODE_TRANSFER {
+            return false;
+        }
+
+        if self.mode == MODE_OAM {
+            // DMG LCD-enable quirk (mooneye lcdon_write_timing-GS): during the
+            // final few cycles of the first mode-2 periods after enabling the
+            // PPU, OAM writes can slip through even though reads remain blocked.
+            if !self.cgb
+                && !is_read
+                && self.mode_clock >= MODE2_CYCLES.saturating_sub(4)
+                && (self.dmg_startup_stage == Some(3) || self.dmg_post_startup_line2)
             {
-                ppu_trace!(
-                    "oam blocked by mode stage={} cycle={:?}",
-                    stage,
-                    self.dmg_startup_cycle
-                );
+                return true;
             }
             return false;
         }
@@ -849,23 +865,37 @@ impl Ppu {
         if !self.cgb
             && let Some(stage) = self.dmg_startup_stage
         {
+            // DMG LCD-enable quirk: OAM reads become blocked slightly earlier
+            // than writes around the LY transition ticks (mooneye lcdon_timing-GS
+            // vs lcdon_write_timing-GS).
             allow = match stage {
                 0 => true,
                 1 | 3 | 4 => false,
-                2 => self
-                    .dmg_startup_cycle
-                    .is_none_or(|cycle| cycle < DMG_STAGE2_LY1_TICK),
-                5 => self
-                    .dmg_startup_cycle
-                    .is_some_and(|cycle| cycle < DMG_STAGE5_LY2_TICK),
+                2 => {
+                    if is_read {
+                        self.dmg_startup_cycle
+                            .is_none_or(|cycle| cycle < DMG_STAGE2_LY1_TICK)
+                    } else {
+                        true
+                    }
+                }
+                5 => {
+                    if is_read {
+                        self.dmg_startup_cycle
+                            .is_none_or(|cycle| cycle < DMG_STAGE5_LY2_TICK)
+                    } else {
+                        true
+                    }
+                }
                 _ => true,
             };
             #[cfg(feature = "ppu-trace")]
             if stage <= 5 {
                 ppu_trace!(
-                    "oam stage={} cycle={:?} allow={}",
+                    "oam stage={} cycle={:?} is_read={} allow={}",
                     stage,
                     self.dmg_startup_cycle,
+                    is_read,
                     allow
                 );
             }
@@ -1299,7 +1329,20 @@ impl Ppu {
         }
     }
 
+    pub fn vram_read_accessible(&self) -> bool {
+        self.vram_accessible_internal(true)
+    }
+
+    pub fn vram_write_accessible(&self) -> bool {
+        self.vram_accessible_internal(false)
+    }
+
     pub fn vram_accessible(&self) -> bool {
+        // Backwards-compatible helper (historically used for both reads and writes).
+        self.vram_read_accessible()
+    }
+
+    fn vram_accessible_internal(&self, is_read: bool) -> bool {
         if self.mode == MODE_TRANSFER {
             #[cfg(feature = "ppu-trace")]
             {
@@ -1323,6 +1366,18 @@ impl Ppu {
             return false;
         }
 
+        // DMG LCD-enable quirk (mooneye lcdon_timing-GS): on the first two mode-2
+        // periods after enabling the PPU, VRAM becomes inaccessible a few cycles
+        // before STAT reports the transition to mode 3.
+        if is_read
+            && !self.cgb
+            && self.mode == MODE_OAM
+            && self.mode_clock >= MODE2_CYCLES.saturating_sub(4)
+            && (self.dmg_startup_stage == Some(3) || self.dmg_post_startup_line2)
+        {
+            return false;
+        }
+
         let mut allow = true;
         if !self.cgb
             && let Some(stage) = self.dmg_startup_stage
@@ -1330,9 +1385,7 @@ impl Ppu {
             allow = match stage {
                 0 | 2 => true,
                 1 | 4 => false,
-                3 => self
-                    .dmg_startup_cycle
-                    .is_none_or(|cycle| cycle < DMG_STAGE3_VRAM_BLOCK_TICK),
+                3 => true,
                 5 => true,
                 _ => true,
             };
@@ -1347,24 +1400,10 @@ impl Ppu {
                     allow
                 );
             }
-        } else if !self.cgb
-            && self.dmg_post_startup_line2
-            && self.mode == MODE_OAM
-            && self.mode_clock >= DMG_POST_STARTUP_LINE2_VRAM_BLOCK_START
-        {
-            allow = false;
-            #[cfg(feature = "ppu-trace")]
-            ppu_trace!(
-                "vram post-start block ly={} mode_clock={} allow={}",
-                self.ly,
-                self.mode_clock,
-                allow
-            );
         }
         allow
     }
 
-    #[cfg(feature = "ppu-trace")]
     pub(crate) fn debug_startup_snapshot(&self) -> (Option<usize>, Option<u16>, u8, u16) {
         (
             self.dmg_startup_stage,
