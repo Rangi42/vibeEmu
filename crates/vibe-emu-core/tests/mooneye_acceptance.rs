@@ -72,11 +72,29 @@ fn run_mooneye_acceptance_with_dmg_revision<P: AsRef<std::path::Path>>(
     let mut gb = GameBoy::new_with_revisions(cart.cgb, dmg_revision, CgbRevision::default());
     gb.mmu.load_cart(cart);
     while gb.cpu.cycles < max_cycles {
+        let pc = gb.cpu.pc;
+        let opcode = gb.mmu.read_byte(pc);
+
+        if opcode == 0x40 {
+            let regs = [gb.cpu.b, gb.cpu.c, gb.cpu.d, gb.cpu.e, gb.cpu.h, gb.cpu.l];
+            if regs == FIB_SEQ {
+                return true;
+            }
+            if regs == FAIL_SEQ {
+                println!("mooneye quit protocol failed at pc={:04X}", pc);
+                println!("hram: {:?}", &gb.mmu.hram[..16]);
+                println!("serial output (partial): {:?}", gb.mmu.serial.peek_output());
+                return false;
+            }
+        }
+
         gb.cpu.step(&mut gb.mmu);
+
         if gb.mmu.serial.peek_output().ends_with(&FIB_SEQ) {
             break;
         }
     }
+
     let out = gb.mmu.serial.take_output();
     let success = out.windows(FIB_SEQ.len()).any(|window| window == FIB_SEQ);
     if !success {
