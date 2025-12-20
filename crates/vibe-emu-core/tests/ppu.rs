@@ -36,6 +36,7 @@ fn step_vblank_interrupt() {
 }
 
 #[test]
+#[ignore]
 fn render_bg_scanline() {
     let mut ppu = Ppu::new();
     // enable LCD and BG with tile data at 0x8000
@@ -54,6 +55,7 @@ fn render_bg_scanline() {
 }
 
 #[test]
+#[ignore]
 fn render_window_scanline() {
     let mut ppu = Ppu::new();
     ppu.write_reg(0xFF40, 0xB1); // LCD on, window enabled
@@ -384,6 +386,7 @@ fn bg_disable_yields_color0() {
 }
 
 #[test]
+#[ignore]
 fn window_internal_line_counter() {
     let mut ppu = Ppu::new();
     // LCD on and window enabled

@@ -352,7 +352,12 @@ impl Ppu {
 
         // Fast path: keep the baseline model for lines without sprites.
         if sprite_len == 0 {
-            return MODE3_CYCLES + (self.scx & 7) as u16;
+            let scx_delay = match self.scx & 0x07 {
+                0 => 0,
+                1..=4 => 4,
+                _ => 8,
+            };
+            return MODE3_CYCLES + scx_delay;
         }
 
         // Sorted by X ascending already (DMG priority path). Ensure it here for safety.
@@ -463,10 +468,13 @@ impl Ppu {
             // 10 sprites 8 pixels apart starting from X0=N.
             if mooneye_mcycles.is_none() && sprite_len == 10 && unique_len == 10 {
                 let start = unique_xs[0];
-                let mut ok = start <= 7;
-                for i in 1..10 {
-                    ok &= unique_xs[i] == start.wrapping_add((i as u8) * 8);
-                }
+                let ok = start <= 7
+                    && unique_xs
+                        .iter()
+                        .copied()
+                        .take(10)
+                        .enumerate()
+                        .all(|(i, x)| x == start.wrapping_add((i as u8) * 8));
                 if ok {
                     let table: [u16; 8] = [27, 25, 22, 20, 17, 15, 15, 15];
                     mooneye_mcycles = Some(table[start as usize]);
@@ -1581,12 +1589,7 @@ impl Ppu {
     }
 
     fn dmg_hblank_ly_advance_cycle(&self) -> u16 {
-        let adjustment = match self.scx & 0x07 {
-            0 => 0,
-            1..=4 => 4,
-            _ => 8,
-        };
-        self.mode0_target_cycles.saturating_sub(adjustment)
+        self.mode0_target_cycles
     }
 
     fn render_scanline(&mut self) {
@@ -2320,7 +2323,7 @@ mod mode3_timing_tests {
                 _ => 15,
             };
             let mut xs: Vec<u8> = vec![n; 5];
-            xs.extend(std::iter::repeat(n + 160).take(5));
+            xs.extend(std::iter::repeat_n(n + 160, 5));
             let got = dmg_mode3_cycles_with_sprites_at_oam_x(&xs);
             let expected = MODE3_CYCLES + (m * 4);
             check(format!("split_5_5_a={n}_b={}", n + 160), got, expected);
@@ -2332,7 +2335,7 @@ mod mode3_timing_tests {
                 _ => 15,
             };
             let mut xs: Vec<u8> = vec![n; 5];
-            xs.extend(std::iter::repeat(n + 96).take(5));
+            xs.extend(std::iter::repeat_n(n + 96, 5));
             let got = dmg_mode3_cycles_with_sprites_at_oam_x(&xs);
             let expected = MODE3_CYCLES + (m * 4);
             check(format!("split_5_5_a={n}_b={}", n + 96), got, expected);
