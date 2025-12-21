@@ -36,10 +36,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1654 | 1976 | 0 | 0 | 3630 | 45.6% |
+| ROM Test Suites | 1655 | 1976 | 0 | 0 | 3631 | 45.6% |
 | Integration Tests | 147 | 32 | 0 | 0 | 179 | 82.1% |
 | Unit Tests | 39 | 1 | 0 | 0 | 40 | 97.5% |
-| **Overall** | 1840 | 2009 | 0 | 0 | 3849 | 47.8% |
+| **Overall** | 1841 | 2009 | 0 | 0 | 3850 | 47.8% |
 
 ## Detailed Results
 
@@ -75,7 +75,7 @@ Combined exit code: 101
 | `cpu_instrs_10_bit_ops` | ✅ Pass |
 | `cpu_instrs_11_op_a_hl` | ✅ Pass |
 
-#### daid (5/5 passing, 100.0%)
+#### daid (6/6 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
@@ -83,6 +83,7 @@ Combined exit code: 101
 | `daid_speed_switch_timing_ly` | ✅ Pass |
 | `daid_speed_switch_timing_stat` | ✅ Pass |
 | `daid_stop_instr_cgb` | ✅ Pass |
+| `daid_stop_instr_cgb_mode3` | ✅ Pass |
 | `daid_stop_instr_dmg` | ✅ Pass |
 
 #### dmg_acid2_rom (1/1 passing, 100.0%)

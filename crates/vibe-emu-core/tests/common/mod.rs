@@ -138,6 +138,21 @@ fn ensure_daid_test_roms(dir: &Path) {
             &stop_cgb_png_path,
         );
     }
+
+    let stop_mode3_rom_path = base.join("stop_instr_gbc_mode3.gb");
+    let stop_mode3_png_path = base.join("stop_instr_gbc_mode3.png");
+    if !stop_mode3_rom_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/vulcandth/GBEmulatorShootout/main/testroms/daid/stop_instr_gbc_mode3.gb",
+            &stop_mode3_rom_path,
+        );
+    }
+    if !stop_mode3_png_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/vulcandth/GBEmulatorShootout/main/testroms/daid/stop_instr_gbc_mode3.png",
+            &stop_mode3_png_path,
+        );
+    }
 }
 
 pub fn roms_dir() -> PathBuf {

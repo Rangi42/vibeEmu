@@ -68,6 +68,7 @@ pub struct Cpu {
     pub ime: bool,
     pub halted: bool,
     pub stopped: bool,
+    stop_vram_blocked: bool,
     pub double_speed: bool,
     halt_bug: bool,
     ime_enable_delay: u8,
@@ -105,6 +106,7 @@ impl Cpu {
                 ime: false,
                 halted: false,
                 stopped: false,
+                stop_vram_blocked: false,
                 double_speed: false,
                 halt_bug: false,
                 ime_enable_delay: 0,
@@ -149,6 +151,7 @@ impl Cpu {
                 ime: false,
                 halted: false,
                 stopped: false,
+                stop_vram_blocked: false,
                 double_speed: false,
                 halt_bug: false,
                 ime_enable_delay: 0,
@@ -563,7 +566,7 @@ impl Cpu {
             // Force VRAM reads during rendering to return 0x00 so the output
             // becomes uniformly black (as exercised by daid/stop_instr.gb).
             if mmu.is_cgb() {
-                mmu.ppu.set_render_vram_blocked(true);
+                mmu.ppu.set_render_vram_blocked(self.stop_vram_blocked);
                 self.tick(mmu, 1);
             }
             return;
@@ -708,6 +711,12 @@ impl Cpu {
                     self.double_speed = mmu.key1 & 0x80 != 0;
                     self.speed_switch_stall(mmu);
                 } else {
+                    if mmu.is_cgb() {
+                        // If STOP happens during pixel transfer (mode 3), the PPU is already
+                        // actively fetching from VRAM and the display stays stable.
+                        // Otherwise, treat VRAM as inaccessible while stopped.
+                        self.stop_vram_blocked = mmu.ppu.mode != 3;
+                    }
                     self.stopped = true;
                 }
             }

@@ -156,3 +156,16 @@ fn daid_stop_instr_cgb() {
     run_for_frames(&mut gb, 120);
     assert_framebuffer_matches_png(&gb, "daid/stop_instr.gbc.png");
 }
+
+#[test]
+fn daid_stop_instr_cgb_mode3() {
+    // STOP during mode 3 on CGB should keep the already-displayed frame stable
+    // (the PPU continues running and can access VRAM during mode 3).
+    let mut gb = GameBoy::new_with_mode(true);
+    let rom =
+        std::fs::read(common::rom_path("daid/stop_instr_gbc_mode3.gb")).expect("rom not found");
+    gb.mmu.load_cart(Cartridge::load(rom));
+
+    run_for_frames(&mut gb, 120);
+    assert_framebuffer_matches_png(&gb, "daid/stop_instr_gbc_mode3.png");
+}
