@@ -351,7 +351,6 @@ fn same_suite__apu__channel_1__channel_1_restart_nrx2_glitch_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_stop_div_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_stop_div.gb"),
@@ -517,7 +516,6 @@ fn same_suite__apu__channel_2__channel_2_restart_nrx2_glitch_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_2__channel_2_stop_div_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_2/channel_2_stop_div.gb"),
@@ -686,7 +684,6 @@ fn same_suite__apu__channel_3__channel_3_stop_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_stop_div_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_stop_div.gb"),
