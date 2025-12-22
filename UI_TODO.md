@@ -102,6 +102,6 @@ This file lists problems and improvement opportunities observed in the current d
   - **Where:** `crates/vibe-emu-ui/src/ui/vram_viewer.rs`.
   - **Improve:** Avoid `.unwrap()` and early-return if texture creation fails (or if renderer state resets).
 
-- **P3: Logging and stdout prints are mixed (serial/debug).**
-  - **Where:** serial output paths in both UI and emulator thread.
-  - **Improve:** Route all diagnostics through `log` (or provide a UI console window) to avoid stalling stdout and interleaving output.
+- ✅ **P3 COMPLETE:** Logging and stdout prints are mixed (serial/debug).
+  - **Where:** serial/CPU debug output in `crates/vibe-emu-ui/src/main.rs`, plus core diagnostics in `crates/vibe-emu-core/src/*`.
+  - **Fix:** Route diagnostics through `log` + `env_logger` with a `--log-level` flag; release builds default to `off`.

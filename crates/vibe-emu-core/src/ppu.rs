@@ -16,7 +16,7 @@ fn oam_bug_trace_enabled() -> bool {
 #[cfg(feature = "ppu-trace")]
 macro_rules! ppu_trace {
     ($($arg:tt)*) => {
-        eprintln!("[PPU] {}", format_args!($($arg)*));
+        log::trace!(target: "vibe_emu_core::ppu", "{}", format_args!($($arg)*));
     };
 }
 
@@ -1161,9 +1161,13 @@ impl Ppu {
     pub(crate) fn oam_bug_access(&mut self, addr: u16, access: OamBugAccess) {
         let trace = oam_bug_trace_enabled() && !matches!(access, OamBugAccess::Write);
         if trace {
-            eprintln!(
-                "[OAMBUG] trigger addr={:04X} access={:?} ppu_mode={} mode_clock={}",
-                addr, access, self.mode, self.mode_clock
+            log::trace!(
+                target: "vibe_emu_core::oambug",
+                "trigger addr={:04X} access={:?} ppu_mode={} mode_clock={}",
+                addr,
+                access,
+                self.mode,
+                self.mode_clock
             );
         }
         // Most corruption depends only on the currently scanned OAM row (and
@@ -1171,18 +1175,24 @@ impl Ppu {
         if matches!(access, OamBugAccess::Read | OamBugAccess::Write) {
             let Some(accessed_oam_row) = self.oam_bug_current_accessed_oam_row() else {
                 if trace {
-                    eprintln!("[OAMBUG] -> no accessed_oam_row (ignored)");
+                    log::trace!(target: "vibe_emu_core::oambug", "-> no accessed_oam_row (ignored)");
                 }
                 return;
             };
             if accessed_oam_row < 8 {
                 if trace {
-                    eprintln!("[OAMBUG] -> accessed_oam_row={accessed_oam_row} (<8, ignored)");
+                    log::trace!(
+                        target: "vibe_emu_core::oambug",
+                        "-> accessed_oam_row={accessed_oam_row} (<8, ignored)"
+                    );
                 }
                 return;
             }
             if trace {
-                eprintln!("[OAMBUG] -> accessed_oam_row={accessed_oam_row}");
+                log::trace!(
+                    target: "vibe_emu_core::oambug",
+                    "-> accessed_oam_row={accessed_oam_row}"
+                );
             }
             match access {
                 OamBugAccess::Read => self.oam_bug_trigger_read(accessed_oam_row),
@@ -1194,13 +1204,13 @@ impl Ppu {
 
         let Some(row) = self.oam_bug_current_row() else {
             if trace {
-                eprintln!("[OAMBUG] -> no current_row (ignored)");
+                log::trace!(target: "vibe_emu_core::oambug", "-> no current_row (ignored)");
             }
             return;
         };
         let word_in_row = ((addr & 0x0006) >> 1) as usize;
         if trace {
-            eprintln!("[OAMBUG] -> row={row} word_in_row={word_in_row}");
+            log::trace!(target: "vibe_emu_core::oambug", "-> row={row} word_in_row={word_in_row}");
         }
         match access {
             OamBugAccess::ReadDuringIncDec => {

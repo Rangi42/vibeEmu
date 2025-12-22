@@ -345,7 +345,11 @@ impl Cartridge {
                 if let Ok(bytes) = fs::read(&rtc_path)
                     && !rtc.load_from_bytes(&bytes)
                 {
-                    eprintln!("Failed to parse RTC data from {}", rtc_path.display());
+                    log::warn!(
+                        target: "vibe_emu_core::cartridge",
+                        "Failed to parse RTC data from {}",
+                        rtc_path.display()
+                    );
                 }
                 let now = SystemTime::now();
                 rtc.sync_wall(now);
@@ -353,7 +357,8 @@ impl Cartridge {
             }
         }
 
-        println!(
+        log::info!(
+            target: "vibe_emu_core::cartridge",
             "Loaded ROM: {} (MBC: {:?}, CGB: {})",
             cart.title,
             cart.mbc,

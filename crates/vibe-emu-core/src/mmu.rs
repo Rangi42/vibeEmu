@@ -312,7 +312,7 @@ impl Mmu {
         if let Some(cart) = &mut self.cart
             && let Err(e) = cart.save_ram()
         {
-            eprintln!("Failed to save RAM: {e}");
+            log::warn!(target: "vibe_emu_core::cartridge", "Failed to save RAM: {e}");
         }
     }
 
@@ -366,9 +366,17 @@ impl Mmu {
                             .last_cpu_pc
                             .map(|p| format!("{:04X}", p))
                             .unwrap_or_else(|| "<none>".to_string());
-                        eprintln!(
-                            "[PPU] VRAM read allow addr={:04X} val={:02X} bank={} pc={} stage={:?} cycle={:?} mode={} mode_clock={}\n",
-                            addr, value, self.ppu.vram_bank, pc_str, stage, cycle, mode, mode_clock
+                        log::trace!(
+                            target: "vibe_emu_core::ppu",
+                            "VRAM read allow addr={:04X} val={:02X} bank={} pc={} stage={:?} cycle={:?} mode={} mode_clock={}",
+                            addr,
+                            value,
+                            self.ppu.vram_bank,
+                            pc_str,
+                            stage,
+                            cycle,
+                            mode,
+                            mode_clock
                         );
                     }
                     value
@@ -380,9 +388,16 @@ impl Mmu {
                             .last_cpu_pc
                             .map(|p| format!("{:04X}", p))
                             .unwrap_or_else(|| "<none>".to_string());
-                        eprintln!(
-                            "[PPU] VRAM read blocked addr={:04X} bank={} pc={} stage={:?} cycle={:?} mode={} mode_clock={}",
-                            addr, self.ppu.vram_bank, pc_str, stage, cycle, mode, mode_clock
+                        log::trace!(
+                            target: "vibe_emu_core::ppu",
+                            "VRAM read blocked addr={:04X} bank={} pc={} stage={:?} cycle={:?} mode={} mode_clock={}",
+                            addr,
+                            self.ppu.vram_bank,
+                            pc_str,
+                            stage,
+                            cycle,
+                            mode,
+                            mode_clock
                         );
                     }
                     0xFF
@@ -405,9 +420,18 @@ impl Mmu {
                         let (mode, mode_clock, accessed_row, row) =
                             self.ppu.debug_oam_bug_snapshot();
                         let (stage, cycle, _, _) = self.ppu.debug_startup_snapshot();
-                        eprintln!(
-                            "[OAMBUG] read ok pc={} addr={:04X} val={:02X} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?} dmg_stage={:?} dmg_cycle={:?}",
-                            pc_str, addr, val, mode, mode_clock, accessed_row, row, stage, cycle
+                        log::trace!(
+                            target: "vibe_emu_core::oambug",
+                            "read ok pc={} addr={:04X} val={:02X} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?} dmg_stage={:?} dmg_cycle={:?}",
+                            pc_str,
+                            addr,
+                            val,
+                            mode,
+                            mode_clock,
+                            accessed_row,
+                            row,
+                            stage,
+                            cycle
                         );
                     }
                     val
@@ -425,8 +449,9 @@ impl Mmu {
                             let (mode, mode_clock, accessed_row, row) =
                                 self.ppu.debug_oam_bug_snapshot();
                             let (stage, cycle, _, _) = self.ppu.debug_startup_snapshot();
-                            eprintln!(
-                                "[OAMBUG] read blocked pc={} addr={:04X} access={:?} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?} dmg_stage={:?} dmg_cycle={:?}",
+                            log::trace!(
+                                target: "vibe_emu_core::oambug",
+                                "read blocked pc={} addr={:04X} access={:?} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?} dmg_stage={:?} dmg_cycle={:?}",
                                 pc_str,
                                 addr,
                                 access,
@@ -637,8 +662,9 @@ impl Mmu {
                         .map(|p| format!("{:04X}", p))
                         .unwrap_or_else(|| "<none>".to_string());
                     let (stage, cycle, mode, mode_clock) = self.ppu.debug_startup_snapshot();
-                    eprintln!(
-                        "[PPU] VRAM write pc={} addr={:04X} val={:02X} bank={} allow={} dmg_stage={:?} dmg_cycle={:?} ppu_mode={} mode_clock={}",
+                    log::trace!(
+                        target: "vibe_emu_core::lcdc",
+                        "VRAM write pc={} addr={:04X} val={:02X} bank={} allow={} dmg_stage={:?} dmg_cycle={:?} ppu_mode={} mode_clock={}",
                         pc_str,
                         addr,
                         val,
@@ -660,9 +686,13 @@ impl Mmu {
                             .last_cpu_pc
                             .map(|p| format!("{:04X}", p))
                             .unwrap_or_else(|| "<none>".to_string());
-                        eprintln!(
-                            "[PPU] VRAM write blocked addr={:04X} val={:02X} bank={} pc={}",
-                            addr, val, self.ppu.vram_bank, pc_str
+                        log::trace!(
+                            target: "vibe_emu_core::ppu",
+                            "VRAM write blocked addr={:04X} val={:02X} bank={} pc={}",
+                            addr,
+                            val,
+                            self.ppu.vram_bank,
+                            pc_str
                         );
                     }
                 }
@@ -684,9 +714,17 @@ impl Mmu {
                         .map(|p| format!("{:04X}", p))
                         .unwrap_or_else(|| "<none>".to_string());
                     let (stage, cycle, mode, mode_clock) = self.ppu.debug_startup_snapshot();
-                    eprintln!(
-                        "[PPU] OAM write pc={} addr={:04X} val={:02X} allow={} dmg_stage={:?} dmg_cycle={:?} ppu_mode={} mode_clock={}",
-                        pc_str, addr, val, allow, stage, cycle, mode, mode_clock
+                    log::trace!(
+                        target: "vibe_emu_core::lcdc",
+                        "OAM write pc={} addr={:04X} val={:02X} allow={} dmg_stage={:?} dmg_cycle={:?} ppu_mode={} mode_clock={}",
+                        pc_str,
+                        addr,
+                        val,
+                        allow,
+                        stage,
+                        cycle,
+                        mode,
+                        mode_clock
                     );
                 }
 
@@ -706,8 +744,9 @@ impl Mmu {
                         let (mode, mode_clock, accessed_row, row) =
                             self.ppu.debug_oam_bug_snapshot();
                         let (stage, cycle, _, _) = self.ppu.debug_startup_snapshot();
-                        eprintln!(
-                            "[OAMBUG] write blocked pc={} addr={:04X} val={:02X} access={:?} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?} dmg_stage={:?} dmg_cycle={:?}",
+                        log::trace!(
+                            target: "vibe_emu_core::oambug",
+                            "write blocked pc={} addr={:04X} val={:02X} access={:?} ppu_mode={} mode_clock={} accessed_oam_row={:?} row={:?} dmg_stage={:?} dmg_cycle={:?}",
                             pc_str,
                             addr,
                             val,
@@ -758,7 +797,13 @@ impl Mmu {
                         .map(|p| format!("{:04X}", p))
                         .unwrap_or_else(|| "<none>".to_string());
                     let old = self.ppu.read_reg(0xFF40);
-                    eprintln!("[LCDC] write pc={} old={:02X} new={:02X}", pc_str, old, val);
+                    log::trace!(
+                        target: "vibe_emu_core::lcdc",
+                        "LCDC write pc={} old={:02X} new={:02X}",
+                        pc_str,
+                        old,
+                        val
+                    );
                 }
                 self.ppu.write_reg(addr, val);
                 if lcd_was_on && !self.ppu.lcd_enabled() {
@@ -851,9 +896,12 @@ impl Mmu {
                         .last_cpu_pc
                         .map(|p| format!("{:04X}", p))
                         .unwrap_or_else(|| "<none>".to_string());
-                    eprintln!(
-                        "[DMA] pending OAM DMA scheduled src={:04X} region={} pending_delay=8 pc={}",
-                        src, region, pc_str
+                    log::trace!(
+                        target: "vibe_emu_core::dma",
+                        "pending OAM DMA scheduled src={:04X} region={} pending_delay=8 pc={}",
+                        src,
+                        region,
+                        pc_str
                     );
                 }
             }
@@ -925,9 +973,12 @@ impl Mmu {
                         } else {
                             "OTHER"
                         };
-                        eprintln!(
-                            "[DMA] OAM DMA started src={:04X} region={} dma_cycles={}",
-                            src, region, self.dma_cycles
+                        log::trace!(
+                            target: "vibe_emu_core::dma",
+                            "OAM DMA started src={:04X} region={} dma_cycles={}",
+                            src,
+                            region,
+                            self.dma_cycles
                         );
                     }
                 }

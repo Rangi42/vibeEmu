@@ -33,6 +33,62 @@ use keybinds::KeyBindings;
 pub use scaler::GameScaler;
 use ui::snapshot::UiSnapshot;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum LogLevelArg {
+    Off,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevelArg {
+    fn as_filter_str(self) -> &'static str {
+        match self {
+            LogLevelArg::Off => "off",
+            LogLevelArg::Error => "error",
+            LogLevelArg::Warn => "warn",
+            LogLevelArg::Info => "info",
+            LogLevelArg::Debug => "debug",
+            LogLevelArg::Trace => "trace",
+        }
+    }
+}
+
+fn init_logging(args: &Args) {
+    let default_filter = if let Some(level) = args.log_level {
+        level.as_filter_str()
+    } else if cfg!(debug_assertions) {
+        LogLevelArg::Info.as_filter_str()
+    } else {
+        LogLevelArg::Off.as_filter_str()
+    };
+
+    let mut logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_filter));
+
+    // Reduce noisy GPU backend logs. Users can override via `RUST_LOG`.
+    logger.filter_module("wgpu", log::LevelFilter::Warn);
+    logger.filter_module("wgpu_core", log::LevelFilter::Warn);
+    logger.filter_module("wgpu_hal", log::LevelFilter::Warn);
+    logger.filter_module("naga", log::LevelFilter::Warn);
+    logger.format_timestamp_millis().init();
+}
+
+fn format_serial_bytes(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len());
+    for &b in data {
+        if b.is_ascii_graphic() || b == b' ' {
+            out.push(b as char);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(&mut out, "\\x{b:02X}");
+        }
+    }
+    out
+}
+
 fn load_window_icon() -> Option<Icon> {
     let icon_data = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -232,6 +288,10 @@ struct Args {
     /// Enable debug logging of CPU state and serial output
     #[arg(long)]
     debug: bool,
+
+    /// Logging verbosity (release builds default to `off`)
+    #[arg(long, value_enum)]
+    log_level: Option<LogLevelArg>,
 
     /// Run without opening a window
     #[arg(long)]
@@ -865,7 +925,7 @@ fn run_emulator_thread(
                 if !out.is_empty() {
                     serial = Some(out);
                 }
-                println!("{}", gb.cpu.debug_state());
+                debug!(target: "vibe_emu_ui::cpu", "{}", gb.cpu.debug_state());
             }
         }
 
@@ -1339,19 +1399,10 @@ fn apply_ui_action(
 }
 
 fn main() {
-    let mut logger =
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
-    // Reduce noisy GPU backend logs (especially in release builds). Users can
-    // override these via `RUST_LOG` if they explicitly want them.
-    logger.filter_module("wgpu", log::LevelFilter::Warn);
-    logger.filter_module("wgpu_core", log::LevelFilter::Warn);
-    logger.filter_module("wgpu_hal", log::LevelFilter::Warn);
-    logger.filter_module("naga", log::LevelFilter::Warn);
-    logger.format_timestamp_millis().init();
-
     configure_wgpu_backend();
-
     let args = Args::parse();
+
+    init_logging(&args);
 
     info!("Starting emulator");
 
@@ -1659,15 +1710,11 @@ fn main() {
                         if let EmuEvent::Serial { data, frame_index } = evt
                             && !data.is_empty()
                         {
-                            print!("[SERIAL {frame_index}] ");
-                            for b in &data {
-                                if b.is_ascii_graphic() || *b == b' ' {
-                                    print!("{}", *b as char);
-                                } else {
-                                    print!("\\x{b:02X}");
-                                }
-                            }
-                            println!();
+                            debug!(
+                                target: "vibe_emu_ui::serial",
+                                "[SERIAL {frame_index}] {}",
+                                format_serial_bytes(&data)
+                            );
                         }
                     }
 
@@ -2049,15 +2096,11 @@ fn main() {
                         if let EmuEvent::Serial { data, frame_index } = evt
                             && !data.is_empty()
                         {
-                            print!("[SERIAL {frame_index}] ");
-                            for b in &data {
-                                if b.is_ascii_graphic() || *b == b' ' {
-                                    print!("{}", *b as char);
-                                } else {
-                                    print!("\\x{b:02X}");
-                                }
-                            }
-                            println!();
+                            debug!(
+                                target: "vibe_emu_ui::serial",
+                                "[SERIAL {frame_index}] {}",
+                                format_serial_bytes(&data)
+                            );
                         }
                     }
 
@@ -2122,18 +2165,14 @@ fn main() {
             if debug_enabled && frame_count.is_multiple_of(60) {
                 let serial = gb.mmu.take_serial();
                 if !serial.is_empty() {
-                    print!("[SERIAL] ");
-                    for b in &serial {
-                        if b.is_ascii_graphic() || *b == b' ' {
-                            print!("{}", *b as char);
-                        } else {
-                            print!("\\x{b:02X}");
-                        }
-                    }
-                    println!();
+                    debug!(
+                        target: "vibe_emu_ui::serial",
+                        "[SERIAL] {}",
+                        format_serial_bytes(&serial)
+                    );
                 }
 
-                println!("{}", gb.cpu.debug_state());
+                debug!(target: "vibe_emu_ui::cpu", "{}", gb.cpu.debug_state());
             }
 
             frame_count += 1;

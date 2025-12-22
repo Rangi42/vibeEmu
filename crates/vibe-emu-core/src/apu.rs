@@ -8,7 +8,7 @@ use crate::hardware::{CgbRevision, DmgRevision};
 #[allow(unused_macros)]
 macro_rules! apu_trace {
     ($($arg:tt)*) => {
-        eprintln!("[APU] {}", format_args!($($arg)*));
+        log::trace!(target: "vibe_emu_core::apu", "{}", format_args!($($arg)*));
     };
 }
 

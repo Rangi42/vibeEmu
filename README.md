@@ -87,6 +87,45 @@ Pass `--dmg` to force DMG mode, `--cgb` to force CGB mode, or `--serial` to run 
 
 If no limit is specified the emulator runs until interrupted.
 
+## Logging
+
+In `--release` builds, vibeEmu defaults to **no console log output**. To enable
+logging, pass `--log-level`:
+
+```bash
+cargo run -p vibe-emu-ui --release -- --log-level info path/to/rom.gb
+```
+
+Supported levels:
+
+- `off`: no logs (default in release builds)
+- `error`: fatal errors only
+- `warn`: non-fatal problems (e.g. audio disabled)
+- `info`: high-level lifecycle (ROM load, reset, DMG/CGB mode)
+- `debug`: emulator/UI diagnostics (serial dumps, CPU state snapshots)
+- `trace`: very verbose tracing (PPU/APU traces, DMA, LCDC and OAM bug tracing)
+
+Log targets used by the codebase:
+
+- `vibe_emu_ui::serial`: formatted serial output
+- `vibe_emu_ui::cpu`: periodic CPU state snapshots
+- `vibe_emu_core::cartridge`: ROM/load/save/RTC messages
+- `vibe_emu_core::ppu`, `vibe_emu_core::apu`: subsystem traces
+- `vibe_emu_core::dma`, `vibe_emu_core::lcdc`, `vibe_emu_core::oambug`: deep
+   timing/diagnostic traces
+
+Advanced filtering is still available via `RUST_LOG` (env_logger syntax). For
+example:
+
+```bash
+RUST_LOG=vibe_emu_ui=debug,vibe_emu_core=trace cargo run -p vibe-emu-ui -- --log-level trace path/to/rom.gb
+```
+
+Some traces are additionally gated by environment variables (for example
+`VIBEEMU_TRACE_OAMBUG` and `VIBEEMU_TRACE_LCDC`). These enable generating the
+trace events, but you still need `--log-level trace` (or an equivalent
+`RUST_LOG` filter) to actually see them.
+
 ### Mobile Adapter GB
 
 The desktop UI includes Mobile Adapter GB support (libmobile). You can select
