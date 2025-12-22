@@ -43,6 +43,35 @@ enum LogLevelArg {
     Trace,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum WgpuBackendArg {
+    /// Let wgpu pick the best available backend.
+    Auto,
+    /// Direct3D 12 (Windows).
+    Dx12,
+    /// Direct3D 11 (Windows).
+    Dx11,
+    /// Vulkan.
+    Vulkan,
+    /// Metal (macOS).
+    Metal,
+    /// OpenGL.
+    Gl,
+}
+
+impl WgpuBackendArg {
+    fn as_env_value(self) -> Option<&'static str> {
+        match self {
+            WgpuBackendArg::Auto => None,
+            WgpuBackendArg::Dx12 => Some("dx12"),
+            WgpuBackendArg::Dx11 => Some("dx11"),
+            WgpuBackendArg::Vulkan => Some("vulkan"),
+            WgpuBackendArg::Metal => Some("metal"),
+            WgpuBackendArg::Gl => Some("gl"),
+        }
+    }
+}
+
 impl LogLevelArg {
     fn as_filter_str(self) -> &'static str {
         match self {
@@ -301,6 +330,13 @@ struct Args {
     /// Logging verbosity (release builds default to `off`)
     #[arg(long, value_enum)]
     log_level: Option<LogLevelArg>,
+
+    /// Select wgpu backend.
+    ///
+    /// When omitted, the UI defaults to a stable backend per-platform.
+    /// On Windows this currently prefers D3D12; pass `--wgpu-backend auto` to disable.
+    #[arg(long, value_enum)]
+    wgpu_backend: Option<WgpuBackendArg>,
 
     /// Run without opening a window
     #[arg(long)]
@@ -1287,9 +1323,24 @@ fn draw_options_window(state: &mut UiState, keybinds: &KeyBindings, ui: &imgui::
         });
 }
 
-fn configure_wgpu_backend() {
-    if std::env::var_os("WGPU_BACKEND").is_none() {
-        // Prefer DirectX on Windows to avoid buggy Vulkan/ANGLE present modes.
+fn configure_wgpu_backend(args: &Args) {
+    if let Some(choice) = args.wgpu_backend {
+        if let Some(value) = choice.as_env_value() {
+            // Ensure the backend is configured before wgpu initializes.
+            unsafe {
+                std::env::set_var("WGPU_BACKEND", value);
+            }
+        }
+        return;
+    }
+
+    if std::env::var_os("WGPU_BACKEND").is_some() {
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Prefer DirectX on Windows to avoid Vulkan/ANGLE present-mode quirks on some setups.
         unsafe {
             std::env::set_var("WGPU_BACKEND", "dx12");
         }
@@ -1446,8 +1497,9 @@ fn build_gameboy_for_cart(cart: Option<Cartridge>, load_config: &LoadConfig) -> 
 }
 
 fn main() {
-    configure_wgpu_backend();
     let args = Args::parse();
+
+    configure_wgpu_backend(&args);
 
     init_logging(&args);
 

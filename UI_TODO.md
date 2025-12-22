@@ -81,26 +81,37 @@ This file lists problems and improvement opportunities observed in the current d
 ## P2 — Cross-platform / Compatibility
 
 - **P2: `rfd` is built with `gtk3` feature unconditionally.**
+  - **Still applicable:** Yes (currently `rfd = { default-features = false, features = ["gtk3"] }`).
   - **Where:** `crates/vibe-emu-ui/Cargo.toml`.
-  - **Risk:** This may be unnecessary or problematic depending on platform/toolchain; it’s Linux-oriented.
-  - **Improve:** Gate `rfd` features per-platform (e.g., enable `gtk3` only on Linux) or use `rfd` defaults for each OS.
+  - **Risk:** Pulls Linux/GTK-oriented deps everywhere, increases build complexity, and can become a portability hazard.
+  - **Recommended change:** Make `rfd` backend selection target-specific.
+    - On Linux: explicitly pick `gtk3` (or consider `xdg-portal` if you want better sandbox/Wayland/Flatpak behavior).
+    - On Windows/macOS: use `rfd` defaults (or enable only the platform-appropriate backend).
+    - Implementation sketch: move `rfd` into `[target.'cfg(...)'.dependencies]` blocks instead of one unconditional dependency.
 
-- **P2: Forcing `WGPU_BACKEND=dx12` may break some systems/drivers.**
+- ✅ **P0 COMPLETE:** Avoid forcing an invalid backend cross-platform; add an explicit backend override.
   - **Where:** `crates/vibe-emu-ui/src/main.rs` → `configure_wgpu_backend()`.
-  - **Improve:** Prefer a “best available backend” default; allow override but don’t force unless a known-bad backend is detected.
+  - **Fix:** Users can explicitly override via `--wgpu-backend auto|dx12|dx11|vulkan|metal|gl`.
+    - If omitted: Windows defaults to `dx12` (for stability); other platforms default to auto selection.
 
 ---
 
 ## P3 — Cleanup / Maintenance
 
-- **P3: Debugger/VRAM windows use a 1×1 `Pixels` buffer as a carrier for ImGui.**
+- **P3: Debugger/VRAM/Options windows use a 1×1 `Pixels` buffer as a carrier for ImGui.**
   - **Where:** `spawn_debugger_window()` / `spawn_vram_window()`.
-  - **Problem:** It’s workable but non-obvious and makes resizing logic confusing.
-  - **Improve:** Either render ImGui without a `Pixels` surface for those windows, or use a clear, consistent buffer size and document the intent.
+  - **Still applicable:** Yes (these windows call `Pixels::new(1, 1, ...)`).
+  - **Assessment:** This is a reasonable workaround given the current renderer wiring, but it’s non-obvious.
+  - **Recommended change:** Keep the approach, but make the intent explicit.
+    - Rename the stored size to something like “imgui carrier size” to avoid confusion with window size.
+    - Add a short code comment at the creation site explaining why 1×1 is sufficient.
+    - Optional future refactor: decouple ImGui rendering from `Pixels` for tool windows.
 
 - **P3: TextureId unwraps in VRAM viewer could be made more robust.**
   - **Where:** `crates/vibe-emu-ui/src/ui/vram_viewer.rs`.
-  - **Improve:** Avoid `.unwrap()` and early-return if texture creation fails (or if renderer state resets).
+  - **Still applicable:** Yes (there are `Option<TextureId>` fields with `unwrap()` in update paths).
+  - **Assessment:** These unwraps are currently guarded by preceding `is_none()` checks, so they are unlikely to panic today, but they are fragile to future refactors and harder to reason about.
+  - **Improve:** Avoid `.unwrap()` in draw/update code; use `if let Some(tex_id) = ...` and rebuild/early-return on `None`.
 
 - ✅ **P3 COMPLETE:** Logging and stdout prints are mixed (serial/debug).
   - **Where:** serial/CPU debug output in `crates/vibe-emu-ui/src/main.rs`, plus core diagnostics in `crates/vibe-emu-core/src/*`.
