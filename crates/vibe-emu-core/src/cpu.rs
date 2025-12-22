@@ -81,6 +81,44 @@ impl Cpu {
         Self::new_with_mode_and_revision(false, DmgRevision::default())
     }
 
+    /// Create a CPU initialized to an approximate power-on state suitable for
+    /// executing a boot ROM.
+    ///
+    /// Unlike `new_with_mode*`, which initializes registers to the *post-boot*
+    /// values documented in Pan Docs, this starts from a neutral state and is
+    /// intended to be paired with mapping a boot ROM at 0x0000.
+    pub fn new_power_on_with_revision(_cgb: bool, _dmg_revision: DmgRevision) -> Self {
+        // The exact power-on register contents are not relied upon by most boot
+        // ROMs (they re-initialize early). The critical part for correctness is
+        // that we do NOT start from the post-boot state when executing a boot ROM.
+        Self {
+            a: 0,
+            f: 0,
+            b: 0,
+            c: 0,
+            d: 0,
+            e: 0,
+            h: 0,
+            l: 0,
+            pc: 0x0000,
+            sp: 0x0000,
+            cycles: 0,
+            ime: false,
+            halted: false,
+            stopped: false,
+            stop_vram_blocked: false,
+            double_speed: false,
+            halt_bug: false,
+            ime_enable_delay: 0,
+            halt_pc: None,
+            halt_pending: 0,
+        }
+    }
+
+    pub fn new_power_on(cgb: bool) -> Self {
+        Self::new_power_on_with_revision(cgb, DmgRevision::default())
+    }
+
     /// Create a CPU initialized to the post-boot register state for the
     /// selected hardware mode.
     pub fn new_with_mode(cgb: bool) -> Self {

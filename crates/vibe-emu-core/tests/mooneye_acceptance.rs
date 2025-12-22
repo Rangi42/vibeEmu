@@ -8,6 +8,7 @@ use vibe_emu_core::{
 const FIB_SEQ: [u8; 6] = [3, 5, 8, 13, 21, 34];
 const FAIL_SEQ: [u8; 6] = [0x42; 6];
 
+#[allow(dead_code)]
 fn capture_first_div_reads_cgb_seed(seed_div: u16) -> Vec<u8> {
     let rom = std::fs::read(common::rom_path(
         "mooneye-test-suite/misc/boot_div-cgbABCDE.gb",

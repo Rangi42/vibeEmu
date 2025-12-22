@@ -23,7 +23,22 @@ fn ensure_test_roms() {
 
         ensure_c_sp_test_rom_bundle(&dir);
         ensure_daid_test_roms(&dir);
+        ensure_bullygb_test_roms(&dir);
     });
+}
+
+fn ensure_bullygb_test_roms(dir: &Path) {
+    // BullyGB is hosted separately from the c-sp suite bundle.
+    // Keep it under test_roms/bullygb/ to avoid collisions.
+    let base = dir.join("bullygb");
+    let rom_path = base.join("bullygb-v1.2.gb");
+
+    if !rom_path.exists() {
+        download_file(
+            "https://github.com/Ashiepaws/BullyGB/releases/download/v1.2/bully.gb",
+            &rom_path,
+        );
+    }
 }
 
 fn ensure_c_sp_test_rom_bundle(dir: &Path) {

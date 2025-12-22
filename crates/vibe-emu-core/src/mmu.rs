@@ -185,6 +185,59 @@ impl Mmu {
         }
     }
 
+    /// Create an MMU initialized to an approximate power-on state suitable for
+    /// executing a boot ROM.
+    ///
+    /// This differs from `new_with_revisions`, which intentionally initializes
+    /// the system to a *post-boot* state when running without a boot ROM.
+    pub fn new_power_on_with_revisions(
+        cgb: bool,
+        dmg_revision: DmgRevision,
+        cgb_revision: CgbRevision,
+    ) -> Self {
+        let timer = Timer::new();
+        let dot_div = timer.div;
+
+        let ppu = Ppu::new_with_mode(cgb);
+
+        Self {
+            wram: [[0; WRAM_BANK_SIZE]; 8],
+            wram_bank: 1,
+            hram: [0; 0x7F],
+            cart: None,
+            boot_rom: None,
+            boot_mapped: false,
+            if_reg: 0,
+            ie_reg: 0,
+            serial: Serial::new(cgb, dmg_revision),
+            ppu,
+            apu: Apu::new_with_revisions(cgb, dmg_revision, cgb_revision),
+            timer,
+            dot_div,
+            input: Input::new(),
+            hdma: HdmaState {
+                src: 0,
+                dst: Self::sanitize_vram_dma_dest(0),
+                blocks: 0,
+                mode: DmaMode::Gdma,
+                active: false,
+                cancelled: false,
+            },
+            key1: if cgb { 0x7E } else { 0 },
+            rp: 0,
+            dma_cycles: 0,
+            dma_source: 0,
+            pending_dma: None,
+            pending_delay: 0,
+            gdma_cycles: 0,
+            cgb_mode: cgb,
+            cgb_revision,
+            dmg_revision,
+            oam_bug_next_access: None,
+            last_cpu_pc: None,
+        }
+    }
+
     pub fn new() -> Self {
         Self::new_with_mode(false)
     }

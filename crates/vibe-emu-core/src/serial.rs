@@ -34,6 +34,7 @@ pub struct Serial {
     sb: u8,
     sc: u8,
     pub(crate) out_buf: Vec<u8>,
+    sb_out_buf: Vec<u8>,
     port: Box<dyn LinkPort + Send>,
     transfer: Option<TransferState>,
     cgb_mode: bool,
@@ -88,6 +89,7 @@ impl Serial {
             sb: 0,
             sc: if cgb { 0x7F } else { 0x7E },
             out_buf: Vec::new(),
+            sb_out_buf: Vec::new(),
             port: Box::new(NullLinkPort::default()),
             transfer: None,
             cgb_mode: cgb,
@@ -115,7 +117,14 @@ impl Serial {
 
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
-            0xFF01 => self.sb = val,
+            0xFF01 => {
+                self.sb = val;
+                // Many test ROMs (and some emulator test harnesses) treat writes to SB (rSB)
+                // as a debug output channel even when a full serial transfer is never started.
+                // Keep this separate from `out_buf` (completed transfers) so callers can
+                // choose the appropriate interpretation.
+                self.sb_out_buf.push(val);
+            }
             0xFF02 => {
                 if let Some(state) = self.transfer.as_mut() {
                     // Mid-transfer SC writes:
@@ -254,6 +263,18 @@ impl Serial {
 
     pub fn peek_output(&self) -> &[u8] {
         &self.out_buf
+    }
+
+    /// Take the captured stream of raw writes to SB (rSB / FF01).
+    pub fn take_sb_output(&mut self) -> Vec<u8> {
+        let out = self.sb_out_buf.clone();
+        self.sb_out_buf.clear();
+        out
+    }
+
+    /// Peek the captured stream of raw writes to SB (rSB / FF01).
+    pub fn peek_sb_output(&self) -> &[u8] {
+        &self.sb_out_buf
     }
 
     fn phase_adjust(&self, double_speed: bool, fast_clock: bool) -> u16 {

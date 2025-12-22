@@ -1378,7 +1378,11 @@ fn main() {
     } else {
         cart.cgb
     };
-    let mut gb = GameBoy::new_with_revision(cgb_mode, CgbRevision::default());
+    let mut gb = if args.bootrom.is_some() {
+        GameBoy::new_power_on_with_revision(cgb_mode, CgbRevision::default())
+    } else {
+        GameBoy::new_with_revision(cgb_mode, CgbRevision::default())
+    };
     gb.mmu.load_cart(cart);
     // If user requested a neutral/non-green DMG palette, apply it.
     if !cgb_mode && args.dmg_neutral {
