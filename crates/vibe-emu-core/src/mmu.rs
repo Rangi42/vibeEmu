@@ -33,6 +33,40 @@ fn env_flag_enabled(var: &str) -> bool {
 
 const WRAM_BANK_SIZE: usize = 0x1000;
 
+fn power_on_wram_seed(cgb: bool, dmg_revision: DmgRevision, cgb_revision: CgbRevision) -> u32 {
+    // Uninitialized WRAM contents are effectively random on real hardware.
+    // We keep them deterministic for reproducible tests while ensuring the
+    // contents are not trivially all $00/$FF.
+    let mut seed: u32 = 0xC0DE_1BAD;
+    seed ^= if cgb { 0x4347_4221 } else { 0x444D_4721 };
+    seed ^= (dmg_revision as u32).wrapping_mul(0x9E37_79B9);
+    seed ^= (cgb_revision as u32).wrapping_mul(0x85EB_CA6B);
+    // Avoid the xorshift all-zero lockup state.
+    if seed == 0 { 0xA5A5_5A5A } else { seed }
+}
+
+fn init_power_on_wram(seed: u32) -> [[u8; WRAM_BANK_SIZE]; 8] {
+    let mut wram = [[0u8; WRAM_BANK_SIZE]; 8];
+    let mut state = seed;
+
+    for bank in 0..wram.len() {
+        for byte in &mut wram[bank] {
+            // xorshift32
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let mut v = state as u8;
+            // Ensure we don't accidentally end up with all $00/$FF.
+            if v == 0x00 || v == 0xFF {
+                v ^= 0xA5;
+            }
+            *byte = v;
+        }
+    }
+
+    wram
+}
+
 /// Transfer mode for CGB DMA operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DmaMode {
@@ -210,8 +244,10 @@ impl Mmu {
 
         let ppu = Ppu::new_with_mode(cgb);
 
+        let wram = init_power_on_wram(power_on_wram_seed(cgb, dmg_revision, cgb_revision));
+
         Self {
-            wram: [[0; WRAM_BANK_SIZE]; 8],
+            wram,
             wram_bank: 1,
             hram: [0; 0x7F],
             cart: None,
