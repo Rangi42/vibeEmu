@@ -261,7 +261,7 @@ impl Mmu {
             cart: None,
             boot_rom: None,
             boot_mapped: false,
-            if_reg: 0,
+            if_reg: 0xE1,
             ie_reg: 0,
             serial: Serial::new(cgb, dmg_revision),
             ppu,
@@ -460,7 +460,8 @@ impl Mmu {
             0xFF00 => self.input.read(),
             0xFF01 | 0xFF02 => self.serial.read(addr),
             0xFF04..=0xFF07 => self.timer.read(addr),
-            0xFF0F => self.if_reg,
+            // IF: upper 3 bits are unused and read back as 1 on hardware.
+            0xFF0F => self.if_reg | 0xE0,
             0xFF10..=0xFF3F => self.apu.read_reg(addr),
             0xFF40..=0xFF45 | 0xFF47..=0xFF4B | 0xFF68..=0xFF6B => self.ppu.read_reg(addr),
             0xFF46 => self.ppu.dma,
@@ -746,7 +747,8 @@ impl Mmu {
                 self.reset_div();
             }
             0xFF05..=0xFF07 => self.timer.write(addr, val, &mut self.if_reg),
-            0xFF0F => self.if_reg = (val & 0x1F) | (self.if_reg & 0xE0),
+            // IF: only bits 0-4 are writable; bits 5-7 remain set.
+            0xFF0F => self.if_reg = (val & 0x1F) | 0xE0,
             0xFF10..=0xFF3F => self.apu.write_reg(addr, val),
             0xFF40 => {
                 let lcd_was_on = self.ppu.lcd_enabled();

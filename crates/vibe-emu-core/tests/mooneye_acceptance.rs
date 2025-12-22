@@ -93,6 +93,56 @@ fn run_mooneye_quit_protocol_with_dmg_revision<P: AsRef<std::path::Path>>(
     println!("serial output: {:?}", gb.mmu.serial.take_output());
     false
 }
+
+fn run_mooneye_acceptance_with_bootrom<P: AsRef<std::path::Path>>(
+    rom_path: P,
+    max_cycles: u64,
+    dmg_revision: DmgRevision,
+) -> bool {
+    let rom = std::fs::read(&rom_path).expect("rom not found");
+    let cart = Cartridge::load(rom);
+    assert!(!cart.cgb, "expected DMG ROM");
+
+    let boot = std::fs::read(common::dmg_boot_rom_path()).expect("boot ROM not found");
+
+    let mut gb = GameBoy::new_power_on_with_revisions(false, dmg_revision, CgbRevision::default());
+    gb.mmu.load_boot_rom(boot);
+    gb.mmu.load_cart(cart);
+
+    while gb.cpu.cycles < max_cycles {
+        let pc = gb.cpu.pc;
+        let opcode = gb.mmu.read_byte(pc);
+
+        if opcode == 0x40 {
+            let regs = [gb.cpu.b, gb.cpu.c, gb.cpu.d, gb.cpu.e, gb.cpu.h, gb.cpu.l];
+            if regs == FIB_SEQ {
+                return true;
+            }
+            if regs == FAIL_SEQ {
+                println!("mooneye quit protocol failed at pc={:04X}", pc);
+                println!("hram (first 40 bytes): {:?}", &gb.mmu.hram[..40]);
+                println!("serial output (partial): {:?}", gb.mmu.serial.peek_output());
+                return false;
+            }
+        }
+
+        gb.cpu.step(&mut gb.mmu);
+    }
+
+    println!("mooneye quit protocol: timeout");
+    println!(
+        "pc={:04X} opcode={:02X}",
+        gb.cpu.pc,
+        gb.mmu.read_byte(gb.cpu.pc)
+    );
+    println!(
+        "af={:02X}{:02X} bc={:02X}{:02X} de={:02X}{:02X} hl={:02X}{:02X} sp={:04X}",
+        gb.cpu.a, gb.cpu.f, gb.cpu.b, gb.cpu.c, gb.cpu.d, gb.cpu.e, gb.cpu.h, gb.cpu.l, gb.cpu.sp
+    );
+    println!("hram (first 40 bytes): {:?}", &gb.mmu.hram[..40]);
+    println!("serial output: {:?}", gb.mmu.serial.take_output());
+    false
+}
 fn run_mooneye_acceptance<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bool {
     run_mooneye_acceptance_with_dmg_revision(rom_path, max_cycles, DmgRevision::default())
 }
@@ -245,6 +295,16 @@ fn bits__unused_hwio_GS_gb() {
         20_000_000,
     );
     assert!(passed, "test failed");
+}
+
+#[test]
+fn bits__unused_hwio_GS_gb__bootrom() {
+    let passed = run_mooneye_acceptance_with_bootrom(
+        common::rom_path("mooneye-test-suite/acceptance/bits/unused_hwio-GS.gb"),
+        50_000_000,
+        DmgRevision::default(),
+    );
+    assert!(passed, "test failed (with DMG boot ROM)");
 }
 
 #[test]
