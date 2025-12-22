@@ -8,6 +8,7 @@ Commands executed:
 - `cargo test --release --doc`
 - `cargo test --release --test apu -- --include-ignored`
 - `cargo test --release --test apu_quirks -- --include-ignored`
+- `cargo test --release --test bullygb_hacktix -- --include-ignored`
 - `cargo test --release --test cartridge -- --include-ignored`
 - `cargo test --release --test cgb_acid2_rom -- --include-ignored`
 - `cargo test --release --test channel_activation -- --include-ignored`
@@ -36,14 +37,21 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1652 | 1976 | 0 | 0 | 3628 | 45.5% |
-| Integration Tests | 147 | 32 | 0 | 0 | 179 | 82.1% |
+| ROM Test Suites | 1664 | 1964 | 0 | 0 | 3628 | 45.9% |
+| Integration Tests | 150 | 32 | 0 | 0 | 182 | 82.4% |
 | Unit Tests | 39 | 1 | 0 | 0 | 40 | 97.5% |
-| **Overall** | 1838 | 2009 | 0 | 0 | 3847 | 47.8% |
+| **Overall** | 1853 | 1997 | 0 | 0 | 3850 | 48.1% |
 
 ## Detailed Results
 
 ### ROM Test Suites
+
+#### bullygb_hacktix (1/2 passing, 50.0%)
+
+| Test | Result |
+| --- | --- |
+| `bullygb_hacktix__cgb__serial` | ✅ Pass |
+| `bullygb_hacktix__dmg__serial` | ❌ Fail |
 
 #### cartridge (3/3 passing, 100.0%)
 
@@ -109,7 +117,7 @@ Combined exit code: 101
 | `dmg_sound_11_regs_after_power` | ❌ Fail |
 | `dmg_sound_12_wave_write_while_on` | ❌ Fail |
 
-#### gambatte (1478/3424 passing, 43.2%)
+#### gambatte (1489/3422 passing, 43.5%)
 
 | Test | Result |
 | --- | --- |
@@ -211,14 +219,12 @@ Combined exit code: 101
 | `dma/hdma_late_m3halt_m2unhalt_ly_scx2_6_cgb04c_out03.gbc` | ✅ Pass |
 | `dma/hdma_late_m3halt_m2unhalt_scx1_2_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_late_m3halt_m2unhalt_scx2_2_cgb04c_outFF.gbc` | ✅ Pass |
-| `dma/hdma_late_m3speedchange_hdma5_scx1_1_cgb04c_out00.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_hdma5_scx1_3_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_hdma5_scx1_ds_2_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_hdma5_scx2_3_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_hdma5_scx2_ds_2_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_inc_scx1_1_cgb04c_out01.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_inc_scx1_3_cgb04c_out01.gbc` | ✅ Pass |
-| `dma/hdma_late_m3speedchange_read_hdmadst00_scx1_1_cgb04c_out00.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_read_hdmadst00_scx1_2_cgb04c_out9F.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_read_hdmadst00_scx1_ds_2_cgb04c_out9F.gbc` | ✅ Pass |
 | `dma/hdma_late_m3speedchange_read_hdmadst00_scx2_2_cgb04c_out9F.gbc` | ✅ Pass |
@@ -228,10 +234,12 @@ Combined exit code: 101
 | `dma/hdma_late_speedchange_inc_scx1_ds_3_cgb04c_out01.gbc` | ✅ Pass |
 | `dma/hdma_late_wrambank_2_cgb04c_out1.gbc` | ✅ Pass |
 | `dma/hdma_m0halt_late_m3unhalt_scx1_1_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_m0speedchange_late_m3wakeup_scx1_1_cgb04c_outFF.gbc` | ✅ Pass |
+| `dma/hdma_m0speedchange_late_m3wakeup_scx2_1_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_m1halt_m0unhalt_hdma5_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_m2halt_m0unhalt_hdma5_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_m3halt_m0unhalt_ly_2_cgb04c_out03.gbc` | ✅ Pass |
-| `dma/hdma_m3speedchange_late_m0wakeup_2_cgb04c_out00.gbc` | ✅ Pass |
+| `dma/hdma_m3speedchange_late_m0wakeup_1_cgb04c_outFF.gbc` | ✅ Pass |
 | `dma/hdma_start_2_cgb04c_out1.gbc` | ✅ Pass |
 | `dma/hdma_start_ds_2_cgb04c_out1.gbc` | ✅ Pass |
 | `dma/hdma_start_ly0_2_cgb04c_out1.gbc` | ✅ Pass |
@@ -876,12 +884,19 @@ Combined exit code: 101
 | `oamdma/late_sp39x_3_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp39x_ds_1_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/late_sp39y_ds_2_cgb04c_out0.gbc` | ✅ Pass |
+| `oamdma/oamdma_busydelay_1_dmg08_cgb04c_out5.gbc` | ✅ Pass |
 | `oamdma/oamdma_late_speedchange_stat_1_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src0000_busypopFFFF_dmg08_cgb04c_out65765576.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
+| `oamdma/oamdma_src0000_busyread0000_1_dmg08_cgb04c_out4.gbc` | ✅ Pass |
+| `oamdma/oamdma_src0000_busyread0000_2_dmg08_cgb04c_out5.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busyread0000_3_dmg08_cgb04c_out1.gbc` | ✅ Pass |
+| `oamdma/oamdma_src0000_busyread0000_4_dmg08_cgb04c_out5.gbc` | ✅ Pass |
+| `oamdma/oamdma_src0000_busyread0000_ds_1_cgb04c_out4.gbc` | ✅ Pass |
+| `oamdma/oamdma_src0000_busyread0000_ds_2_cgb04c_out5.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busyread0000_ds_3_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busyreadA000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src0000_busyreadC000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
@@ -894,6 +909,7 @@ Combined exit code: 101
 | `oamdma/oamdma_src7F00_busypopFE9F_dmg08_cgb04c_out6576FFFF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src7F00_busypopFEFF_dmg08_cgb04c_out6576FFEF.gbc` | ✅ Pass |
 | `oamdma/oamdma_src7F00_busypopFF7F_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
+| `oamdma/oamdma_src7F00_busypopFFFF_dmg08_cgb04c_out65765576.gbc` | ✅ Pass |
 | `oamdma/oamdma_src7F00_busypushFF81_dmg08_cgb04c_out6576FF55.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_busypopBFFF_2_dmg08_cgb04c_out6576FFAA.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_busypopDFFF_dmg08_cgb04c_out657655AA.gbc` | ✅ Pass |
@@ -912,6 +928,7 @@ Combined exit code: 101
 | `oamdma/oamdma_src8000_busyread0000_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_busyread8000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_busyreadC000_dmg08_cgb04c_out1.gbc` | ✅ Pass |
+| `oamdma/oamdma_src8000_srcchange0000_busyread0000_1_dmg08_cgb04c_out5.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_srcchange0000_busyread0000_2_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_vrambankchange_1_cgb04c_out0.gbc` | ✅ Pass |
 | `oamdma/oamdma_src8000_vrambankchange_2_cgb04c_out4.gbc` | ✅ Pass |
@@ -966,6 +983,8 @@ Combined exit code: 101
 | `serial/nopx1_div_write_start_wait_read_if_2_dmg08_cgb04c_outE8.gbc` | ✅ Pass |
 | `serial/nopx1_start83_wait_read_if_2_dmg08_outE0_cgb04c_outE8.gbc` | ✅ Pass |
 | `serial/nopx1_start_wait_read_if_1_dmg08_cgb04c_outE0.gbc` | ✅ Pass |
+| `serial/nopx1_start_wait_read_if_2_dmg08_cgb04c_outE8.gbc` | ✅ Pass |
+| `serial/nopx2_start83_wait_read_if_1_dmg08_cgb04c_outE0.gbc` | ✅ Pass |
 | `serial/nopx2_start83_wait_read_if_2_dmg08_outE0_cgb04c_outE8.gbc` | ✅ Pass |
 | `serial/nopx2_start_wait_read_if_2_dmg08_cgb04c_outE8.gbc` | ✅ Pass |
 | `serial/start83_late_div_write_wait_read_if_1b_cgb04c_outE8.gbc` | ✅ Pass |
@@ -1052,15 +1071,15 @@ Combined exit code: 101
 | `sound/ch2_late_div_write_nr52_1b_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch2_late_div_write_nr52_2a_dmg08_cgb04c_outF2.gbc` | ✅ Pass |
 | `sound/ch2_late_div_write_nr52_2b_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
-| `sound/ch2_late_div_write_nr52_ds_1a_cgb04c_outF2.gbc` | ✅ Pass |
 | `sound/ch2_late_div_write_nr52_ds_1b_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch2_late_div_write_nr52_ds_2a_cgb04c_outF2.gbc` | ✅ Pass |
+| `sound/ch2_late_div_write_nr52_ds_2b_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch2_late_reset_nr52_1a_dmg08_cgb04c_out2.gbc` | ✅ Pass |
 | `sound/ch2_late_reset_nr52_1b_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `sound/ch2_late_reset_nr52_2a_dmg08_cgb04c_out2.gbc` | ✅ Pass |
-| `sound/ch2_late_reset_nr52_ds_1a_cgb04c_out2.gbc` | ✅ Pass |
+| `sound/ch2_late_reset_nr52_ds_1b_cgb04c_out0.gbc` | ✅ Pass |
 | `sound/ch2_late_reset_nr52_ds_2a_cgb04c_out2.gbc` | ✅ Pass |
-| `sound/ch2_reset_length_counter_timing_nr52_ds_1_cgb04c_outF2.gbc` | ✅ Pass |
+| `sound/ch2_reset_length_counter_timing_nr52_ds_2_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch3_div_write_reset_length_counter_timing_nr52_1_dmg08_cgb04c_outF4.gbc` | ✅ Pass |
 | `sound/ch3_div_write_reset_length_counter_timing_nr52_2_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch3_late_div_write_nr52_1a_dmg08_cgb04c_outF4.gbc` | ✅ Pass |
@@ -1082,10 +1101,10 @@ Combined exit code: 101
 | `speedchange/speedchange2_ch1_duty0_pos6_to_pos7_timing_ds_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange2_ch1_duty0_pos6_to_pos7_timing_nop_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange2_ch1_duty0_pos6_to_pos7_timing_nop_ds_1_cgb04c_outaudio0.gbc` | ✅ Pass |
-| `speedchange/speedchange2_ch2_nr52_1a_cgb04c_outF2.gbc` | ✅ Pass |
-| `speedchange/speedchange2_ch2_nr52_2a_cgb04c_outF2.gbc` | ✅ Pass |
-| `speedchange/speedchange2_ch2_nr52_ds_1a_cgb04c_outF2.gbc` | ✅ Pass |
-| `speedchange/speedchange2_ch2_nr52_ds_2a_cgb04c_outF2.gbc` | ✅ Pass |
+| `speedchange/speedchange2_ch2_nr52_1b_cgb04c_outF0.gbc` | ✅ Pass |
+| `speedchange/speedchange2_ch2_nr52_2b_cgb04c_outF0.gbc` | ✅ Pass |
+| `speedchange/speedchange2_ch2_nr52_ds_1b_cgb04c_outF0.gbc` | ✅ Pass |
+| `speedchange/speedchange2_ch2_nr52_ds_2b_cgb04c_outF0.gbc` | ✅ Pass |
 | `speedchange/speedchange2_div_1_cgb04c_out00.gbc` | ✅ Pass |
 | `speedchange/speedchange2_div_nop_1_cgb04c_out00.gbc` | ✅ Pass |
 | `speedchange/speedchange2_frame1_m2int_m3stat_scx2_1_cgb04c_out3.gbc` | ✅ Pass |
@@ -1122,8 +1141,8 @@ Combined exit code: 101
 | `speedchange/speedchange2_tima03_1a_cgb04c_out00.gbc` | ✅ Pass |
 | `speedchange/speedchange3_ch1_duty0_pos6_to_pos7_timing_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange3_ch1_duty0_pos6_to_pos7_timing_nop_1_cgb04c_outaudio0.gbc` | ✅ Pass |
-| `speedchange/speedchange3_ch2_nr52_1a_cgb04c_outF2.gbc` | ✅ Pass |
-| `speedchange/speedchange3_ch2_nr52_2a_cgb04c_outF2.gbc` | ✅ Pass |
+| `speedchange/speedchange3_ch2_nr52_1b_cgb04c_outF0.gbc` | ✅ Pass |
+| `speedchange/speedchange3_ch2_nr52_2b_cgb04c_outF0.gbc` | ✅ Pass |
 | `speedchange/speedchange3_ly44_m3_m3stat_scx1_1_cgb04c_outC3.gbc` | ✅ Pass |
 | `speedchange/speedchange3_ly44_m3_m3stat_scx2_1_cgb04c_outC3.gbc` | ✅ Pass |
 | `speedchange/speedchange3_ly44_m3_nop_m3stat_scx1_1_cgb04c_outC3.gbc` | ✅ Pass |
@@ -1133,8 +1152,8 @@ Combined exit code: 101
 | `speedchange/speedchange3_nop_ly44_m3_m3stat_scx2_1_cgb04c_outC3.gbc` | ✅ Pass |
 | `speedchange/speedchange4_ch1_duty0_pos6_to_pos7_timing_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange4_ch1_duty0_pos6_to_pos7_timing_nop_1_cgb04c_outaudio0.gbc` | ✅ Pass |
-| `speedchange/speedchange4_ch2_nr52_1a_cgb04c_outF2.gbc` | ✅ Pass |
-| `speedchange/speedchange4_ch2_nr52_2a_cgb04c_outF2.gbc` | ✅ Pass |
+| `speedchange/speedchange4_ch2_nr52_1b_cgb04c_outF0.gbc` | ✅ Pass |
+| `speedchange/speedchange4_ch2_nr52_2b_cgb04c_outF0.gbc` | ✅ Pass |
 | `speedchange/speedchange4_ly44_m3_m3stat_scx1_2_cgb04c_outC0.gbc` | ✅ Pass |
 | `speedchange/speedchange4_ly44_m3_m3stat_scx2_2_cgb04c_outC0.gbc` | ✅ Pass |
 | `speedchange/speedchange4_ly44_m3_nop_m3stat_scx3_2_cgb04c_outC0.gbc` | ✅ Pass |
@@ -1143,18 +1162,18 @@ Combined exit code: 101
 | `speedchange/speedchange4_nop_ly44_m3_m3stat_scx2_2_cgb04c_outC0.gbc` | ✅ Pass |
 | `speedchange/speedchange5_ch1_duty0_pos6_to_pos7_timing_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange5_ch1_duty0_pos6_to_pos7_timing_nop_1_cgb04c_outaudio0.gbc` | ✅ Pass |
-| `speedchange/speedchange5_ch2_nr52_1a_cgb04c_outF2.gbc` | ✅ Pass |
-| `speedchange/speedchange5_ch2_nr52_2a_cgb04c_outF2.gbc` | ✅ Pass |
+| `speedchange/speedchange5_ch2_nr52_1b_cgb04c_outF0.gbc` | ✅ Pass |
+| `speedchange/speedchange5_ch2_nr52_2b_cgb04c_outF0.gbc` | ✅ Pass |
 | `speedchange/speedchange5_nop_ch1_duty0_pos6_to_pos7_timing_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange_ch1_duty0_pos6_to_pos7_timing_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange_ch1_duty0_pos6_to_pos7_timing_ds_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange_ch1_duty0_pos6_to_pos7_timing_nop_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange_ch1_duty0_pos6_to_pos7_timing_nop_ds_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `speedchange/speedchange_ch1_nr4init_duty0_pos6_to_pos7_timing_1_cgb04c_outaudio0.gbc` | ✅ Pass |
-| `speedchange/speedchange_ch2_nr52_1a_cgb04c_outF2.gbc` | ✅ Pass |
-| `speedchange/speedchange_ch2_nr52_2a_cgb04c_outF2.gbc` | ✅ Pass |
-| `speedchange/speedchange_ch2_nr52_ds_1a_cgb04c_outF2.gbc` | ✅ Pass |
-| `speedchange/speedchange_ch2_nr52_ds_2a_cgb04c_outF2.gbc` | ✅ Pass |
+| `speedchange/speedchange_ch2_nr52_1b_cgb04c_outF0.gbc` | ✅ Pass |
+| `speedchange/speedchange_ch2_nr52_2b_cgb04c_outF0.gbc` | ✅ Pass |
+| `speedchange/speedchange_ch2_nr52_ds_1b_cgb04c_outF0.gbc` | ✅ Pass |
+| `speedchange/speedchange_ch2_nr52_ds_2b_cgb04c_outF0.gbc` | ✅ Pass |
 | `speedchange/speedchange_div_1_cgb04c_out00.gbc` | ✅ Pass |
 | `speedchange/speedchange_div_nop_1_cgb04c_out00.gbc` | ✅ Pass |
 | `speedchange/speedchange_key1_cgb04c_outFE.gbc` | ✅ Pass |
@@ -1742,6 +1761,7 @@ Combined exit code: 101
 | `dma/hdma_late_m3halt_m2unhalt_ly_scx2_5_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_late_m3halt_m2unhalt_scx1_1_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_late_m3halt_m2unhalt_scx2_1_cgb04c_out00.gbc` | ❌ Fail |
+| `dma/hdma_late_m3speedchange_hdma5_scx1_1_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_hdma5_scx1_2_cgb04c_out80.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_hdma5_scx1_ds_1_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_hdma5_scx2_1_cgb04c_out00.gbc` | ❌ Fail |
@@ -1754,6 +1774,7 @@ Combined exit code: 101
 | `dma/hdma_late_m3speedchange_ly_scx1_4_cgb04c_out93.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_ly_scx1_5_cgb04c_out92.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_ly_scx1_6_cgb04c_out93.gbc` | ❌ Fail |
+| `dma/hdma_late_m3speedchange_read_hdmadst00_scx1_1_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_read_hdmadst00_scx1_ds_1_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_read_hdmadst00_scx2_1_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_late_m3speedchange_read_hdmadst00_scx2_ds_1_cgb04c_out00.gbc` | ❌ Fail |
@@ -1765,13 +1786,11 @@ Combined exit code: 101
 | `dma/hdma_late_speedchange_inc_scx1_ds_2_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_late_wrambank_1_cgb04c_out0.gbc` | ❌ Fail |
 | `dma/hdma_m0halt_late_m3unhalt_scx1_2_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_m0speedchange_late_m3wakeup_scx1_1_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_m0speedchange_late_m3wakeup_scx1_2_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_m0speedchange_late_m3wakeup_scx2_1_cgb04c_outFF.gbc` | ❌ Fail |
 | `dma/hdma_m0speedchange_late_m3wakeup_scx2_2_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_m3halt_m0unhalt_ly_1_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_m3halt_m1unhalt_hdma5_cgb04c_out00.gbc` | ❌ Fail |
-| `dma/hdma_m3speedchange_late_m0wakeup_1_cgb04c_outFF.gbc` | ❌ Fail |
+| `dma/hdma_m3speedchange_late_m0wakeup_2_cgb04c_out00.gbc` | ❌ Fail |
 | `dma/hdma_pc_7ffe_cgb04c_out02.gbc` | ❌ Fail |
 | `dma/hdma_start_1_cgb04c_out0.gbc` | ❌ Fail |
 | `dma/hdma_start_ds_1_cgb04c_out0.gbc` | ❌ Fail |
@@ -2406,7 +2425,6 @@ Combined exit code: 101
 | `oamdma/late_sp39y_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/late_sp39y_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/late_sp39y_ds_1_cgb04c_out3.gbc` | ❌ Fail |
-| `oamdma/oamdma_busydelay_1_dmg08_cgb04c_out5.gbc` | ❌ Fail |
 | `oamdma/oamdma_late_halt_stat_1_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/oamdma_late_halt_stat_2_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `oamdma/oamdma_late_speedchange_stat_2_cgb04c_out3.gbc` | ❌ Fail |
@@ -2420,7 +2438,6 @@ Combined exit code: 101
 | `oamdma/oamdma_src0000_busypopDFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypopEFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypopFDFF_dmg08_out657665FF_cgb04c_out657655FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src0000_busypopFFFF_dmg08_cgb04c_out65765576.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypush0001_dmg08_cgb04c_out5576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypush8001_dmg08_cgb04c_out65AA1255.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypushA001_2_dmg08_cgb04c_out5576AAFF.gbc` | ❌ Fail |
@@ -2432,11 +2449,6 @@ Combined exit code: 101
 | `oamdma/oamdma_src0000_busypushFE01_dmg08_out65AA1298_cgb04c_out6576AA98.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypushFEA1_dmg08_out65768700_cgb04c_out65768734.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busypushFF01_dmg08_out657600DF_cgb04c_out657612DF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src0000_busyread0000_1_dmg08_cgb04c_out4.gbc` | ❌ Fail |
-| `oamdma/oamdma_src0000_busyread0000_2_dmg08_cgb04c_out5.gbc` | ❌ Fail |
-| `oamdma/oamdma_src0000_busyread0000_4_dmg08_cgb04c_out5.gbc` | ❌ Fail |
-| `oamdma/oamdma_src0000_busyread0000_ds_1_cgb04c_out4.gbc` | ❌ Fail |
-| `oamdma/oamdma_src0000_busyread0000_ds_2_cgb04c_out5.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busyread8000_dmg08_cgb04c_out1.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busyreadA000_1_dmg08_cgb04c_out5.gbc` | ❌ Fail |
 | `oamdma/oamdma_src0000_busyreadC000_1_dmg08_out5_cgb04c_out1.gbc` | ❌ Fail |
@@ -2451,7 +2463,6 @@ Combined exit code: 101
 | `oamdma/oamdma_src7F00_busypopDFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypopEFFF_dmg08_out65766576_cgb04c_out657655AA.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypopFDFF_dmg08_out657665FF_cgb04c_out657655FF.gbc` | ❌ Fail |
-| `oamdma/oamdma_src7F00_busypopFFFF_dmg08_cgb04c_out65765576.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypush0001_dmg08_cgb04c_out5576AA34.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypush8001_dmg08_cgb04c_out65AA1255.gbc` | ❌ Fail |
 | `oamdma/oamdma_src7F00_busypushA001_2_dmg08_cgb04c_out5576AAFF.gbc` | ❌ Fail |
@@ -2477,7 +2488,6 @@ Combined exit code: 101
 | `oamdma/oamdma_src8000_busyreadA000_dmg08_cgb04c_out1.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_busywrite8000_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_srcchange0000_busyinc_dmg08_cgb04c_out0.gbc` | ❌ Fail |
-| `oamdma/oamdma_src8000_srcchange0000_busyread0000_1_dmg08_cgb04c_out5.gbc` | ❌ Fail |
 | `oamdma/oamdma_src8000_srcchangeC000_busyread8000_dmg08_cgb04c_out1.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypop7FFF_dmg08_out65765576_cgb04c_out65005576.gbc` | ❌ Fail |
 | `oamdma/oamdma_src9F00_busypop9FFF_2_dmg08_out657665FF_cgb04c_out007665FF.gbc` | ❌ Fail |
@@ -2713,7 +2723,6 @@ Combined exit code: 101
 | `oamdma/oamdma_srcFF00_readFE45_dmg08_out1_cgb04c_out0.gbc` | ❌ Fail |
 | `oamdma/oamdmasrc80_halt_lycirq_read8000_dmg08_cgb04c_out81.gbc` | ❌ Fail |
 | `oamdma/oamdmasrc80_halt_m2irq_read8000_dmg08_cgb04c_out81.gbc` | ❌ Fail |
-| `oamdma/oamdmasrcC000_hdmasrc0000_cgb04c_out0A940C0D.gbc` | ❌ Fail |
 | `oamdma/oamdmasrcC0_speedchange_readC000_cgb04c_out11.gbc` | ❌ Fail |
 | `scx_during_m3/scx1_scx0_during_m3_1.gbc` | ❌ Fail |
 | `scx_during_m3/scx2_scx0_during_m3_1.gbc` | ❌ Fail |
@@ -2735,11 +2744,8 @@ Combined exit code: 101
 | `scx_during_m3/scx_0063c0/scx_during_m3_1.gbc` | ❌ Fail |
 | `scx_during_m3/scx_0063c0/scx_during_m3_2.gbc` | ❌ Fail |
 | `scx_during_m3/scx_0063c0/scx_during_m3_3.gbc` | ❌ Fail |
-| `scx_during_m3/scx_0063c0/scx_during_m3_4.gbc` | ❌ Fail |
-| `scx_during_m3/scx_0063c0/scx_during_m3_5.gbc` | ❌ Fail |
 | `scx_during_m3/scx_0063c0/scx_during_m3_6.gbc` | ❌ Fail |
 | `scx_during_m3/scx_0063c0/scx_during_m3_ds_1.gbc` | ❌ Fail |
-| `scx_during_m3/scx_0063c0/scx_during_m3_ds_2.gbc` | ❌ Fail |
 | `scx_during_m3/scx_0063c0/scx_during_m3_ds_3.gbc` | ❌ Fail |
 | `scx_during_m3/scx_0063c0/scx_during_m3_ds_4.gbc` | ❌ Fail |
 | `scx_during_m3/scx_0063c0/scx_during_m3_ds_5.gbc` | ❌ Fail |
@@ -2804,10 +2810,7 @@ Combined exit code: 101
 | `scx_during_m3/scx_0761c0/scx_during_m3_ds_8.gbc` | ❌ Fail |
 | `scx_during_m3/scx_attrib_during_m3_spx1_ds.gbc` | ❌ Fail |
 | `scx_during_m3/scx_attrib_during_m3_spx2_ds.gbc` | ❌ Fail |
-| `scx_during_m3/scx_during_m3_spx0.gbc` | ❌ Fail |
 | `scx_during_m3/scx_during_m3_spx1.gbc` | ❌ Fail |
-| `scx_during_m3/scx_during_m3_spx2.gbc` | ❌ Fail |
-| `scx_during_m3/scx_during_m3_spx2_ds.gbc` | ❌ Fail |
 | `scx_during_m3/scx_m3_extend_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `scx_during_m3/scx_m3_extend_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `scy/scx3/scy_during_m3_1.gbc` | ❌ Fail |
@@ -2827,10 +2830,12 @@ Combined exit code: 101
 | `scy/scy_during_m3_ds_3.gbc` | ❌ Fail |
 | `scy/scy_during_m3_ds_4.gbc` | ❌ Fail |
 | `scy/scy_during_m3_ds_5.gbc` | ❌ Fail |
+| `scy/scy_during_m3_ds_6.gbc` | ❌ Fail |
 | `scy/scy_during_m3_ds_7.gbc` | ❌ Fail |
 | `scy/scy_during_m3_spx08_1.gbc` | ❌ Fail |
 | `scy/scy_during_m3_spx08_2.gbc` | ❌ Fail |
 | `scy/scy_during_m3_spx08_3.gbc` | ❌ Fail |
+| `scy/scy_during_m3_spx08_4.gbc` | ❌ Fail |
 | `scy/scy_during_m3_spx08_ds_1.gbc` | ❌ Fail |
 | `scy/scy_during_m3_spx08_ds_2.gbc` | ❌ Fail |
 | `scy/scy_during_m3_spx08_ds_3.gbc` | ❌ Fail |
@@ -2853,6 +2858,7 @@ Combined exit code: 101
 | `scy/scy_during_m3_spx0B_4.gbc` | ❌ Fail |
 | `serial/nopx1_start83_wait_read_if_1_dmg08_cgb04c_outE0.gbc` | ❌ Fail |
 | `serial/nopx2_start_wait_read_if_1_dmg08_cgb04c_outE0.gbc` | ❌ Fail |
+| `serial/start83_late_div_write_wait_read_if_1a_cgb04c_outE0.gbc` | ❌ Fail |
 | `serial/start_late_div_write_wait_read_if_2b_dmg08_cgb04c_outE8.gbc` | ❌ Fail |
 | `serial/start_late_div_write_wait_read_if_3b_dmg08_cgb04c_outE8.gbc` | ❌ Fail |
 | `serial/start_late_div_write_wait_read_if_4_dmg08_cgb04c_outE8.gbc` | ❌ Fail |
@@ -2919,11 +2925,11 @@ Combined exit code: 101
 | `sound/ch2_init_reset_length_counter_timing_nr52_1_dmg08_out2_cgb04c_out0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_nr52_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_nr52_4_dmg08_out2_cgb04c_out0.gbc` | ❌ Fail |
-| `sound/ch2_late_div_write_nr52_ds_2b_cgb04c_outF0.gbc` | ❌ Fail |
+| `sound/ch2_late_div_write_nr52_ds_1a_cgb04c_outF2.gbc` | ❌ Fail |
 | `sound/ch2_late_reset_nr52_2b_dmg08_cgb04c_out0.gbc` | ❌ Fail |
-| `sound/ch2_late_reset_nr52_ds_1b_cgb04c_out0.gbc` | ❌ Fail |
+| `sound/ch2_late_reset_nr52_ds_1a_cgb04c_out2.gbc` | ❌ Fail |
 | `sound/ch2_late_reset_nr52_ds_2b_cgb04c_out0.gbc` | ❌ Fail |
-| `sound/ch2_reset_length_counter_timing_nr52_ds_2_cgb04c_outF0.gbc` | ❌ Fail |
+| `sound/ch2_reset_length_counter_timing_nr52_ds_1_cgb04c_outF2.gbc` | ❌ Fail |
 | `sound/ch3_reset_nop_nr4init_freq7ff_read_ff30_ds_1_cgb04c_out10.gbc` | ❌ Fail |
 | `sound/ch3_reset_nop_nr4init_freq7ff_read_ff30_ds_2_cgb04c_out32.gbc` | ❌ Fail |
 | `sound/ch3_reset_nr4init_freq7fd_read_ff30_1_dmg08_cgb04c_out10.gbc` | ❌ Fail |
@@ -2949,10 +2955,10 @@ Combined exit code: 101
 | `speedchange/speedchange2_ch1_duty0_pos6_to_pos7_timing_ds_2_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `speedchange/speedchange2_ch1_duty0_pos6_to_pos7_timing_nop_2_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `speedchange/speedchange2_ch1_duty0_pos6_to_pos7_timing_nop_ds_2_cgb04c_outaudio1.gbc` | ❌ Fail |
-| `speedchange/speedchange2_ch2_nr52_1b_cgb04c_outF0.gbc` | ❌ Fail |
-| `speedchange/speedchange2_ch2_nr52_2b_cgb04c_outF0.gbc` | ❌ Fail |
-| `speedchange/speedchange2_ch2_nr52_ds_1b_cgb04c_outF0.gbc` | ❌ Fail |
-| `speedchange/speedchange2_ch2_nr52_ds_2b_cgb04c_outF0.gbc` | ❌ Fail |
+| `speedchange/speedchange2_ch2_nr52_1a_cgb04c_outF2.gbc` | ❌ Fail |
+| `speedchange/speedchange2_ch2_nr52_2a_cgb04c_outF2.gbc` | ❌ Fail |
+| `speedchange/speedchange2_ch2_nr52_ds_1a_cgb04c_outF2.gbc` | ❌ Fail |
+| `speedchange/speedchange2_ch2_nr52_ds_2a_cgb04c_outF2.gbc` | ❌ Fail |
 | `speedchange/speedchange2_div_2_cgb04c_out01.gbc` | ❌ Fail |
 | `speedchange/speedchange2_div_nop_2_cgb04c_out01.gbc` | ❌ Fail |
 | `speedchange/speedchange2_frame1_m2int_m3stat_scx3_1_cgb04c_out3.gbc` | ❌ Fail |
@@ -3009,8 +3015,8 @@ Combined exit code: 101
 | `speedchange/speedchange2_tima03_2b_cgb04c_out02.gbc` | ❌ Fail |
 | `speedchange/speedchange3_ch1_duty0_pos6_to_pos7_timing_2_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `speedchange/speedchange3_ch1_duty0_pos6_to_pos7_timing_nop_2_cgb04c_outaudio1.gbc` | ❌ Fail |
-| `speedchange/speedchange3_ch2_nr52_1b_cgb04c_outF0.gbc` | ❌ Fail |
-| `speedchange/speedchange3_ch2_nr52_2b_cgb04c_outF0.gbc` | ❌ Fail |
+| `speedchange/speedchange3_ch2_nr52_1a_cgb04c_outF2.gbc` | ❌ Fail |
+| `speedchange/speedchange3_ch2_nr52_2a_cgb04c_outF2.gbc` | ❌ Fail |
 | `speedchange/speedchange3_ly44_m3_m3stat_scx1_2_cgb04c_outC0.gbc` | ❌ Fail |
 | `speedchange/speedchange3_ly44_m3_m3stat_scx2_2_cgb04c_outC0.gbc` | ❌ Fail |
 | `speedchange/speedchange3_ly44_m3_nop_m3stat_scx1_2_cgb04c_outC0.gbc` | ❌ Fail |
@@ -3020,8 +3026,8 @@ Combined exit code: 101
 | `speedchange/speedchange3_nop_ly44_m3_m3stat_scx2_2_cgb04c_outC0.gbc` | ❌ Fail |
 | `speedchange/speedchange4_ch1_duty0_pos6_to_pos7_timing_2_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `speedchange/speedchange4_ch1_duty0_pos6_to_pos7_timing_nop_2_cgb04c_outaudio1.gbc` | ❌ Fail |
-| `speedchange/speedchange4_ch2_nr52_1b_cgb04c_outF0.gbc` | ❌ Fail |
-| `speedchange/speedchange4_ch2_nr52_2b_cgb04c_outF0.gbc` | ❌ Fail |
+| `speedchange/speedchange4_ch2_nr52_1a_cgb04c_outF2.gbc` | ❌ Fail |
+| `speedchange/speedchange4_ch2_nr52_2a_cgb04c_outF2.gbc` | ❌ Fail |
 | `speedchange/speedchange4_ly44_m3_m3stat_scx1_1_cgb04c_outC3.gbc` | ❌ Fail |
 | `speedchange/speedchange4_ly44_m3_m3stat_scx2_1_cgb04c_outC3.gbc` | ❌ Fail |
 | `speedchange/speedchange4_ly44_m3_nop_m3stat_scx3_1_cgb04c_outC3.gbc` | ❌ Fail |
@@ -3030,8 +3036,8 @@ Combined exit code: 101
 | `speedchange/speedchange4_nop_ly44_m3_m3stat_scx2_1_cgb04c_outC3.gbc` | ❌ Fail |
 | `speedchange/speedchange5_ch1_duty0_pos6_to_pos7_timing_2_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `speedchange/speedchange5_ch1_duty0_pos6_to_pos7_timing_nop_2_cgb04c_outaudio1.gbc` | ❌ Fail |
-| `speedchange/speedchange5_ch2_nr52_1b_cgb04c_outF0.gbc` | ❌ Fail |
-| `speedchange/speedchange5_ch2_nr52_2b_cgb04c_outF0.gbc` | ❌ Fail |
+| `speedchange/speedchange5_ch2_nr52_1a_cgb04c_outF2.gbc` | ❌ Fail |
+| `speedchange/speedchange5_ch2_nr52_2a_cgb04c_outF2.gbc` | ❌ Fail |
 | `speedchange/speedchange5_ly44_m3_m3stat_scx1_1_cgb04c_outC3.gbc` | ❌ Fail |
 | `speedchange/speedchange5_ly44_m3_m3stat_scx1_2_cgb04c_outC0.gbc` | ❌ Fail |
 | `speedchange/speedchange5_ly44_m3_m3stat_scx2_1_cgb04c_outC3.gbc` | ❌ Fail |
@@ -3050,10 +3056,10 @@ Combined exit code: 101
 | `speedchange/speedchange_ch1_duty0_pos6_to_pos7_timing_nop_2_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `speedchange/speedchange_ch1_duty0_pos6_to_pos7_timing_nop_ds_2_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `speedchange/speedchange_ch1_nr4init_duty0_pos6_to_pos7_timing_2_cgb04c_outaudio1.gbc` | ❌ Fail |
-| `speedchange/speedchange_ch2_nr52_1b_cgb04c_outF0.gbc` | ❌ Fail |
-| `speedchange/speedchange_ch2_nr52_2b_cgb04c_outF0.gbc` | ❌ Fail |
-| `speedchange/speedchange_ch2_nr52_ds_1b_cgb04c_outF0.gbc` | ❌ Fail |
-| `speedchange/speedchange_ch2_nr52_ds_2b_cgb04c_outF0.gbc` | ❌ Fail |
+| `speedchange/speedchange_ch2_nr52_1a_cgb04c_outF2.gbc` | ❌ Fail |
+| `speedchange/speedchange_ch2_nr52_2a_cgb04c_outF2.gbc` | ❌ Fail |
+| `speedchange/speedchange_ch2_nr52_ds_1a_cgb04c_outF2.gbc` | ❌ Fail |
+| `speedchange/speedchange_ch2_nr52_ds_2a_cgb04c_outF2.gbc` | ❌ Fail |
 | `speedchange/speedchange_div_2_cgb04c_out01.gbc` | ❌ Fail |
 | `speedchange/speedchange_div_nop_2_cgb04c_out01.gbc` | ❌ Fail |
 | `speedchange/speedchange_lcdoff_tima00_1_cgb04c_out80.gbc` | ❌ Fail |
@@ -3884,19 +3890,22 @@ Combined exit code: 101
 | `channel1_triggers_when_dac_on` | ✅ Pass |
 | `sweep_overflow_disables_channel1` | ✅ Pass |
 
-#### cpu (11/13 passing, 84.6%)
+#### cpu (14/16 passing, 87.5%)
 
 | Test | Result |
 | --- | --- |
 | `alu_immediate_ops` | ✅ Pass |
 | `alu_register_ops` | ✅ Pass |
+| `cgb_bootrom_timing_matches_whichboot_capture` | ✅ Pass |
 | `double_speed_timer_scaling` | ✅ Pass |
 | `ei_delay` | ✅ Pass |
+| `gdma_stall_advances_cpu_div` | ✅ Pass |
 | `halt_bug` | ✅ Pass |
 | `interrupt_handling` | ✅ Pass |
 | `jr_nz_cycles` | ✅ Pass |
 | `ld_rr_instructions` | ✅ Pass |
 | `simple_program` | ✅ Pass |
+| `speed_switch_stall_advances_dot_div_but_not_cpu_div` | ✅ Pass |
 | `stop_resets_div_and_pauses` | ✅ Pass |
 | `stop_speed_switch` | ✅ Pass |
 | `div_rate_double_speed` | ❌ Fail |

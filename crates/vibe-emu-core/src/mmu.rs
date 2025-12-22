@@ -324,11 +324,22 @@ impl Mmu {
     fn read_byte_inner(&mut self, addr: u16, allow_dma: bool) -> u8 {
         if !allow_dma && self.dma_cycles > 0 {
             match addr {
-                // Allow ROM, WRAM/Echo and all I/O/HRAM accesses during the
+                // During OAM DMA, CPU reads from the ROM bus observe a bus
+                // conflict: the value on the data bus is the byte currently
+                // being transferred by the DMA engine.
+                0x0000..=0x7FFF => {
+                    // Only apply this when the DMA engine is sourcing data
+                    // from the ROM bus itself. If the DMA source is elsewhere
+                    // (WRAM/VRAM/etc), treat ROM reads as normal.
+                    if (0x0000..=0x7FFF).contains(&self.dma_source) {
+                        return self.oam_dma_bus_conflict_byte();
+                    }
+                }
+                // Allow WRAM/Echo and all I/O/HRAM accesses during the
                 // transfer. These regions remain readable/writable because
                 // they reside on buses that stay available even while OAM DMA
                 // monopolizes the VRAM/OAM bus.
-                0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
+                0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
                 0xFE00..=0xFEFF => {
                     #[cfg(feature = "ppu-trace")]
                     {
@@ -615,6 +626,25 @@ impl Mmu {
         };
 
         self.read_byte_inner(addr, true)
+    }
+
+    fn oam_dma_bus_conflict_byte(&mut self) -> u8 {
+        // Approximate the value visible on the CPU data bus during OAM DMA.
+        // The BullyGB `dmabusconflict` test expects ROM reads to reflect the
+        // DMA-transferred byte rather than always reading as $FF.
+        let (per_byte, initial): (u16, u16) = if self.key1 & 0x80 != 0 {
+            (2, 320)
+        } else {
+            (4, 640)
+        };
+
+        let elapsed = initial.saturating_sub(self.dma_cycles);
+        let idx = elapsed / per_byte;
+        if idx >= 0xA0 {
+            return 0xFF;
+        }
+
+        self.dma_read_byte(self.dma_source.wrapping_add(idx))
     }
 
     pub fn write_byte(&mut self, addr: u16, val: u8) {
