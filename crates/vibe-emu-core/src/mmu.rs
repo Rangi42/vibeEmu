@@ -113,6 +113,10 @@ pub struct Mmu {
     hdma: HdmaState,
     pub key1: u8,
     pub rp: u8,
+    undoc_ff72: u8,
+    undoc_ff73: u8,
+    undoc_ff74: u8,
+    undoc_ff75: u8,
     pub dma_cycles: u16,
     dma_source: u16,
     pending_dma: Option<u16>,
@@ -206,6 +210,10 @@ impl Mmu {
             },
             key1: if cgb { 0x7E } else { 0 },
             rp: 0,
+            undoc_ff72: 0,
+            undoc_ff73: 0,
+            undoc_ff74: 0,
+            undoc_ff75: 0,
             dma_cycles: 0,
             dma_source: 0,
             pending_dma: None,
@@ -271,6 +279,10 @@ impl Mmu {
             },
             key1: if cgb { 0x7E } else { 0 },
             rp: 0,
+            undoc_ff72: 0,
+            undoc_ff73: 0,
+            undoc_ff74: 0,
+            undoc_ff75: 0,
             dma_cycles: 0,
             dma_source: 0,
             pending_dma: None,
@@ -544,6 +556,36 @@ impl Mmu {
             0xFF70 => {
                 if self.cgb_mode {
                     self.wram_bank as u8
+                } else {
+                    0xFF
+                }
+            }
+            0xFF72 => {
+                if self.cgb_mode {
+                    self.undoc_ff72
+                } else {
+                    0xFF
+                }
+            }
+            0xFF73 => {
+                if self.cgb_mode {
+                    self.undoc_ff73
+                } else {
+                    0xFF
+                }
+            }
+            0xFF74 => {
+                if self.cgb_mode {
+                    self.undoc_ff74
+                } else {
+                    // DMG: read-only, locked to $FF.
+                    0xFF
+                }
+            }
+            0xFF75 => {
+                if self.cgb_mode {
+                    // Only bits 4-6 are readable/writable; other bits read high.
+                    (self.undoc_ff75 & 0x70) | 0x8F
                 } else {
                     0xFF
                 }
@@ -848,6 +890,26 @@ impl Mmu {
                 if self.cgb_mode {
                     let bank = (val & 0x07) as usize;
                     self.wram_bank = if bank == 0 { 1 } else { bank };
+                }
+            }
+            0xFF72 => {
+                if self.cgb_mode {
+                    self.undoc_ff72 = val;
+                }
+            }
+            0xFF73 => {
+                if self.cgb_mode {
+                    self.undoc_ff73 = val;
+                }
+            }
+            0xFF74 => {
+                if self.cgb_mode {
+                    self.undoc_ff74 = val;
+                }
+            }
+            0xFF75 => {
+                if self.cgb_mode {
+                    self.undoc_ff75 = val & 0x70;
                 }
             }
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = val,
