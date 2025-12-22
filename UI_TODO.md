@@ -80,14 +80,9 @@ This file lists problems and improvement opportunities observed in the current d
 
 ## P2 — Cross-platform / Compatibility
 
-- **P2: `rfd` is built with `gtk3` feature unconditionally.**
-  - **Still applicable:** Yes (currently `rfd = { default-features = false, features = ["gtk3"] }`).
+- ✅ **P2 COMPLETE:** Make `rfd` backend selection target-specific (avoid unconditional `gtk3`).
   - **Where:** `crates/vibe-emu-ui/Cargo.toml`.
-  - **Risk:** Pulls Linux/GTK-oriented deps everywhere, increases build complexity, and can become a portability hazard.
-  - **Recommended change:** Make `rfd` backend selection target-specific.
-    - On Linux: explicitly pick `gtk3` (or consider `xdg-portal` if you want better sandbox/Wayland/Flatpak behavior).
-    - On Windows/macOS: use `rfd` defaults (or enable only the platform-appropriate backend).
-    - Implementation sketch: move `rfd` into `[target.'cfg(...)'.dependencies]` blocks instead of one unconditional dependency.
+  - **Fix:** `gtk3` is now only enabled on Linux; Windows/macOS use `rfd` defaults.
 
 - ✅ **P0 COMPLETE:** Avoid forcing an invalid backend cross-platform; add an explicit backend override.
   - **Where:** `crates/vibe-emu-ui/src/main.rs` → `configure_wgpu_backend()`.
