@@ -193,6 +193,15 @@ enum UiAction {
     Load(Cartridge),
 }
 
+#[derive(Clone, Debug)]
+struct LoadConfig {
+    force_dmg: bool,
+    force_cgb: bool,
+    dmg_neutral: bool,
+    bootrom: Option<Vec<u8>>,
+    use_power_on_state: bool,
+}
+
 #[derive(Clone, Copy)]
 struct Speed {
     factor: f32,
@@ -698,10 +707,12 @@ fn run_emulator_thread(
     gb: Arc<Mutex<GameBoy>>,
     ui_snapshot: Arc<RwLock<UiSnapshot>>,
     mut speed: Speed,
+    initial_paused: bool,
     debug: bool,
     mobile: Option<Arc<Mutex<MobileAdapter>>>,
     mut serial_peripheral: SerialPeripheral,
     mobile_diag: bool,
+    load_config: LoadConfig,
     channels: EmuThreadChannels,
 ) {
     let EmuThreadChannels {
@@ -773,7 +784,7 @@ fn run_emulator_thread(
         *mobile_time_accum_ns = 0;
     }
 
-    let mut paused = false;
+    let mut paused = initial_paused;
     let mut frame_count = 0u64;
     let mut next_frame = Instant::now() + FRAME_TIME;
     let mut audio_stream = None;
@@ -790,7 +801,9 @@ fn run_emulator_thread(
             &mut mobile_active,
             &mut mobile_time_accum_ns,
         );
-        rebuild_audio_stream(&mut gb, speed, &mut audio_stream);
+        if gb.mmu.cart.is_some() {
+            rebuild_audio_stream(&mut gb, speed, &mut audio_stream);
+        }
     }
 
     loop {
@@ -842,7 +855,7 @@ fn run_emulator_thread(
                 },
                 UiToEmu::Action(action) => {
                     if let Ok(mut gb) = gb.lock() {
-                        apply_ui_action(action, &mut gb, &mut audio_stream, speed);
+                        apply_ui_action(action, &mut gb, &mut audio_stream, speed, &load_config);
                         // GameBoy::reset rebuilds the MMU (including Serial), so restore the
                         // currently selected serial peripheral after any reset/load.
                         apply_serial_peripheral(
@@ -1382,6 +1395,7 @@ fn apply_ui_action(
     gb: &mut GameBoy,
     audio_stream: &mut Option<cpal::Stream>,
     speed: Speed,
+    load_config: &LoadConfig,
 ) {
     match action {
         UiAction::Reset => {
@@ -1390,12 +1404,45 @@ fn apply_ui_action(
         }
         UiAction::Load(cart) => {
             info!("Loading new ROM");
-            gb.reset();
-            gb.mmu.load_cart(cart);
+            *gb = build_gameboy_for_cart(Some(cart), load_config);
         }
     }
 
-    rebuild_audio_stream(gb, speed, audio_stream);
+    if gb.mmu.cart.is_some() {
+        rebuild_audio_stream(gb, speed, audio_stream);
+    }
+}
+
+fn build_gameboy_for_cart(cart: Option<Cartridge>, load_config: &LoadConfig) -> GameBoy {
+    let cgb_mode = if load_config.force_dmg {
+        false
+    } else if load_config.force_cgb {
+        true
+    } else {
+        cart.as_ref().is_some_and(|c| c.cgb)
+    };
+
+    let mut gb = if load_config.use_power_on_state {
+        GameBoy::new_power_on_with_revision(cgb_mode, CgbRevision::default())
+    } else {
+        GameBoy::new_with_revision(cgb_mode, CgbRevision::default())
+    };
+
+    if let Some(cart) = cart {
+        gb.mmu.load_cart(cart);
+    }
+
+    if !cgb_mode && load_config.dmg_neutral {
+        const NEUTRAL_DMG_PALETTE: [u32; 4] = [0x00E0F8D0, 0x0088C070, 0x00346856, 0x00081820];
+        gb.mmu.ppu.set_dmg_palette(NEUTRAL_DMG_PALETTE);
+    }
+
+    if let Some(data) = load_config.bootrom.clone() {
+        gb.mmu.load_boot_rom(data);
+        gb.cpu.pc = 0x0000;
+    }
+
+    gb
 }
 
 fn main() {
@@ -1406,58 +1453,60 @@ fn main() {
 
     info!("Starting emulator");
 
-    let rom_path = match args.rom {
-        Some(p) => p,
-        None => {
-            error!("No ROM supplied");
-            return;
-        }
+    let headless = args.headless;
+    let rom_path = args.rom.clone();
+
+    let bootrom_data = match args.bootrom.as_ref() {
+        Some(path) => match std::fs::read(path) {
+            Ok(data) => Some(data),
+            Err(e) => {
+                error!("Failed to load boot ROM {}: {e}", path.display());
+                return;
+            }
+        },
+        None => None,
     };
 
-    let cart = match Cartridge::from_file(&rom_path) {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to load ROM: {e}");
-            return;
-        }
+    let use_power_on_state = bootrom_data.is_some();
+
+    let load_config = LoadConfig {
+        force_dmg: args.dmg,
+        force_cgb: args.cgb,
+        dmg_neutral: args.dmg_neutral,
+        bootrom: bootrom_data,
+        use_power_on_state,
     };
 
-    let cgb_mode = if args.dmg {
+    let cart = match rom_path.as_ref() {
+        Some(path) => match Cartridge::from_file(path) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                error!("Failed to load ROM: {e}");
+                return;
+            }
+        },
+        None => None,
+    };
+
+    if headless && cart.is_none() {
+        error!("No ROM supplied (required for --headless)");
+        return;
+    }
+
+    let cgb_mode = if load_config.force_dmg {
         false
-    } else if args.cgb {
+    } else if load_config.force_cgb {
         true
     } else {
-        cart.cgb
+        cart.as_ref().is_some_and(|c| c.cgb)
     };
-    let mut gb = if args.bootrom.is_some() {
-        GameBoy::new_power_on_with_revision(cgb_mode, CgbRevision::default())
-    } else {
-        GameBoy::new_with_revision(cgb_mode, CgbRevision::default())
-    };
-    gb.mmu.load_cart(cart);
-    // If user requested a neutral/non-green DMG palette, apply it.
-    if !cgb_mode && args.dmg_neutral {
-        const NEUTRAL_DMG_PALETTE: [u32; 4] = [0x00E0F8D0, 0x0088C070, 0x00346856, 0x00081820];
-        gb.mmu.ppu.set_dmg_palette(NEUTRAL_DMG_PALETTE);
-    }
 
-    if let Some(path) = args.bootrom {
-        match std::fs::read(&path) {
-            Ok(data) => {
-                gb.mmu.load_boot_rom(data);
-                // Start executing from the boot ROM entry point.
-                gb.cpu.pc = 0x0000;
-            }
-            Err(e) => warn!("Failed to load boot ROM: {e}"),
-        }
-    }
+    let mut gb = build_gameboy_for_cart(cart, &load_config);
 
     info!(
         "Emulator initialized in {} mode",
         if cgb_mode { "CGB" } else { "DMG" }
     );
-
-    let headless = args.headless;
     let debug_enabled = args.debug;
     let frame_limit = args.frames;
     let cycle_limit = args.cycles;
@@ -1496,7 +1545,8 @@ fn main() {
     let config_path = args
         .mobile_config
         .clone()
-        .unwrap_or_else(|| rom_path.with_extension("mobile"));
+        .or_else(|| rom_path.as_ref().map(|p| p.with_extension("mobile")))
+        .unwrap_or_else(|| std::path::PathBuf::from("vibeemu.mobile"));
 
     let mobile = {
         let base_host: Box<dyn MobileHost> = Box::new(StdMobileHost::new(config_path));
@@ -1578,6 +1628,8 @@ fn main() {
     }
 
     if !headless {
+        let initial_paused = rom_path.is_none();
+
         let gb = Arc::new(Mutex::new(gb));
         let ui_snapshot = Arc::new(RwLock::new(UiSnapshot::default()));
         let mut speed = Speed {
@@ -1588,6 +1640,7 @@ fn main() {
             serial_peripheral,
             ..Default::default()
         };
+        ui_state.paused = initial_paused;
 
         let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
             Ok(el) => el,
@@ -1612,16 +1665,19 @@ fn main() {
         let emu_mobile = mobile.clone();
         let emu_serial_peripheral = serial_peripheral;
         let emu_mobile_diag = args.mobile_diag;
+        let emu_load_config = load_config.clone();
         let emu_frame_pool_tx = frame_pool_tx.clone();
         let emu_handle = thread::spawn(move || {
             run_emulator_thread(
                 emu_gb,
                 emu_snapshot,
                 speed,
+                initial_paused,
                 debug_enabled,
                 emu_mobile,
                 emu_serial_peripheral,
                 emu_mobile_diag,
+                emu_load_config,
                 EmuThreadChannels {
                     rx: to_emu_rx,
                     frame_tx: from_emu_frame_tx,
@@ -1681,6 +1737,10 @@ fn main() {
         }
 
         let mut state = 0xFFu8;
+
+        if initial_paused {
+            let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
+        }
 
         #[allow(deprecated)]
         let _ = event_loop.run(move |event, target| {
