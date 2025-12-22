@@ -98,20 +98,13 @@ This file lists problems and improvement opportunities observed in the current d
 
 ## P3 — Cleanup / Maintenance
 
-- **P3: Debugger/VRAM/Options windows use a 1×1 `Pixels` buffer as a carrier for ImGui.**
-  - **Where:** `spawn_debugger_window()` / `spawn_vram_window()`.
-  - **Still applicable:** Yes (these windows call `Pixels::new(1, 1, ...)`).
-  - **Assessment:** This is a reasonable workaround given the current renderer wiring, but it’s non-obvious.
-  - **Recommended change:** Keep the approach, but make the intent explicit.
-    - Rename the stored size to something like “imgui carrier size” to avoid confusion with window size.
-    - Add a short code comment at the creation site explaining why 1×1 is sufficient.
-    - Optional future refactor: decouple ImGui rendering from `Pixels` for tool windows.
+- ✅ **P3 COMPLETE:** Debugger/VRAM/Options windows use a 1×1 `Pixels` buffer as a carrier for ImGui.
+  - **Where:** `spawn_debugger_window()` / `spawn_vram_window()` / `spawn_options_window()`.
+  - **Fix:** Kept the 1×1 approach but documented the intent at the creation sites and centralized the `(1, 1)` size into a named constant.
 
-- **P3: TextureId unwraps in VRAM viewer could be made more robust.**
+- ✅ **P3 COMPLETE:** Remove `TextureId` unwraps in the VRAM viewer update paths.
   - **Where:** `crates/vibe-emu-ui/src/ui/vram_viewer.rs`.
-  - **Still applicable:** Yes (there are `Option<TextureId>` fields with `unwrap()` in update paths).
-  - **Assessment:** These unwraps are currently guarded by preceding `is_none()` checks, so they are unlikely to panic today, but they are fragile to future refactors and harder to reason about.
-  - **Improve:** Avoid `.unwrap()` in draw/update code; use `if let Some(tex_id) = ...` and rebuild/early-return on `None`.
+  - **Fix:** Replaced `unwrap()` with `if let Some(tex_id) = ...` and rebuild logic.
 
 - ✅ **P3 COMPLETE:** Logging and stdout prints are mixed (serial/debug).
   - **Where:** serial/CPU debug output in `crates/vibe-emu-ui/src/main.rs`, plus core diagnostics in `crates/vibe-emu-core/src/*`.

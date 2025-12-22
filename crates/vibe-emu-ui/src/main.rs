@@ -638,7 +638,11 @@ fn spawn_debugger_window(
 
     let size = w.inner_size();
     let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
-    let pixels = match pixels::Pixels::new(1, 1, surface) {
+    // Tool windows don't render a dedicated pixel framebuffer; Pixels is used as the wgpu surface
+    // carrier for ImGui rendering, so a 1×1 buffer is sufficient.
+    const IMGUI_CARRIER_BUFFER: (u32, u32) = (1, 1);
+    let pixels = match pixels::Pixels::new(IMGUI_CARRIER_BUFFER.0, IMGUI_CARRIER_BUFFER.1, surface)
+    {
         Ok(p) => p,
         Err(e) => {
             error!("Pixels init failed (debugger window): {e}");
@@ -648,7 +652,7 @@ fn spawn_debugger_window(
 
     platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
 
-    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, (1, 1), imgui);
+    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, IMGUI_CARRIER_BUFFER, imgui);
     let id = ui_win.win.id();
     windows.insert(id, ui_win);
     if let Some(win) = windows.get_mut(&id) {
@@ -679,7 +683,11 @@ fn spawn_vram_window(
 
     let size = w.inner_size();
     let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
-    let pixels = match pixels::Pixels::new(1, 1, surface) {
+    // Tool windows don't render a dedicated pixel framebuffer; Pixels is used as the wgpu surface
+    // carrier for ImGui rendering, so a 1×1 buffer is sufficient.
+    const IMGUI_CARRIER_BUFFER: (u32, u32) = (1, 1);
+    let pixels = match pixels::Pixels::new(IMGUI_CARRIER_BUFFER.0, IMGUI_CARRIER_BUFFER.1, surface)
+    {
         Ok(p) => p,
         Err(e) => {
             error!("Pixels init failed (VRAM window): {e}");
@@ -689,7 +697,13 @@ fn spawn_vram_window(
 
     platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
 
-    let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, (1, 1), imgui);
+    let ui_win = UiWindow::new(
+        WindowKind::VramViewer,
+        w,
+        pixels,
+        IMGUI_CARRIER_BUFFER,
+        imgui,
+    );
     let id = ui_win.win.id();
     windows.insert(id, ui_win);
     if let Some(win) = windows.get_mut(&id) {
@@ -720,7 +734,11 @@ fn spawn_options_window(
 
     let size = w.inner_size();
     let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
-    let pixels = match pixels::Pixels::new(1, 1, surface) {
+    // Tool windows don't render a dedicated pixel framebuffer; Pixels is used as the wgpu surface
+    // carrier for ImGui rendering, so a 1×1 buffer is sufficient.
+    const IMGUI_CARRIER_BUFFER: (u32, u32) = (1, 1);
+    let pixels = match pixels::Pixels::new(IMGUI_CARRIER_BUFFER.0, IMGUI_CARRIER_BUFFER.1, surface)
+    {
         Ok(p) => p,
         Err(e) => {
             error!("Pixels init failed (Options window): {e}");
@@ -730,7 +748,7 @@ fn spawn_options_window(
 
     platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
 
-    let ui_win = UiWindow::new(WindowKind::Options, w, pixels, (1, 1), imgui);
+    let ui_win = UiWindow::new(WindowKind::Options, w, pixels, IMGUI_CARRIER_BUFFER, imgui);
     let id = ui_win.win.id();
     windows.insert(id, ui_win);
     if let Some(win) = windows.get_mut(&id) {

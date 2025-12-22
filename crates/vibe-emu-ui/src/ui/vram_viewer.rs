@@ -201,8 +201,11 @@ impl VramViewerWindow {
             self.bg_map_tex = Some(self.build_bg_map_texture(ppu, renderer, device, queue));
             self.last_frame = frame;
         } else if frame != self.last_frame {
-            let tex_id = self.bg_map_tex.unwrap();
-            if !self.update_bg_map_texture(tex_id, ppu, renderer, queue) {
+            if let Some(tex_id) = self.bg_map_tex {
+                if !self.update_bg_map_texture(tex_id, ppu, renderer, queue) {
+                    self.bg_map_tex = Some(self.build_bg_map_texture(ppu, renderer, device, queue));
+                }
+            } else {
                 self.bg_map_tex = Some(self.build_bg_map_texture(ppu, renderer, device, queue));
             }
             self.last_frame = frame;
@@ -401,8 +404,11 @@ impl VramViewerWindow {
             self.tiles_tex = Some(self.build_tiles_texture(ppu, renderer, device, queue));
             self.tiles_last_frame = frame;
         } else if frame != self.tiles_last_frame {
-            let tex_id = self.tiles_tex.unwrap();
-            if !self.update_tiles_texture(tex_id, ppu, renderer, queue) {
+            if let Some(tex_id) = self.tiles_tex {
+                if !self.update_tiles_texture(tex_id, ppu, renderer, queue) {
+                    self.tiles_tex = Some(self.build_tiles_texture(ppu, renderer, device, queue));
+                }
+            } else {
                 self.tiles_tex = Some(self.build_tiles_texture(ppu, renderer, device, queue));
             }
             self.tiles_last_frame = frame;
@@ -704,8 +710,11 @@ impl VramViewerWindow {
             self.oam_tex = Some(self.build_oam_texture(ppu, renderer, device, queue));
             self.oam_last_frame = frame;
         } else if frame != self.oam_last_frame {
-            let tex_id = self.oam_tex.unwrap();
-            if !self.update_oam_texture(tex_id, ppu, renderer, queue) {
+            if let Some(tex_id) = self.oam_tex {
+                if !self.update_oam_texture(tex_id, ppu, renderer, queue) {
+                    self.oam_tex = Some(self.build_oam_texture(ppu, renderer, device, queue));
+                }
+            } else {
                 self.oam_tex = Some(self.build_oam_texture(ppu, renderer, device, queue));
             }
             self.oam_last_frame = frame;
