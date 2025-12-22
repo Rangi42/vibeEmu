@@ -119,12 +119,27 @@ impl Mmu {
         cgb_revision: CgbRevision,
     ) -> Self {
         let mut timer = Timer::new();
-        // Power-on DIV phase differs between DMG revisions. These values match
-        // the phases measured by mooneye's boot_div acceptance tests so the
-        // first post-boot instruction sequence observes the expected timing.
-        timer.div = match dmg_revision {
-            DmgRevision::Rev0 => 0x1830,
-            DmgRevision::RevA | DmgRevision::RevB | DmgRevision::RevC => 0xABCC,
+        // Power-on DIV phase differs across hardware families/revisions.
+        //
+        // When running without a boot ROM, we start from the post-boot state.
+        // These values match the phases measured by mooneye's boot_div tests so
+        // the first post-boot instruction sequence observes the expected timing.
+        timer.div = if cgb {
+            match cgb_revision {
+                // CGB A-E share a common phase for DIV after boot.
+                CgbRevision::RevA
+                | CgbRevision::RevB
+                | CgbRevision::RevC
+                | CgbRevision::RevD
+                | CgbRevision::RevE => 0x2678,
+                // CGB0 differs from CGB A-E (mooneye misc/boot_div-cgb0).
+                CgbRevision::Rev0 => 0x2884,
+            }
+        } else {
+            match dmg_revision {
+                DmgRevision::Rev0 => 0x1830,
+                DmgRevision::RevA | DmgRevision::RevB | DmgRevision::RevC => 0xABCC,
+            }
         };
 
         let dot_div = timer.div;

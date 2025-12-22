@@ -8,6 +8,40 @@ use vibe_emu_core::{
 const FIB_SEQ: [u8; 6] = [3, 5, 8, 13, 21, 34];
 const FAIL_SEQ: [u8; 6] = [0x42; 6];
 
+fn capture_first_div_reads_cgb_seed(seed_div: u16) -> Vec<u8> {
+    let rom = std::fs::read(common::rom_path(
+        "mooneye-test-suite/misc/boot_div-cgbABCDE.gb",
+    ))
+    .expect("rom not found");
+    let cart = Cartridge::load(rom);
+    assert!(cart.cgb, "expected CGB ROM");
+
+    let mut gb = GameBoy::new_with_revisions(true, DmgRevision::default(), CgbRevision::default());
+    gb.mmu.load_cart(cart);
+
+    gb.mmu.timer.div = seed_div;
+    gb.mmu.dot_div = seed_div;
+
+    let mut div_reads: Vec<u8> = Vec::new();
+    while gb.cpu.cycles < 200_000 {
+        let pc = gb.cpu.pc;
+        let opcode = gb.mmu.read_byte(pc);
+        if opcode == 0xF0 {
+            let imm = gb.mmu.read_byte(pc.wrapping_add(1));
+            if imm == 0x04 {
+                gb.cpu.step(&mut gb.mmu);
+                div_reads.push(gb.cpu.a);
+                if div_reads.len() == 6 {
+                    return div_reads;
+                }
+                continue;
+            }
+        }
+        gb.cpu.step(&mut gb.mmu);
+    }
+    div_reads
+}
+
 fn run_mooneye_quit_protocol<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bool {
     run_mooneye_quit_protocol_with_dmg_revision(rom_path, max_cycles, DmgRevision::default())
 }
@@ -71,6 +105,78 @@ fn run_mooneye_acceptance_with_dmg_revision<P: AsRef<std::path::Path>>(
     let cart = Cartridge::load(rom);
     let mut gb = GameBoy::new_with_revisions(cart.cgb, dmg_revision, CgbRevision::default());
     gb.mmu.load_cart(cart);
+
+    // Optional targeted trace: capture the first few reads of DIV (FF04) so
+    // boot DIV/phase issues are easier to diagnose.
+    let trace_div = rom_path
+        .as_ref()
+        .to_string_lossy()
+        .replace('\\', "/")
+        .ends_with("mooneye-test-suite/misc/boot_div-cgbABCDE.gb");
+    let mut div_reads: Vec<u8> = Vec::new();
+    while gb.cpu.cycles < max_cycles {
+        let pc = gb.cpu.pc;
+        let opcode = gb.mmu.read_byte(pc);
+
+        if trace_div && opcode == 0xF0 {
+            let imm = gb.mmu.read_byte(pc.wrapping_add(1));
+            if imm == 0x04 {
+                gb.cpu.step(&mut gb.mmu);
+                div_reads.push(gb.cpu.a);
+                continue;
+            }
+        }
+
+        if opcode == 0x40 {
+            let regs = [gb.cpu.b, gb.cpu.c, gb.cpu.d, gb.cpu.e, gb.cpu.h, gb.cpu.l];
+            if regs == FIB_SEQ {
+                return true;
+            }
+            if regs == FAIL_SEQ {
+                println!("mooneye quit protocol failed at pc={:04X}", pc);
+                if trace_div {
+                    println!(
+                        "captured DIV reads (LDH A,(FF04)): {:?} (len={})",
+                        div_reads,
+                        div_reads.len()
+                    );
+                    println!(
+                        "initial timer.div high byte estimate now={:02X}",
+                        gb.mmu.timer.read(0xFF04)
+                    );
+                }
+                println!("hram (first 40 bytes): {:?}", &gb.mmu.hram[..40]);
+                println!("serial output (partial): {:?}", gb.mmu.serial.peek_output());
+                return false;
+            }
+        }
+
+        gb.cpu.step(&mut gb.mmu);
+
+        if gb.mmu.serial.peek_output().ends_with(&FIB_SEQ) {
+            break;
+        }
+    }
+
+    let out = gb.mmu.serial.take_output();
+    let success = out.windows(FIB_SEQ.len()).any(|window| window == FIB_SEQ);
+    if !success {
+        println!("serial output: {:?}", out);
+        println!("hram (first 40 bytes): {:?}", &gb.mmu.hram[..40]);
+    }
+    success
+}
+
+fn run_mooneye_acceptance_force_cgb_revision<P: AsRef<std::path::Path>>(
+    rom_path: P,
+    max_cycles: u64,
+    cgb_revision: CgbRevision,
+) -> bool {
+    let rom = std::fs::read(&rom_path).expect("rom not found");
+    let cart = Cartridge::load(rom);
+    let mut gb = GameBoy::new_with_revisions(true, DmgRevision::default(), cgb_revision);
+    gb.mmu.load_cart(cart);
+
     while gb.cpu.cycles < max_cycles {
         let pc = gb.cpu.pc;
         let opcode = gb.mmu.read_byte(pc);
@@ -269,6 +375,26 @@ fn boot_hwio_dmgABCmgb_gb() {
         common::rom_path("mooneye-test-suite/acceptance/boot_hwio-dmgABCmgb.gb"),
         20_000_000,
         DmgRevision::RevC,
+    );
+    assert!(passed, "test failed");
+}
+
+#[test]
+fn misc__boot_div_cgbABCDE_gb() {
+    let passed = run_mooneye_acceptance_force_cgb_revision(
+        common::rom_path("mooneye-test-suite/misc/boot_div-cgbABCDE.gb"),
+        20_000_000,
+        CgbRevision::RevE,
+    );
+    assert!(passed, "test failed");
+}
+
+#[test]
+fn misc__boot_div_cgb0_gb() {
+    let passed = run_mooneye_acceptance_force_cgb_revision(
+        common::rom_path("mooneye-test-suite/misc/boot_div-cgb0.gb"),
+        20_000_000,
+        CgbRevision::Rev0,
     );
     assert!(passed, "test failed");
 }
