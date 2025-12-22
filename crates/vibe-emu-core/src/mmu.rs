@@ -195,7 +195,17 @@ impl Mmu {
         dmg_revision: DmgRevision,
         cgb_revision: CgbRevision,
     ) -> Self {
-        let timer = Timer::new();
+        let mut timer = Timer::new();
+
+        // Power-on DIV phase differs across hardware families/revisions.
+        // When executing a real boot ROM, this initial phase affects the
+        // divider value observed by early cart code (e.g. whichboot).
+        if cgb && matches!(cgb_revision, CgbRevision::RevE) {
+            // Seed chosen to match whichboot's timing reference for CGB
+            // (LY=$90, DIV=$1E, frac=$28) when running the RevE boot ROM.
+            timer.div = 0x0104;
+        }
+
         let dot_div = timer.div;
 
         let ppu = Ppu::new_with_mode(cgb);

@@ -194,6 +194,37 @@ pub fn workspace_root() -> PathBuf {
 }
 
 #[allow(dead_code)]
+pub fn bootroms_dir() -> PathBuf {
+    let dir = workspace_root().join("bootroms");
+    fs::create_dir_all(&dir).expect("failed to create bootroms directory");
+    dir
+}
+
+fn ensure_bootrom(url: &str, filename: &str) -> PathBuf {
+    let path = bootroms_dir().join(filename);
+    if !path.exists() {
+        download_file(url, &path);
+    }
+    path
+}
+
+#[allow(dead_code)]
+pub fn dmg_boot_rom_path() -> PathBuf {
+    ensure_bootrom(
+        "https://gbdev.gg8.se/files/roms/bootroms/dmg_boot.bin",
+        "dmg_boot.bin",
+    )
+}
+
+#[allow(dead_code)]
+pub fn cgb_boot_rom_path() -> PathBuf {
+    ensure_bootrom(
+        "https://gbdev.gg8.se/files/roms/bootroms/cgb_boot.bin",
+        "cgb_boot.bin",
+    )
+}
+
+#[allow(dead_code)]
 pub fn load_png_rgb<P: AsRef<Path>>(path: P) -> (u32, u32, Arc<[[u8; 3]]>) {
     let path = path.as_ref();
 

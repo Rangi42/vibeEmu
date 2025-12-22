@@ -311,7 +311,25 @@ impl Cpu {
             }
 
             self.cycles += 1;
-            let _ = mmu.ppu.step(1, &mut mmu.if_reg);
+
+            let prev_dot_div = mmu.dot_div;
+            mmu.dot_div = mmu.dot_div.wrapping_add(1);
+            let curr_dot_div = mmu.dot_div;
+
+            // Keep APU/serial clock domains consistent with the dot clock.
+            // Note: DIV/TIMA remain frozen during this stall.
+            mmu.apu.step(1);
+            mmu.apu.tick(prev_dot_div, curr_dot_div, self.double_speed);
+            mmu.serial.step(
+                prev_dot_div,
+                curr_dot_div,
+                self.double_speed,
+                &mut mmu.if_reg,
+            );
+
+            if mmu.ppu.step(1, &mut mmu.if_reg) {
+                mmu.hdma_hblank_transfer();
+            }
             mmu.dma_step(1);
             dots += 1;
         }

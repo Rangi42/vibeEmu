@@ -225,6 +225,120 @@ fn stop_speed_switch() {
 }
 
 #[test]
+fn speed_switch_stall_advances_dot_div_but_not_cpu_div() {
+    // STOP 0x00 ; NOP
+    let program = vec![0x10, 0x00, 0x00];
+    let mut cpu = Cpu::new();
+    cpu.pc = 0;
+    let mut mmu = Mmu::new_with_mode(true);
+    mmu.load_cart(Cartridge::load(program));
+    mmu.key1 = 0x01; // request speed switch
+    mmu.timer.div = 0x4321;
+    mmu.dot_div = 0x1234;
+
+    let mode_clock_before = mmu.ppu.mode_clock();
+
+    cpu.step(&mut mmu); // STOP (switch speed)
+
+    assert!(cpu.double_speed);
+    // STOP resets CPU divider; the speed-switch stall should not advance it.
+    assert_eq!(mmu.timer.div, 0);
+    // The stall advances the PPU by dot cycles; dot_div should track that.
+    assert_ne!(mmu.ppu.mode_clock(), mode_clock_before);
+    assert_ne!(mmu.dot_div, 0);
+}
+
+#[test]
+fn gdma_stall_advances_cpu_div() {
+    // While a CGB GDMA stall is active, the CPU is blocked from executing
+    // instructions, but time still advances (including the CPU divider).
+    let program = vec![0x00]; // NOP (won't execute during the stall)
+    let mut cpu = Cpu::new();
+    cpu.pc = 0;
+    let mut mmu = Mmu::new_with_mode(true);
+    mmu.load_cart(Cartridge::load(program));
+
+    // Point GDMA at WRAM0 -> VRAM.
+    mmu.wram[0][0] = 0xAB;
+    mmu.write_byte(0xFF51, 0xC0); // src hi
+    mmu.write_byte(0xFF52, 0x00); // src lo (low nibble ignored)
+    mmu.write_byte(0xFF53, 0x80); // dst hi
+    mmu.write_byte(0xFF54, 0x00); // dst lo (low nibble ignored)
+
+    mmu.timer.div = 0;
+    let div_before = mmu.timer.div;
+
+    // Start GDMA for 1 block (0x10 bytes). Bit7=0 => GDMA.
+    mmu.write_byte(0xFF55, 0x00);
+    assert!(mmu.gdma_active());
+
+    // In normal speed, each block stalls for 8 M-cycles. Each M-cycle
+    // advances the CPU divider by 4.
+    for _ in 0..8 {
+        cpu.step(&mut mmu);
+    }
+    assert!(!mmu.gdma_active());
+    assert_eq!(mmu.timer.div.wrapping_sub(div_before), 8 * 4);
+}
+
+#[test]
+fn cgb_bootrom_timing_matches_whichboot_capture() {
+    use std::path::PathBuf;
+
+    use vibe_emu_core::{
+        gameboy::GameBoy,
+        hardware::{CgbRevision, DmgRevision},
+    };
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+
+    let boot = std::fs::read(root.join("cgbE_boot.bin")).expect("cgbE_boot.bin not found");
+    let rom = std::fs::read(root.join("whichboot-v1_1").join("whichboot.gb"))
+        .expect("whichboot.gb not found");
+
+    let mut gb =
+        GameBoy::new_power_on_with_revisions(true, DmgRevision::default(), CgbRevision::RevE);
+    gb.mmu.load_boot_rom(boot);
+    gb.mmu.load_cart(Cartridge::load(rom));
+
+    // whichboot captures LY and the visible + fractional part of DIV very
+    // early (right after entry) and stores them in HRAM.
+    // Note: after the capture routine returns, whichboot adjusts the
+    // fractional value and may decrement `div_store` via `dec [hl]`.
+    // Therefore, we assert the values *after* that correction has completed.
+    //
+    // A convenient sync point is when whichboot turns off the LCD:
+    // `ldh [rLCDC], a` (E0 40), which occurs after the post-capture math.
+    //
+    // Expected triplet for CGB is (LY=$90, DIV=$1E, frac=$28) per whichboot's
+    // `TIMING_REFERENCES` table.
+    let mut steps = 0u32;
+    while steps < 2_000_000 {
+        let pc = gb.cpu.pc;
+        let opcode = gb.mmu.read_byte(pc);
+
+        let is_lcdc_off_write = opcode == 0xE0 && gb.mmu.read_byte(pc.wrapping_add(1)) == 0x40;
+
+        gb.cpu.step(&mut gb.mmu);
+        steps += 1;
+
+        if !gb.mmu.boot_mapped && is_lcdc_off_write {
+            let ly = gb.mmu.hram[0x05];
+            let div = gb.mmu.hram[0x06];
+            let frac = gb.mmu.hram[0x07];
+            assert_eq!(ly, 0x90);
+            assert_eq!(div, 0x1E);
+            assert_eq!(frac, 0x28);
+            return;
+        }
+    }
+
+    panic!("whichboot did not reach LCDC-off sync point in time (steps={steps})");
+}
+
+#[test]
 fn double_speed_timer_scaling() {
     // STOP to switch speed, then NOP
     let program = vec![0x10, 0x00, 0x00];

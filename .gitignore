@@ -5,4 +5,5 @@
 *.mobile
 *.sym
 test_roms/
+bootroms/
 imgui.ini

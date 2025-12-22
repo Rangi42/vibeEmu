@@ -13,12 +13,12 @@ const MAX_CYCLES: u64 = 80_000_000;
 
 // BullyGB should emit some serial output early; this is just to confirm the ROM
 // is using serial in our harness at all.
-const SERIAL_PROBE_WALL_TIME: Duration = Duration::from_secs(3);
-const SERIAL_PROBE_CYCLES: u64 = 5_000_000;
+const SERIAL_PROBE_WALL_TIME: Duration = Duration::from_secs(20);
+const SERIAL_PROBE_CYCLES: u64 = 50_000_000;
 
 // If the ROM stops producing new serial characters for long enough,
 // assume it has locked up (BullyGB does `jr @` after printing a result).
-const SERIAL_IDLE_CYCLES: u64 = 2_000_000;
+const SERIAL_IDLE_CYCLES: u64 = 20_000_000;
 
 fn serial_contains_marker(serial: &[u8], checked_up_to: &mut usize, marker: &[u8]) -> bool {
     let lookbehind = marker.len().saturating_sub(1);
@@ -33,22 +33,35 @@ fn run_bullygb(mode_cgb: bool) {
     let rom_bytes = std::fs::read(common::rom_path("bullygb/bullygb-v1.2.gb"))
         .expect("bullygb-v1.2.gb not found (download should happen automatically)");
 
+    let boot_rom_path = if mode_cgb {
+        common::cgb_boot_rom_path()
+    } else {
+        common::dmg_boot_rom_path()
+    };
+    let boot_rom_bytes = std::fs::read(&boot_rom_path).expect("boot ROM not found");
+
     let cart = Cartridge::load(rom_bytes);
 
-    // Force DMG/CGB mode explicitly (even if the ROM header is CGB-compatible).
+    // Force DMG/CGB mode explicitly (even if the ROM header is CGB-compatible)
+    // and start from a power-on state so we can execute the real boot ROM.
     let mut gb = if mode_cgb {
-        GameBoy::new_with_mode(true)
+        GameBoy::new_power_on_with_revisions(true, DmgRevision::default(), Default::default())
     } else {
-        GameBoy::new_with_revisions(false, DmgRevision::default(), Default::default())
+        GameBoy::new_power_on_with_revisions(false, DmgRevision::default(), Default::default())
     };
     gb.mmu.load_cart(cart);
+    gb.mmu.load_boot_rom(boot_rom_bytes);
 
     let start = Instant::now();
 
     // 1) Confirm the ROM emits *something* on serial.
+    // Boot ROM intros can delay the first serial output.
+    let probe_cycles = SERIAL_PROBE_CYCLES.saturating_mul(4);
+    let probe_wall_time = SERIAL_PROBE_WALL_TIME.saturating_mul(2);
+
     let probe_start = Instant::now();
-    while gb.cpu.cycles < SERIAL_PROBE_CYCLES {
-        if probe_start.elapsed() > SERIAL_PROBE_WALL_TIME {
+    while gb.cpu.cycles < probe_cycles {
+        if probe_start.elapsed() > probe_wall_time {
             break;
         }
         gb.cpu.step(&mut gb.mmu);
