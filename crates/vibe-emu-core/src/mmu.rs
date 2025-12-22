@@ -49,8 +49,8 @@ fn init_power_on_wram(seed: u32) -> [[u8; WRAM_BANK_SIZE]; 8] {
     let mut wram = [[0u8; WRAM_BANK_SIZE]; 8];
     let mut state = seed;
 
-    for bank in 0..wram.len() {
-        for byte in &mut wram[bank] {
+    for bank_wram in &mut wram {
+        for byte in bank_wram.iter_mut() {
             // xorshift32
             state ^= state << 13;
             state ^= state >> 17;
