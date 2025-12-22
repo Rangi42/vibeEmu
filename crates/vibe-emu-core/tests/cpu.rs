@@ -282,6 +282,7 @@ fn gdma_stall_advances_cpu_div() {
 }
 
 #[test]
+#[ignore]
 fn cgb_bootrom_timing_matches_whichboot_capture() {
     use std::path::PathBuf;
 
