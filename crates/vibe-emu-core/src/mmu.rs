@@ -1060,14 +1060,15 @@ impl Mmu {
     }
 
     pub fn reset_div(&mut self) {
-        let prev_dot_div = self.dot_div;
-        self.dot_div = 0;
+        // rDIV reset affects the CPU divider (timer.div). The PPU/APU dot clock
+        // domain keeps running and is not reset by writes to FF04.
+        let prev_div = self.timer.div;
 
         // DIV/TIMA are derived from the CPU clock domain.
         self.timer.reset_div(&mut self.if_reg);
 
         let double_speed = self.key1 & 0x80 != 0;
-        self.apu.on_div_reset(prev_dot_div, double_speed);
+        self.apu.on_div_reset(prev_div, double_speed);
     }
 
     fn tick(&mut self, m_cycles: u32) {

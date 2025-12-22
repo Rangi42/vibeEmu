@@ -277,7 +277,12 @@ impl Cpu {
             cart.step_rtc(cpu_cycles);
         }
 
+        let prev_cpu_div = mmu.timer.div;
         mmu.timer.step(cpu_cycles, &mut mmu.if_reg);
+        let curr_cpu_div = mmu.timer.div;
+
+        mmu.apu
+            .tick_frame_sequencer(prev_cpu_div, curr_cpu_div, self.double_speed);
         // Advance 2 MHz domain first so duty edges and suppression changes
         // are visible to the subsequent 1 MHz staging/PCM update in the
         // same CPU step (aligns with the APU's internal ordering for audio updates).

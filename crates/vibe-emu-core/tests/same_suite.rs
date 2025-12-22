@@ -56,6 +56,16 @@ fn run_same_suite<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bo
     let ok = out.len() >= 6 && out[0..6] == FIB_SEQ;
     if !ok && std::env::var_os("VIBEEMU_LOG_SERIAL").is_some() {
         eprintln!("same suite output: {:02X?}", out);
+
+        // SameSuite stores results at $C000 and sets RESULT_CODE at $CFFE.
+        // Dump a fixed window for quick diagnosis.
+        let result_code = gb.mmu.read_byte(0xCFFE);
+        let mut results = [0u8; 64];
+        for (i, b) in results.iter_mut().enumerate() {
+            *b = gb.mmu.read_byte(0xC000 + i as u16);
+        }
+        eprintln!("same suite RESULT_CODE: 0x{result_code:02X}");
+        eprintln!("same suite results[0xC000..0xC040]: {:02X?}", results);
     }
     ok
 }

@@ -1310,14 +1310,87 @@ impl Apu {
         (self.lf_div_counter & 0x3) as u8
     }
 
-    pub fn on_div_reset(&mut self, prev_div: u16, _double_speed: bool) {
-        let bit = 12;
+    pub fn on_div_reset(&mut self, prev_div: u16, double_speed: bool) {
+        // APU frame sequencer is clocked by DIV bit 4 in single-speed and DIV
+        // bit 5 in double-speed. Our `prev_div` is the internal 16-bit divider
+        // (DIV register is the upper 8 bits), so these correspond to bits 12/13.
+        let bit = if double_speed { 13 } else { 12 };
         let prev_bit = (prev_div >> bit) & 1;
-        self.lf_div_counter = 0;
-        self.lf_div = 0;
-        self.mhz2_residual = 0;
         if prev_bit == 1 {
             self.handle_div_event();
+        }
+    }
+
+    fn handle_div_rising_edge(&mut self) {
+        // Rising edge (secondary event): if countdown is zero, raise clock and reload countdown from period.
+        if self.ch1.active && self.ch1_env_countdown == 0 {
+            let nrx2 = self.regs[0x02]; // NR12
+            if nrx2 & 0x07 != 0 {
+                Apu::set_envelope_clock(
+                    &mut self.ch1_env_clock,
+                    true,
+                    nrx2 & 0x08 != 0,
+                    self.ch1.envelope.volume,
+                );
+                self.ch1_env_countdown = nrx2 & 0x07;
+            }
+        }
+        if self.ch2.active && self.ch2_env_countdown == 0 {
+            let nrx2 = self.regs[0x07]; // NR22
+            if nrx2 & 0x07 != 0 {
+                Apu::set_envelope_clock(
+                    &mut self.ch2_env_clock,
+                    true,
+                    nrx2 & 0x08 != 0,
+                    self.ch2.envelope.volume,
+                );
+                self.ch2_env_countdown = nrx2 & 0x07;
+            }
+        }
+        if self.ch4.enabled && self.ch4.volume_countdown == 0 {
+            let nrx2 = self.regs[NR42_IDX]; // NR42
+            if nrx2 & 0x07 != 0 {
+                Apu::set_envelope_clock(
+                    &mut self.ch4_env_clock,
+                    true,
+                    nrx2 & 0x08 != 0,
+                    self.ch4.envelope.volume,
+                );
+                self.ch4.volume_countdown = nrx2 & 0x07;
+            }
+        }
+    }
+
+    /// Tick the DIV-driven APU frame sequencer.
+    ///
+    /// `div_prev`/`div_now` are in the CPU divider domain (the same internal
+    /// 16-bit divider that backs rDIV). This is important during STOP-triggered
+    /// CGB speed switching, where DIV/TIMA can be frozen while the APU's dot
+    /// clock continues.
+    pub fn tick_frame_sequencer(&mut self, div_prev: u16, div_now: u16, double_speed: bool) {
+        if self.nr52 & 0x80 == 0 {
+            return;
+        }
+
+        let bit = if double_speed { 13 } else { 12 };
+        let steps = div_now.wrapping_sub(div_prev);
+        if steps == 0 {
+            return;
+        }
+
+        let mut div = div_prev;
+        for _ in 0..steps {
+            let prev_bit = (div >> bit) & 1;
+            div = div.wrapping_add(1);
+            let curr_bit = (div >> bit) & 1;
+
+            if prev_bit == 1 && curr_bit == 0 {
+                self.handle_div_event();
+            }
+
+            if prev_bit == 0 && curr_bit == 1 {
+                self.handle_div_rising_edge();
+            }
         }
     }
 
@@ -1609,18 +1682,10 @@ impl Apu {
             ch.refresh_sample_length();
             ch.did_tick = false;
 
-            let mut force_unsurpressed = false;
+            let force_unsurpressed = false;
             let mut extra_delay = 0;
 
             if !was_active {
-                if de_window && (value & 0x04) == 0 {
-                    let window = ((prev_countdown - prev_delay) / 2) & 0x400;
-                    if window & 0x400 == 0 {
-                        ch.duty_pos = (ch.duty_pos + 1) & 7;
-                        force_unsurpressed = true;
-                    }
-                }
-
                 // CGB startup delay is one 2 MHz tick shorter in normal speed but
                 // matches DMG timing when running in double-speed mode.
                 let base_delay = if self.cgb_mode {
@@ -1931,79 +1996,26 @@ impl Apu {
         }
     }
 
-    /// Tick the APU once per CPU cycle. `div_prev` is the DIV value at the
-    /// beginning of the current machine step. In normal speed a machine step
-    /// spans four CPU cycles; in double-speed it spans two.
-    pub fn tick(&mut self, div_prev: u16, _div_now: u16, double_speed: bool) {
+    /// Tick the APU once per machine step in the dot clock domain.
+    ///
+    /// This advances the 1 MHz staging pipeline and PCM registers. The
+    /// frame sequencer is clocked separately via `tick_frame_sequencer`.
+    pub fn tick(&mut self, div_prev: u16, div_now: u16, double_speed: bool) {
         // Store the current CPU speed so trigger_square can select the
         // correct initial delay when a channel is triggered.
         self.double_speed = double_speed;
-        // Double-speed mode halves the CPU cycles per M-cycle, but we still emit
-        // one 1 MHz stage tick every two CPU cycles so the staging pipeline aligns to the 1 MHz domain.
-        let ticks = if double_speed { 2 } else { 4 };
-        for i in 0..ticks {
+        // Derive how many dot cycles elapsed in this step from the divider.
+        // This lets callers tick the APU in larger chunks or single-dot stalls.
+        let ticks = div_now.wrapping_sub(div_prev);
+        if ticks == 0 {
+            return;
+        }
+        for _ in 0..ticks {
             // Advance the 1 MHz sample pipeline for pulse and wave channels.
             self.ch1.tick_1mhz();
             self.ch2.tick_1mhz();
             self.ch3.tick_1mhz();
             self.ch4.tick_1mhz();
-
-            // Determine if the frame sequencer should step. The sequencer is
-            // clocked by DIV bit 4 (bit 5 in double speed) on its falling edge.
-            // `div_prev` contains the internal 16-bit divider value; DIV's bit
-            // 4 corresponds to bit 12 of this counter. Likewise, in double
-            // speed mode bit 5 corresponds to bit 13. We derive intermediate
-            // DIV values by incrementing `div_prev`.
-            let prev = div_prev.wrapping_add(i as u16);
-            let curr = div_prev.wrapping_add((i + 1) as u16);
-            let bit = 12;
-            let prev_bit = (prev >> bit) & 1;
-            let curr_bit = (curr >> bit) & 1;
-            if prev_bit == 1 && curr_bit == 0 {
-                // Falling edge (DIV event): advance frame sequencer, decrement envelope countdowns every 8 DIV events,
-                // and if any envelope clock is high, tick once now.
-                self.handle_div_event();
-            }
-
-            if prev_bit == 0 && curr_bit == 1 {
-                // Rising edge (secondary event): if countdown is zero, raise clock and reload countdown from period
-                if self.ch1.active && self.ch1_env_countdown == 0 {
-                    let nrx2 = self.regs[0x02]; // NR12
-                    if nrx2 & 0x07 != 0 {
-                        Apu::set_envelope_clock(
-                            &mut self.ch1_env_clock,
-                            true,
-                            nrx2 & 0x08 != 0,
-                            self.ch1.envelope.volume,
-                        );
-                        self.ch1_env_countdown = nrx2 & 0x07;
-                    }
-                }
-                if self.ch2.active && self.ch2_env_countdown == 0 {
-                    let nrx2 = self.regs[0x07]; // NR22
-                    if nrx2 & 0x07 != 0 {
-                        Apu::set_envelope_clock(
-                            &mut self.ch2_env_clock,
-                            true,
-                            nrx2 & 0x08 != 0,
-                            self.ch2.envelope.volume,
-                        );
-                        self.ch2_env_countdown = nrx2 & 0x07;
-                    }
-                }
-                if self.ch4.enabled && self.ch4.volume_countdown == 0 {
-                    let nrx2 = self.regs[NR42_IDX]; // NR42
-                    if nrx2 & 0x07 != 0 {
-                        Apu::set_envelope_clock(
-                            &mut self.ch4_env_clock,
-                            true,
-                            nrx2 & 0x08 != 0,
-                            self.ch4.envelope.volume,
-                        );
-                        self.ch4.volume_countdown = nrx2 & 0x07;
-                    }
-                }
-            }
 
             // Update PCM12/PCM34 after each 1 MHz tick.
             self.refresh_pcm_regs();

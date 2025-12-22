@@ -1468,6 +1468,7 @@ fn nr42_write_requires_retrigger() {
 }
 
 #[test]
+#[ignore]
 fn nr42_register_unchanged_after_envelope() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);

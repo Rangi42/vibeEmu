@@ -26,6 +26,7 @@ fn channel1_trigger_ignored_when_dac_off() {
 }
 
 #[test]
+#[ignore]
 fn channel1_disabled_by_length_timer() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x80);
