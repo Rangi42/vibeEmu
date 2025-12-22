@@ -74,6 +74,7 @@ pub struct Cpu {
     ime_enable_delay: u8,
     halt_pc: Option<u16>,
     halt_pending: u8,
+    dma_conflict_active: bool,
 }
 
 impl Cpu {
@@ -112,6 +113,7 @@ impl Cpu {
             ime_enable_delay: 0,
             halt_pc: None,
             halt_pending: 0,
+            dma_conflict_active: false,
         }
     }
 
@@ -150,6 +152,7 @@ impl Cpu {
                 ime_enable_delay: 0,
                 halt_pc: None,
                 halt_pending: 0,
+                dma_conflict_active: false,
             }
         } else {
             let (a, f, b, c, d, e, h, l) = match dmg_revision {
@@ -195,6 +198,7 @@ impl Cpu {
                 ime_enable_delay: 0,
                 halt_pc: None,
                 halt_pending: 0,
+                dma_conflict_active: false,
             }
         }
     }
@@ -354,7 +358,13 @@ impl Cpu {
     #[inline(always)]
     fn read8(&mut self, mmu: &mut crate::mmu::Mmu, addr: u16) -> u8 {
         mmu.last_cpu_pc = Some(self.pc);
-        let val = mmu.read_byte(addr);
+        let val = if self.dma_conflict_active
+            && ((0xA000..=0xBFFF).contains(&addr) || (0xC000..=0xFDFF).contains(&addr))
+        {
+            mmu.oam_dma_bus_conflict_byte()
+        } else {
+            mmu.read_byte(addr)
+        };
         self.tick(mmu, 1);
         val
     }
@@ -369,7 +379,11 @@ impl Cpu {
     #[inline(always)]
     fn write8(&mut self, mmu: &mut crate::mmu::Mmu, addr: u16, val: u8) {
         mmu.last_cpu_pc = Some(self.pc);
-        mmu.write_byte(addr, val);
+        if !(self.dma_conflict_active
+            && ((0xA000..=0xBFFF).contains(&addr) || (0xC000..=0xFDFF).contains(&addr)))
+        {
+            mmu.write_byte(addr, val);
+        }
         self.tick(mmu, 1);
     }
 
@@ -617,6 +631,9 @@ impl Cpu {
         // Default: rendering reads VRAM normally.
         mmu.ppu.set_render_vram_blocked(false);
 
+        // DMA bus-conflict handling is assessed per instruction.
+        self.dma_conflict_active = false;
+
         if self.stopped {
             // In CGB mode, STOP keeps the PPU running, but it cannot access VRAM.
             // Force VRAM reads during rendering to return 0x00 so the output
@@ -640,12 +657,23 @@ impl Cpu {
         }
 
         let enable_after = self.ime_enable_delay == 1;
+        let opcode_pc = self.pc;
         let opcode = if self.halt_bug {
             self.halt_bug = false;
             self.read8(mmu, self.pc)
         } else {
             self.fetch8(mmu)
         };
+
+        // DMG: when executing from ROM during a ROM-sourced OAM DMA transfer,
+        // some stack/RAM accesses observe the DMA bus instead of actual RAM.
+        if !mmu.is_cgb()
+            && (0x0000..=0x7FFF).contains(&opcode_pc)
+            && mmu.oam_dma_in_progress()
+            && mmu.oam_dma_source_in_rom()
+        {
+            self.dma_conflict_active = true;
+        }
         match opcode {
             0x00 => {}
             0x01 => {

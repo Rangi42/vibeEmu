@@ -324,55 +324,18 @@ impl Mmu {
     fn read_byte_inner(&mut self, addr: u16, allow_dma: bool) -> u8 {
         if !allow_dma && self.dma_cycles > 0 {
             match addr {
-                // During OAM DMA, CPU reads from the ROM bus observe a bus
-                // conflict: the value on the data bus is the byte currently
-                // being transferred by the DMA engine.
+                // If the DMA engine is sourcing from the ROM bus, CPU reads from ROM can
+                // observe the DMA-transferred byte (bus conflict).
                 0x0000..=0x7FFF => {
-                    // Only apply this when the DMA engine is sourcing data
-                    // from the ROM bus itself. If the DMA source is elsewhere
-                    // (WRAM/VRAM/etc), treat ROM reads as normal.
-                    if (0x0000..=0x7FFF).contains(&self.dma_source) {
+                    if self.oam_dma_source_in_rom() {
                         return self.oam_dma_bus_conflict_byte();
                     }
                 }
-                // Allow WRAM/Echo and all I/O/HRAM accesses during the
-                // transfer. These regions remain readable/writable because
-                // they reside on buses that stay available even while OAM DMA
-                // monopolizes the VRAM/OAM bus.
+                // Allow ROM, WRAM/Echo and all I/O/HRAM accesses during the transfer.
                 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
-                0xFE00..=0xFEFF => {
-                    #[cfg(feature = "ppu-trace")]
-                    {
-                        let pc_str = self
-                            .last_cpu_pc
-                            .map(|p| format!("{:04X}", p))
-                            .unwrap_or_else(|| "<none>".to_string());
-                        eprintln!(
-                            "[DMA] read blocked (OAM) addr={:04X} dma_cycles={} pc={}",
-                            addr, self.dma_cycles, pc_str
-                        );
-                    }
-                    return 0xFF;
-                }
-                _ => {
-                    #[cfg(feature = "ppu-trace")]
-                    {
-                        let region = if (0x8000..=0x9FFF).contains(&addr) {
-                            "VRAM"
-                        } else {
-                            "OTHER"
-                        };
-                        let pc_str = self
-                            .last_cpu_pc
-                            .map(|p| format!("{:04X}", p))
-                            .unwrap_or_else(|| "<none>".to_string());
-                        eprintln!(
-                            "[DMA] read blocked ({}) addr={:04X} dma_cycles={} dma_src={:04X} pc={}",
-                            region, addr, self.dma_cycles, self.dma_source, pc_str
-                        );
-                    }
-                    return 0xFF;
-                }
+                // OAM/VRAM buses are blocked.
+                0xFE00..=0xFEFF => return 0xFF,
+                _ => return 0xFF,
             }
         }
         match addr {
@@ -628,7 +591,15 @@ impl Mmu {
         self.read_byte_inner(addr, true)
     }
 
-    fn oam_dma_bus_conflict_byte(&mut self) -> u8 {
+    pub(crate) fn oam_dma_in_progress(&self) -> bool {
+        self.dma_cycles > 0
+    }
+
+    pub(crate) fn oam_dma_source_in_rom(&self) -> bool {
+        (0x0000..=0x7FFF).contains(&self.dma_source)
+    }
+
+    pub(crate) fn oam_dma_bus_conflict_byte(&mut self) -> u8 {
         // Approximate the value visible on the CPU data bus during OAM DMA.
         // The BullyGB `dmabusconflict` test expects ROM reads to reflect the
         // DMA-transferred byte rather than always reading as $FF.
@@ -651,39 +622,8 @@ impl Mmu {
         if self.dma_cycles > 0 {
             match addr {
                 0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
-                0xFE00..=0xFEFF => {
-                    #[cfg(feature = "ppu-trace")]
-                    {
-                        let pc_str = self
-                            .last_cpu_pc
-                            .map(|p| format!("{:04X}", p))
-                            .unwrap_or_else(|| "<none>".to_string());
-                        eprintln!(
-                            "[DMA] write blocked (OAM) addr={:04X} val={:02X} dma_cycles={} pc={}",
-                            addr, val, self.dma_cycles, pc_str
-                        );
-                    }
-                    return;
-                }
-                _ => {
-                    #[cfg(feature = "ppu-trace")]
-                    {
-                        let region = if (0x8000..=0x9FFF).contains(&addr) {
-                            "VRAM"
-                        } else {
-                            "OTHER"
-                        };
-                        let pc_str = self
-                            .last_cpu_pc
-                            .map(|p| format!("{:04X}", p))
-                            .unwrap_or_else(|| "<none>".to_string());
-                        eprintln!(
-                            "[DMA] write blocked ({}) addr={:04X} val={:02X} dma_cycles={} dma_src={:04X} pc={}",
-                            region, addr, val, self.dma_cycles, self.dma_source, pc_str
-                        );
-                    }
-                    return;
-                }
+                0xFE00..=0xFEFF => return,
+                _ => return,
             }
         }
 
