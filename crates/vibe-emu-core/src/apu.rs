@@ -142,18 +142,8 @@ impl Sweep {
         self.negate = val & 0x08 != 0;
         self.shift = val & 0x07;
 
-        // Writing a pace of 0 disables further sweep iterations immediately.
-        // When the period changes from 0 to a non-zero value, the timer is
-        // reloaded so that iterations resume without waiting for the next
-        // trigger or sweep step.
-        if new_period == 0 {
-            self.enabled = false;
-        } else if self.period == 0 {
-            self.timer = new_period;
-            self.enabled = self.shift != 0 || new_period != 0;
-        }
-
         self.period = new_period;
+        self.enabled = self.period != 0 || self.shift != 0;
         if old_negate && !self.negate && self.neg_used {
             self.enabled = false;
             return true;
@@ -357,31 +347,36 @@ impl SquareChannel {
             }
         }
     }
-    fn clock_sweep(&mut self) {
+    fn clock_sweep(&mut self) -> bool {
         let mut freq_changed = false;
         if let Some(sweep) = self.sweep.as_mut() {
             if !sweep.enabled {
-                return;
+                return false;
             }
             if sweep.timer > 0 {
                 sweep.timer -= 1;
             }
             if sweep.timer == 0 {
                 sweep.timer = if sweep.period == 0 { 8 } else { sweep.period };
+                if sweep.period == 0 {
+                    return false;
+                }
                 let mut new_freq = sweep.calculate();
+                if sweep.negate {
+                    sweep.neg_used = true;
+                }
                 if new_freq > 2047 {
                     self.enabled = false;
+                    self.active = false;
                     sweep.enabled = false;
                 } else if sweep.shift != 0 {
-                    if sweep.negate {
-                        sweep.neg_used = true;
-                    }
                     sweep.shadow = new_freq;
                     self.frequency = new_freq;
                     freq_changed = true;
                     new_freq = sweep.calculate();
                     if new_freq > 2047 {
                         self.enabled = false;
+                        self.active = false;
                         sweep.enabled = false;
                     }
                 }
@@ -390,6 +385,8 @@ impl SquareChannel {
         if freq_changed {
             self.refresh_sample_length();
         }
+
+        freq_changed
     }
 }
 
@@ -767,7 +764,60 @@ pub struct Apu {
     dmg_revision: DmgRevision,
 }
 
+/// Lightweight snapshot of APU state for test diagnostics.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub struct ApuDebugState {
+    pub nr52: u8,
+    pub ch1_enabled: bool,
+    pub ch1_active: bool,
+    pub ch1_dac_enabled: bool,
+    pub ch1_length: u8,
+    pub ch1_length_enable: bool,
+    pub ch2_enabled: bool,
+    pub ch2_active: bool,
+    pub ch2_dac_enabled: bool,
+    pub ch2_length: u8,
+    pub ch2_length_enable: bool,
+    pub ch3_enabled: bool,
+    pub ch3_dac_enabled: bool,
+    pub ch3_length: u16,
+    pub ch3_length_enable: bool,
+    pub ch4_enabled: bool,
+    pub ch4_dac_enabled: bool,
+    pub ch4_length: u8,
+    pub ch4_length_enable: bool,
+    pub sequencer_step: u8,
+}
+
 impl Apu {
+    /// Returns a snapshot of internal APU state useful for integration-test diagnostics.
+    #[doc(hidden)]
+    pub fn debug_state(&self) -> ApuDebugState {
+        ApuDebugState {
+            nr52: self.nr52,
+            ch1_enabled: self.ch1.enabled,
+            ch1_active: self.ch1.active,
+            ch1_dac_enabled: self.ch1.dac_enabled,
+            ch1_length: self.ch1.length,
+            ch1_length_enable: self.ch1.length_enable,
+            ch2_enabled: self.ch2.enabled,
+            ch2_active: self.ch2.active,
+            ch2_dac_enabled: self.ch2.dac_enabled,
+            ch2_length: self.ch2.length,
+            ch2_length_enable: self.ch2.length_enable,
+            ch3_enabled: self.ch3.enabled,
+            ch3_dac_enabled: self.ch3.dac_enabled,
+            ch3_length: self.ch3.length,
+            ch3_length_enable: self.ch3.length_enable,
+            ch4_enabled: self.ch4.enabled,
+            ch4_dac_enabled: self.ch4.dac_enabled,
+            ch4_length: self.ch4.length,
+            ch4_length_enable: self.ch4.length_enable,
+            sequencer_step: self.sequencer.step,
+        }
+    }
+
     // Keep <= AUDIO_LATENCY_MS of stereo frames in the queue
     fn max_frames_for_rate(rate: u32) -> usize {
         ((rate as usize * AUDIO_LATENCY_MS as usize) / 1000).max(1)
@@ -1005,11 +1055,13 @@ impl Apu {
     }
 
     fn power_off(&mut self) {
+        let nr41 = self.regs[NR41_IDX];
         self.ch1 = SquareChannel::new(true);
         self.ch2 = SquareChannel::new(false);
         self.ch3 = WaveChannel::default();
         self.ch4 = NoiseChannel::default();
         self.regs.fill(0);
+        self.regs[NR41_IDX] = nr41;
         self.nr50 = 0;
         self.nr51 = 0;
         self.disable_output();
@@ -1395,7 +1447,11 @@ impl Apu {
     }
 
     pub fn write_reg(&mut self, addr: u16, val: u8) {
-        if self.nr52 & 0x80 == 0 && addr != 0xFF26 && !(0xFF30..=0xFF3F).contains(&addr) {
+        if self.nr52 & 0x80 == 0
+            && addr != 0xFF26
+            && addr != 0xFF20
+            && !(0xFF30..=0xFF3F).contains(&addr)
+        {
             return;
         }
 
@@ -1457,10 +1513,16 @@ impl Apu {
                 let prev = self.ch1.length_enable;
                 let length_enable = val & 0x40 != 0;
                 self.ch1.write_frequency_high(val);
-                if val & 0x80 != 0 {
-                    self.trigger_square(1);
+                let triggered = val & 0x80 != 0;
+                if triggered && !self.cgb_mode {
+                    self.extra_length_clock_square(prev, length_enable, false, 1);
+                    self.trigger_square(1, prev);
+                } else {
+                    if triggered {
+                        self.trigger_square(1, prev);
+                    }
+                    self.extra_length_clock_square(prev, length_enable, triggered, 1);
                 }
-                self.extra_length_clock_square(prev, length_enable, val & 0x80 != 0, 1);
             }
             0xFF16 => {
                 self.ch2.write_duty(val >> 6);
@@ -1496,10 +1558,16 @@ impl Apu {
                 let prev = self.ch2.length_enable;
                 let length_enable = val & 0x40 != 0;
                 self.ch2.write_frequency_high(val);
-                if val & 0x80 != 0 {
-                    self.trigger_square(2);
+                let triggered = val & 0x80 != 0;
+                if triggered && !self.cgb_mode {
+                    self.extra_length_clock_square(prev, length_enable, false, 2);
+                    self.trigger_square(2, prev);
+                } else {
+                    if triggered {
+                        self.trigger_square(2, prev);
+                    }
+                    self.extra_length_clock_square(prev, length_enable, triggered, 2);
                 }
-                self.extra_length_clock_square(prev, length_enable, val & 0x80 != 0, 2);
             }
             0xFF1A => {
                 self.ch3.dac_enabled = val & 0x80 != 0;
@@ -1540,12 +1608,20 @@ impl Apu {
                 self.ch3.frequency = (self.ch3.frequency & 0xFF) | (((val & 0x07) as u16) << 8);
                 self.ch3.sample_length =
                     (self.ch3.sample_length & 0xFF) | (((val & 0x07) as u16) << 8);
-                if val & 0x80 != 0 {
+                let triggered = val & 0x80 != 0;
+                if triggered && !self.cgb_mode {
+                    self.extra_length_clock_wave(prev, length_enable, false);
                     let was_enabled = self.ch3.enabled && self.ch3.dac_enabled;
-                    self.trigger_wave(was_enabled);
+                    self.trigger_wave(was_enabled, prev, length_enable);
                     self.refresh_pcm_regs();
+                } else {
+                    if triggered {
+                        let was_enabled = self.ch3.enabled && self.ch3.dac_enabled;
+                        self.trigger_wave(was_enabled, prev, length_enable);
+                        self.refresh_pcm_regs();
+                    }
+                    self.extra_length_clock_wave(prev, length_enable, triggered);
                 }
-                self.extra_length_clock_wave(prev, length_enable, val & 0x80 != 0);
             }
             0xFF20 => {
                 self.ch4.length = 64 - (val & 0x3F);
@@ -1609,11 +1685,18 @@ impl Apu {
             0xFF23 => {
                 let prev = self.ch4.length_enable;
                 let length_enable = val & 0x40 != 0;
-                if val & 0x80 != 0 {
-                    self.trigger_noise();
+                let triggered = val & 0x80 != 0;
+                if triggered && !self.cgb_mode {
+                    self.extra_length_clock_noise(prev, length_enable, false);
+                    self.trigger_noise(prev, length_enable);
                     self.refresh_pcm_regs();
+                } else {
+                    if triggered {
+                        self.trigger_noise(prev, length_enable);
+                        self.refresh_pcm_regs();
+                    }
+                    self.extra_length_clock_noise(prev, length_enable, triggered);
                 }
-                self.extra_length_clock_noise(prev, length_enable, val & 0x80 != 0);
                 #[cfg(feature = "apu-trace")]
                 self.trace_noise_state("NR44", Some(val));
             }
@@ -1656,12 +1739,12 @@ impl Apu {
         }
     }
 
-    fn trigger_square(&mut self, idx: u8) {
+    fn trigger_square(&mut self, idx: u8, prev_length_enable: bool) {
         let reg_idx = if idx == 1 { 0x04 } else { 0x09 };
         let value = self.regs[reg_idx];
         let length_enable = value & 0x40 != 0;
 
-        let mut freq_updated = false;
+        let freq_updated = false;
         let de_window = self.cgb_mode && self.cgb_revision.supports_de_window();
         {
             let ch = if idx == 1 {
@@ -1793,20 +1876,20 @@ impl Apu {
                         ch.enabled = false;
                         ch.active = false;
                         s.enabled = false;
-                    } else {
-                        if s.negate {
-                            s.neg_used = true;
-                        }
-                        s.shadow = new_freq;
-                        ch.frequency = new_freq;
-                        ch.refresh_sample_length();
-                        freq_updated = true;
+                    }
+                    if s.negate {
+                        s.neg_used = true;
                     }
                 }
             }
 
             if ch.length == 0 {
                 ch.length = 64;
+                if ch.length_enable
+                    && (!prev_length_enable || (!self.cgb_mode && (self.sequencer.step & 1) != 0))
+                {
+                    ch.length = 63;
+                }
             }
         }
 
@@ -1820,7 +1903,7 @@ impl Apu {
         }
         self.refresh_pcm_regs();
     }
-    fn trigger_wave(&mut self, was_enabled: bool) {
+    fn trigger_wave(&mut self, was_enabled: bool, prev_length_enable: bool, length_enable: bool) {
         let prev_sample = self.ch3.compute_output();
         let retrigger_bug = !self.cgb_mode && was_enabled && self.ch3.sample_countdown == 0;
         if retrigger_bug {
@@ -1881,12 +1964,27 @@ impl Apu {
             self.ch3.set_pipeline_sample(0);
         }
 
+        self.ch3.length_enable = length_enable;
         if self.ch3.length == 0 {
             self.ch3.length = 256;
+            if self.ch3.length_enable
+                && (!prev_length_enable || (!self.cgb_mode && (self.sequencer.step & 1) != 0))
+            {
+                self.ch3.length = 255;
+            }
         }
     }
 
-    fn trigger_noise(&mut self) {
+    fn trigger_noise(&mut self, prev_length_enable: bool, length_enable: bool) {
+        self.ch4.length_enable = length_enable;
+        if self.ch4.length == 0 {
+            self.ch4.length = 64;
+            if self.ch4.length_enable
+                && (!prev_length_enable || (!self.cgb_mode && (self.sequencer.step & 1) != 0))
+            {
+                self.ch4.length = 63;
+            }
+        }
         self.ch4_env_clock.locked = false;
         self.ch4_env_clock.clock = false;
         self.ch4.volume_countdown = self.regs[NR42_IDX] & 0x07;
@@ -1976,8 +2074,9 @@ impl Apu {
             self.ch4.clock_length();
         }
         if step == 2 || step == 6 {
-            self.ch1.clock_sweep();
-            self.update_ch1_freq_regs();
+            if self.ch1.clock_sweep() {
+                self.update_ch1_freq_regs();
+            }
         }
         if step == 7 {
             // No action here; envelope countdown scheduling is tied to DIV edges below.
