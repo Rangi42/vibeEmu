@@ -4,13 +4,13 @@ use vibe_emu_core::{cartridge::Cartridge, gameboy::GameBoy};
 
 const DMG_PALETTE: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
 
-fn run_rom<P: AsRef<Path>, Q: AsRef<Path>>(rom_path: P, screenshot_path: Q) {
+fn run_rom<P: AsRef<Path>, Q: AsRef<Path>>(rom_path: P, screenshot_path: Q, frames_to_run: u32) {
     let mut gb = GameBoy::new();
     let rom = std::fs::read(rom_path).expect("rom not found");
     gb.mmu.load_cart(Cartridge::load(rom));
 
     let mut frames = 0u32;
-    while frames < 120 {
+    while frames < frames_to_run {
         gb.cpu.step(&mut gb.mmu);
         if gb.mmu.ppu.frame_ready() {
             gb.mmu.ppu.clear_frame_flag();
@@ -34,7 +34,7 @@ fn run_rom<P: AsRef<Path>, Q: AsRef<Path>>(rom_path: P, screenshot_path: Q) {
     }
 }
 
-fn run_single(name: &str) {
+fn run_single_with_frames(name: &str, frames_to_run: u32) {
     let rom = common::roms_dir()
         .join("blargg/dmg_sound/rom_singles")
         .join(name);
@@ -42,7 +42,11 @@ fn run_single(name: &str) {
     let screenshot = common::workspace_root()
         .join("extra_screenshots/blargg/dmg_sound/rom_singles")
         .join(screenshot_name);
-    run_rom(rom, screenshot);
+    run_rom(rom, screenshot, frames_to_run);
+}
+
+fn run_single(name: &str) {
+    run_single_with_frames(name, 120);
 }
 
 #[test]
@@ -51,9 +55,9 @@ fn dmg_sound_01_registers() {
 }
 
 #[test]
-#[ignore]
 fn dmg_sound_02_len_ctr() {
-    run_single("02-len ctr.gb");
+    // This ROM takes longer than 2 seconds to settle on its final PASS/FAIL screen.
+    run_single_with_frames("02-len ctr.gb", 600);
 }
 
 #[test]
