@@ -26,6 +26,8 @@ png = "0.18"
 log = "0.4"
 env_logger = "0.11"
 crossbeam-channel = "0.5"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rfd = { version = "0.16", default-features = false, features = ["gtk3"] }

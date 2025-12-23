@@ -1,6 +1,8 @@
 use crate::GameScaler;
 use crate::ui::vram_viewer::VramViewerWindow;
+use imgui::ConfigFlags;
 use imgui_wgpu::{Renderer, RendererConfig};
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use log::warn;
 use pixels::Pixels;
 use std::sync::Arc;
@@ -10,6 +12,10 @@ use winit::{dpi::PhysicalSize, window::Window};
 pub struct UiWindow {
     /// OS window handle
     pub win: Window,
+    /// Per-window ImGui context stored suspended. Activated only while handling events/rendering.
+    pub imgui: Option<imgui::SuspendedContext>,
+    /// Per-window winit backend for ImGui
+    pub platform: WinitPlatform,
     /// 2D framebuffer
     pub pixels: Pixels,
     /// ImGui renderer tied to this window's device
@@ -36,15 +42,18 @@ pub enum WindowKind {
 
 impl UiWindow {
     /// Create a new UiWindow with its own renderer
-    pub fn new(
-        kind: WindowKind,
-        win: Window,
-        pixels: Pixels,
-        buffer_size: (u32, u32),
-        imgui: &mut imgui::Context,
-    ) -> Self {
+    pub fn new(kind: WindowKind, win: Window, pixels: Pixels, buffer_size: (u32, u32)) -> Self {
+        let suspended = imgui::SuspendedContext::create();
+        let mut imgui = suspended
+            .activate()
+            .expect("no other ImGui context should be active while creating a UiWindow");
+        imgui.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE;
+
+        let mut platform = WinitPlatform::new(&mut imgui);
+        platform.attach_window(imgui.io_mut(), &win, HiDpiMode::Rounded);
+
         let renderer = Renderer::new(
-            imgui,
+            &mut imgui,
             pixels.device(),
             pixels.queue(),
             RendererConfig {
@@ -52,6 +61,8 @@ impl UiWindow {
                 ..Default::default()
             },
         );
+
+        let suspended = imgui.suspend();
         let vram_viewer = if matches!(kind, WindowKind::VramViewer) {
             Some(VramViewerWindow::new())
         } else {
@@ -68,6 +79,8 @@ impl UiWindow {
         };
         Self {
             win,
+            imgui: Some(suspended),
+            platform,
             pixels,
             renderer,
             kind,

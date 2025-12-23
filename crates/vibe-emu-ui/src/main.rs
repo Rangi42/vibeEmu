@@ -4,11 +4,10 @@ mod audio;
 mod keybinds;
 mod scaler;
 mod ui;
+mod ui_config;
 
 use clap::{Parser, ValueEnum};
 use cpal::traits::StreamTrait;
-use imgui::{ConfigFlags, Context as ImguiContext};
-use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use log::{debug, error, info, warn};
 use pixels::{Pixels, SurfaceTexture};
 use rfd::FileDialog;
@@ -32,6 +31,7 @@ use crossbeam_channel as cb;
 use keybinds::KeyBindings;
 pub use scaler::GameScaler;
 use ui::snapshot::UiSnapshot;
+use ui_config::{EmulationMode, UiConfig, WindowSize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum LogLevelArg {
@@ -181,7 +181,9 @@ fn default_keybinds_path() -> std::path::PathBuf {
     std::path::PathBuf::from("keybinds.cfg")
 }
 
-const SCALE: u32 = 2;
+const DEFAULT_WINDOW_SCALE: u32 = 2;
+// Tool windows use a fixed (non-configurable) default scale.
+const SCALE: u32 = DEFAULT_WINDOW_SCALE;
 // The top menu bar consumes vertical space; ensure the default window is tall enough
 // to still fit a 2x (or SCALEx) Game Boy frame below it.
 const DEFAULT_MENU_BAR_HEIGHT_PX: u32 = 32;
@@ -198,14 +200,21 @@ struct UiState {
     spawn_debugger: bool,
     spawn_vram: bool,
     spawn_options: bool,
+    pending_exit: bool,
     pending_action: Option<UiAction>,
     pending_pause: Option<bool>,
+    pending_load_config_update: bool,
+    pending_save_ui_config: bool,
+    pending_window_size: Option<WindowSize>,
+    current_rom_path: Option<std::path::PathBuf>,
+    bootrom_edit_initialized: bool,
+    dmg_bootrom_edit: String,
+    cgb_bootrom_edit: String,
     menu_pause_active: bool,
     menu_resume_armed: bool,
     rebinding: Option<RebindTarget>,
     serial_peripheral: SerialPeripheral,
     pending_serial_peripheral: Option<SerialPeripheral>,
-
     last_main_inner_size: Option<(u32, u32)>,
 }
 
@@ -219,16 +228,16 @@ enum RebindTarget {
 
 enum UiAction {
     Reset,
-    Load(Cartridge),
+    LoadPath(std::path::PathBuf),
 }
 
 #[derive(Clone, Debug)]
 struct LoadConfig {
-    force_dmg: bool,
-    force_cgb: bool,
+    emulation_mode: EmulationMode,
     dmg_neutral: bool,
-    bootrom: Option<Vec<u8>>,
-    use_power_on_state: bool,
+    bootrom_override: Option<Vec<u8>>,
+    dmg_bootrom_path: Option<std::path::PathBuf>,
+    cgb_bootrom_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -244,12 +253,13 @@ enum SerialPeripheral {
     MobileAdapter,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum EmuCommand {
     SetPaused(bool),
     SetSpeed(Speed),
     UpdateInput(u8),
     SetSerialPeripheral(SerialPeripheral),
+    UpdateLoadConfig(LoadConfig),
     Shutdown,
 }
 
@@ -564,25 +574,6 @@ fn parse_mobile_addr(s: &str) -> Result<MobileAddr, String> {
     })
 }
 
-fn sync_imgui_display_for_window(imgui: &mut ImguiContext, window: &winit::window::Window) {
-    // imgui-winit-support updates these fields from *events* and stores them in the global Io.
-    // With multiple OS windows sharing one ImGuiContext, resizing one window can therefore
-    // affect rendering scale in another unless we re-sync before each frame.
-    let scale_factor = window.scale_factor();
-    let hidpi_factor = scale_factor.round();
-
-    imgui.io_mut().display_framebuffer_scale = [hidpi_factor as f32, hidpi_factor as f32];
-
-    // Match imgui-winit-support's `scale_size_from_winit` behavior for HiDpiMode::Rounded:
-    // logical -> physical (window scale) -> logical (hidpi factor)
-    let logical_size = window.inner_size().to_logical::<f64>(scale_factor);
-    let logical_size = logical_size
-        .to_physical::<f64>(scale_factor)
-        .to_logical::<f64>(hidpi_factor);
-
-    imgui.io_mut().display_size = [logical_size.width as f32, logical_size.height as f32];
-}
-
 #[cfg(target_os = "windows")]
 fn enforce_square_corners(attrs: WindowAttributes) -> WindowAttributes {
     use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
@@ -595,16 +586,17 @@ fn enforce_square_corners(attrs: WindowAttributes) -> WindowAttributes {
     attrs
 }
 
-fn desired_main_inner_size(top_padding_px: u32) -> winit::dpi::PhysicalSize<u32> {
-    winit::dpi::PhysicalSize::new(160 * SCALE, top_padding_px + 144 * SCALE)
+fn desired_main_inner_size(scale: u32, top_padding_px: u32) -> winit::dpi::PhysicalSize<u32> {
+    winit::dpi::PhysicalSize::new(160 * scale, top_padding_px + 144 * scale)
 }
 
 fn enforce_main_window_inner_size(
     ui_state: &mut UiState,
     window: &winit::window::Window,
+    scale: u32,
     top_padding_px: u32,
 ) -> bool {
-    let desired = desired_main_inner_size(top_padding_px);
+    let desired = desired_main_inner_size(scale, top_padding_px);
     let desired_pair = (desired.width, desired.height);
     if ui_state.last_main_inner_size == Some(desired_pair) {
         return false;
@@ -617,8 +609,6 @@ fn enforce_main_window_inner_size(
 
 fn spawn_debugger_window(
     event_loop: &ActiveEventLoop,
-    platform: &mut WinitPlatform,
-    imgui: &mut ImguiContext,
     windows: &mut HashMap<winit::window::WindowId, UiWindow>,
 ) {
     use winit::dpi::LogicalSize;
@@ -650,9 +640,7 @@ fn spawn_debugger_window(
         }
     };
 
-    platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
-
-    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, IMGUI_CARRIER_BUFFER, imgui);
+    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, IMGUI_CARRIER_BUFFER);
     let id = ui_win.win.id();
     windows.insert(id, ui_win);
     if let Some(win) = windows.get_mut(&id) {
@@ -662,8 +650,6 @@ fn spawn_debugger_window(
 
 fn spawn_vram_window(
     event_loop: &ActiveEventLoop,
-    platform: &mut WinitPlatform,
-    imgui: &mut ImguiContext,
     windows: &mut HashMap<winit::window::WindowId, UiWindow>,
 ) {
     use winit::dpi::LogicalSize;
@@ -695,15 +681,7 @@ fn spawn_vram_window(
         }
     };
 
-    platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
-
-    let ui_win = UiWindow::new(
-        WindowKind::VramViewer,
-        w,
-        pixels,
-        IMGUI_CARRIER_BUFFER,
-        imgui,
-    );
+    let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, IMGUI_CARRIER_BUFFER);
     let id = ui_win.win.id();
     windows.insert(id, ui_win);
     if let Some(win) = windows.get_mut(&id) {
@@ -713,8 +691,6 @@ fn spawn_vram_window(
 
 fn spawn_options_window(
     event_loop: &ActiveEventLoop,
-    platform: &mut WinitPlatform,
-    imgui: &mut ImguiContext,
     windows: &mut HashMap<winit::window::WindowId, UiWindow>,
 ) {
     use winit::dpi::LogicalSize;
@@ -746,9 +722,7 @@ fn spawn_options_window(
         }
     };
 
-    platform.attach_window(imgui.io_mut(), &w, HiDpiMode::Rounded);
-
-    let ui_win = UiWindow::new(WindowKind::Options, w, pixels, IMGUI_CARRIER_BUFFER, imgui);
+    let ui_win = UiWindow::new(WindowKind::Options, w, pixels, IMGUI_CARRIER_BUFFER);
     let id = ui_win.win.id();
     windows.insert(id, ui_win);
     if let Some(win) = windows.get_mut(&id) {
@@ -838,6 +812,7 @@ fn run_emulator_thread(
         *mobile_time_accum_ns = 0;
     }
 
+    let mut load_config = load_config;
     let mut paused = initial_paused;
     let mut frame_count = 0u64;
     let mut next_frame = Instant::now() + FRAME_TIME;
@@ -894,6 +869,9 @@ fn run_emulator_thread(
                                 &mut mobile_time_accum_ns,
                             );
                         }
+                    }
+                    EmuCommand::UpdateLoadConfig(new_cfg) => {
+                        load_config = new_cfg;
                     }
                     EmuCommand::Shutdown => {
                         if let Ok(mut gb) = gb.lock() {
@@ -1135,16 +1113,16 @@ fn draw_debugger(pixels: &mut Pixels, snapshot: &UiSnapshot, ui: &imgui::Ui) {
         });
 }
 
-fn draw_vram(win: &mut ui::window::UiWindow, snapshot: &UiSnapshot, ui: &imgui::Ui) {
-    let _ = win.pixels.frame_mut();
-    if let Some(viewer) = win.vram_viewer.as_mut() {
-        viewer.ui(
-            ui,
-            &snapshot.ppu,
-            &mut win.renderer,
-            win.pixels.device(),
-            win.pixels.queue(),
-        );
+fn draw_vram(
+    viewer: Option<&mut ui::vram_viewer::VramViewerWindow>,
+    renderer: &mut imgui_wgpu::Renderer,
+    pixels: &mut Pixels,
+    snapshot: &UiSnapshot,
+    ui: &imgui::Ui,
+) {
+    let _ = pixels.frame_mut();
+    if let Some(viewer) = viewer {
+        viewer.ui(ui, &snapshot.ppu, renderer, pixels.device(), pixels.queue());
     } else {
         ui.text("VRAM viewer not initialized");
     }
@@ -1164,7 +1142,7 @@ fn draw_game_screen(pixels: &mut Pixels, frame: &[u32]) {
     }
 }
 
-fn build_ui(state: &mut UiState, ui: &imgui::Ui, mobile_available: bool) {
+fn build_ui(state: &mut UiState, cfg: &mut UiConfig, ui: &imgui::Ui, mobile_available: bool) {
     let mut any_menu_open = false;
 
     // Top menu bar (replaces the old right-click context menu).
@@ -1175,12 +1153,15 @@ fn build_ui(state: &mut UiState, ui: &imgui::Ui, mobile_available: bool) {
                 && let Some(path) = FileDialog::new()
                     .add_filter("Game Boy ROM", &["gb", "gbc"])
                     .pick_file()
-                && let Ok(cart) = Cartridge::from_file(&path)
             {
-                state.pending_action = Some(UiAction::Load(cart));
+                state.current_rom_path = Some(path.clone());
+                state.pending_action = Some(UiAction::LoadPath(path));
             }
             if ui.menu_item("Reset") {
                 state.pending_action = Some(UiAction::Reset);
+            }
+            if ui.menu_item("Exit") {
+                state.pending_exit = true;
             }
         }
 
@@ -1219,6 +1200,50 @@ fn build_ui(state: &mut UiState, ui: &imgui::Ui, mobile_available: bool) {
                 } else {
                     state.serial_peripheral = SerialPeripheral::None;
                     ui.text_disabled("Mobile Adapter GB (unavailable)");
+                }
+            }
+
+            if let Some(_mode_menu) = ui.begin_menu("Hardware Mode") {
+                any_menu_open = true;
+
+                let auto_selected = cfg.emulation_mode == EmulationMode::Auto;
+                if ui.menu_item_config("Auto").selected(auto_selected).build() && !auto_selected {
+                    cfg.emulation_mode = EmulationMode::Auto;
+                    state.pending_load_config_update = true;
+                    state.pending_save_ui_config = true;
+                    if let Some(path) = state.current_rom_path.clone() {
+                        state.pending_action = Some(UiAction::LoadPath(path));
+                    }
+                }
+
+                let dmg_selected = cfg.emulation_mode == EmulationMode::ForceDmg;
+                if ui
+                    .menu_item_config("Force DMG")
+                    .selected(dmg_selected)
+                    .build()
+                    && !dmg_selected
+                {
+                    cfg.emulation_mode = EmulationMode::ForceDmg;
+                    state.pending_load_config_update = true;
+                    state.pending_save_ui_config = true;
+                    if let Some(path) = state.current_rom_path.clone() {
+                        state.pending_action = Some(UiAction::LoadPath(path));
+                    }
+                }
+
+                let cgb_selected = cfg.emulation_mode == EmulationMode::ForceCgb;
+                if ui
+                    .menu_item_config("Force CGB")
+                    .selected(cgb_selected)
+                    .build()
+                    && !cgb_selected
+                {
+                    cfg.emulation_mode = EmulationMode::ForceCgb;
+                    state.pending_load_config_update = true;
+                    state.pending_save_ui_config = true;
+                    if let Some(path) = state.current_rom_path.clone() {
+                        state.pending_action = Some(UiAction::LoadPath(path));
+                    }
                 }
             }
         }
@@ -1267,7 +1292,12 @@ fn build_ui(state: &mut UiState, ui: &imgui::Ui, mobile_available: bool) {
     }
 }
 
-fn draw_options_window(state: &mut UiState, keybinds: &KeyBindings, ui: &imgui::Ui) {
+fn draw_options_window(
+    state: &mut UiState,
+    cfg: &mut UiConfig,
+    keybinds: &KeyBindings,
+    ui: &imgui::Ui,
+) {
     let display = ui.io().display_size;
     let flags = imgui::WindowFlags::NO_MOVE
         | imgui::WindowFlags::NO_RESIZE
@@ -1278,65 +1308,167 @@ fn draw_options_window(state: &mut UiState, keybinds: &KeyBindings, ui: &imgui::
         .size(display, imgui::Condition::Always)
         .flags(flags)
         .build(|| {
-            if let Some(_tabs) = imgui::TabBar::new("OptionsTabs").begin(ui)
-                && let Some(_tab) = imgui::TabItem::new("Keybinds").begin(ui)
-            {
-                ui.text("Click Rebind, then press a key.");
+            if !state.bootrom_edit_initialized {
+                state.bootrom_edit_initialized = true;
+                state.dmg_bootrom_edit = cfg
+                    .dmg_bootrom_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                state.cgb_bootrom_edit = cfg
+                    .cgb_bootrom_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+            }
 
-                if state.rebinding.is_some() {
-                    ui.text_colored([1.0, 0.8, 0.2, 1.0], "Waiting for key...");
-                    ui.same_line();
-                    if ui.button("Cancel") {
-                        state.rebinding = None;
+            if let Some(_tabs) = imgui::TabBar::new("OptionsTabs").begin(ui) {
+                if let Some(_tab) = imgui::TabItem::new("Keybinds").begin(ui) {
+                    ui.text("Click Rebind, then press a key.");
+
+                    if state.rebinding.is_some() {
+                        ui.text_colored([1.0, 0.8, 0.2, 1.0], "Waiting for key...");
+                        ui.same_line();
+                        if ui.button("Cancel") {
+                            state.rebinding = None;
+                        }
+                        ui.separator();
                     }
+
+                    let mut row = |label: &str, current: String, target: RebindTarget| {
+                        ui.text(label);
+                        ui.same_line();
+                        ui.text_disabled(current);
+                        ui.same_line();
+                        let btn = format!("Rebind##{label}");
+                        if ui.button(btn) {
+                            state.rebinding = Some(target);
+                        }
+                    };
+
+                    let fmt_joy = |mask: u8| {
+                        keybinds
+                            .key_for_joypad_mask(mask)
+                            .map(|c| format!("{c:?}"))
+                            .unwrap_or_else(|| "<unbound>".to_string())
+                    };
+
+                    row("Up", fmt_joy(0x04), RebindTarget::Joypad(0x04));
+                    row("Down", fmt_joy(0x08), RebindTarget::Joypad(0x08));
+                    row("Left", fmt_joy(0x02), RebindTarget::Joypad(0x02));
+                    row("Right", fmt_joy(0x01), RebindTarget::Joypad(0x01));
+
                     ui.separator();
+                    row("A", fmt_joy(0x10), RebindTarget::Joypad(0x10));
+                    row("B", fmt_joy(0x20), RebindTarget::Joypad(0x20));
+                    row("Select", fmt_joy(0x40), RebindTarget::Joypad(0x40));
+                    row("Start", fmt_joy(0x80), RebindTarget::Joypad(0x80));
+
+                    ui.separator();
+                    row(
+                        "Pause",
+                        format!("{:?}", keybinds.pause_key()),
+                        RebindTarget::Pause,
+                    );
+                    row(
+                        "Fast Forward",
+                        format!("{:?}", keybinds.fast_forward_key()),
+                        RebindTarget::FastForward,
+                    );
+                    row(
+                        "Quit",
+                        format!("{:?}", keybinds.quit_key()),
+                        RebindTarget::Quit,
+                    );
                 }
 
-                let mut row = |label: &str, current: String, target: RebindTarget| {
-                    ui.text(label);
+                if let Some(_tab) = imgui::TabItem::new("Emulation").begin(ui) {
+                    ui.text("Boot ROMs");
+                    ui.separator();
+
+                    ui.text("DMG boot ROM");
+                    let dmg_changed =
+                        imgui::InputText::new(ui, "##dmg_bootrom", &mut state.dmg_bootrom_edit)
+                            .build();
                     ui.same_line();
-                    ui.text_disabled(current);
-                    ui.same_line();
-                    let btn = format!("Rebind##{label}");
-                    if ui.button(btn) {
-                        state.rebinding = Some(target);
+                    let mut dmg_browsed = false;
+                    if ui.button("Browse##dmg_bootrom")
+                        && let Some(path) = FileDialog::new().pick_file()
+                    {
+                        state.dmg_bootrom_edit = path.to_string_lossy().to_string();
+                        dmg_browsed = true;
                     }
-                };
+                    if dmg_changed || dmg_browsed {
+                        let trimmed = state.dmg_bootrom_edit.trim();
+                        cfg.dmg_bootrom_path = if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(std::path::PathBuf::from(trimmed))
+                        };
+                        state.pending_load_config_update = true;
+                        state.pending_save_ui_config = true;
+                    }
 
-                let fmt_joy = |mask: u8| {
-                    keybinds
-                        .key_for_joypad_mask(mask)
-                        .map(|c| format!("{c:?}"))
-                        .unwrap_or_else(|| "<unbound>".to_string())
-                };
+                    ui.text("CGB boot ROM");
+                    let cgb_changed =
+                        imgui::InputText::new(ui, "##cgb_bootrom", &mut state.cgb_bootrom_edit)
+                            .build();
+                    ui.same_line();
+                    let mut cgb_browsed = false;
+                    if ui.button("Browse##cgb_bootrom")
+                        && let Some(path) = FileDialog::new().pick_file()
+                    {
+                        state.cgb_bootrom_edit = path.to_string_lossy().to_string();
+                        cgb_browsed = true;
+                    }
+                    if cgb_changed || cgb_browsed {
+                        let trimmed = state.cgb_bootrom_edit.trim();
+                        cfg.cgb_bootrom_path = if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(std::path::PathBuf::from(trimmed))
+                        };
+                        state.pending_load_config_update = true;
+                        state.pending_save_ui_config = true;
+                    }
 
-                row("Up", fmt_joy(0x04), RebindTarget::Joypad(0x04));
-                row("Down", fmt_joy(0x08), RebindTarget::Joypad(0x08));
-                row("Left", fmt_joy(0x02), RebindTarget::Joypad(0x02));
-                row("Right", fmt_joy(0x01), RebindTarget::Joypad(0x01));
+                    ui.separator();
+                    let items = [
+                        "1x",
+                        "2x",
+                        "3x",
+                        "4x",
+                        "5x",
+                        "6x",
+                        "Fullscreen",
+                        "Fullscreen (stretched)",
+                    ];
+                    let mut current_idx = match cfg.window_size {
+                        WindowSize::X1 => 0,
+                        WindowSize::X2 => 1,
+                        WindowSize::X3 => 2,
+                        WindowSize::X4 => 3,
+                        WindowSize::X5 => 4,
+                        WindowSize::X6 => 5,
+                        WindowSize::Fullscreen => 6,
+                        WindowSize::FullscreenStretched => 7,
+                    };
 
-                ui.separator();
-                row("A", fmt_joy(0x10), RebindTarget::Joypad(0x10));
-                row("B", fmt_joy(0x20), RebindTarget::Joypad(0x20));
-                row("Select", fmt_joy(0x40), RebindTarget::Joypad(0x40));
-                row("Start", fmt_joy(0x80), RebindTarget::Joypad(0x80));
-
-                ui.separator();
-                row(
-                    "Pause",
-                    format!("{:?}", keybinds.pause_key()),
-                    RebindTarget::Pause,
-                );
-                row(
-                    "Fast Forward",
-                    format!("{:?}", keybinds.fast_forward_key()),
-                    RebindTarget::FastForward,
-                );
-                row(
-                    "Quit",
-                    format!("{:?}", keybinds.quit_key()),
-                    RebindTarget::Quit,
-                );
+                    if ui.combo_simple_string("Window size", &mut current_idx, &items) {
+                        cfg.window_size = match current_idx {
+                            0 => WindowSize::X1,
+                            1 => WindowSize::X2,
+                            2 => WindowSize::X3,
+                            3 => WindowSize::X4,
+                            4 => WindowSize::X5,
+                            5 => WindowSize::X6,
+                            6 => WindowSize::Fullscreen,
+                            _ => WindowSize::FullscreenStretched,
+                        };
+                        state.pending_window_size = Some(cfg.window_size);
+                        state.pending_save_ui_config = true;
+                    }
+                }
             }
         });
 }
@@ -1471,9 +1603,16 @@ fn apply_ui_action(
             info!("Resetting Game Boy");
             gb.reset();
         }
-        UiAction::Load(cart) => {
+        UiAction::LoadPath(path) => {
             info!("Loading new ROM");
-            *gb = build_gameboy_for_cart(Some(cart), load_config);
+            match Cartridge::from_file(&path) {
+                Ok(cart) => {
+                    *gb = build_gameboy_for_cart(Some(cart), load_config);
+                }
+                Err(e) => {
+                    warn!("Failed to load ROM {}: {e}", path.display());
+                }
+            }
         }
     }
 
@@ -1483,15 +1622,34 @@ fn apply_ui_action(
 }
 
 fn build_gameboy_for_cart(cart: Option<Cartridge>, load_config: &LoadConfig) -> GameBoy {
-    let cgb_mode = if load_config.force_dmg {
-        false
-    } else if load_config.force_cgb {
-        true
-    } else {
-        cart.as_ref().is_some_and(|c| c.cgb)
+    let cart_is_cgb = cart.as_ref().is_some_and(|c| c.cgb);
+    let cgb_mode = match load_config.emulation_mode {
+        EmulationMode::ForceDmg => false,
+        EmulationMode::ForceCgb => true,
+        EmulationMode::Auto => cart_is_cgb,
     };
 
-    let mut gb = if load_config.use_power_on_state {
+    let bootrom_data = if let Some(data) = load_config.bootrom_override.clone() {
+        Some(data)
+    } else {
+        let path = if cgb_mode {
+            load_config.cgb_bootrom_path.as_ref()
+        } else {
+            load_config.dmg_bootrom_path.as_ref()
+        };
+        match path {
+            Some(p) if !p.as_os_str().is_empty() => match std::fs::read(p) {
+                Ok(data) => Some(data),
+                Err(e) => {
+                    warn!("Failed to load boot ROM {}: {e}", p.display());
+                    None
+                }
+            },
+            _ => None,
+        }
+    };
+
+    let mut gb = if bootrom_data.is_some() {
         GameBoy::new_power_on_with_revision(cgb_mode, CgbRevision::default())
     } else {
         GameBoy::new_with_revision(cgb_mode, CgbRevision::default())
@@ -1506,12 +1664,42 @@ fn build_gameboy_for_cart(cart: Option<Cartridge>, load_config: &LoadConfig) -> 
         gb.mmu.ppu.set_dmg_palette(NEUTRAL_DMG_PALETTE);
     }
 
-    if let Some(data) = load_config.bootrom.clone() {
+    if let Some(data) = bootrom_data {
         gb.mmu.load_boot_rom(data);
         gb.cpu.pc = 0x0000;
     }
 
     gb
+}
+
+fn build_load_config(
+    cfg: &UiConfig,
+    dmg_neutral: bool,
+    bootrom_override: Option<Vec<u8>>,
+) -> LoadConfig {
+    LoadConfig {
+        emulation_mode: cfg.emulation_mode,
+        dmg_neutral,
+        bootrom_override,
+        dmg_bootrom_path: cfg.dmg_bootrom_path.clone(),
+        cgb_bootrom_path: cfg.cgb_bootrom_path.clone(),
+    }
+}
+
+fn apply_window_size_setting(window: &winit::window::Window, mode: WindowSize) {
+    use winit::dpi::PhysicalSize;
+    use winit::window::Fullscreen;
+
+    if mode.is_fullscreen() {
+        window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        return;
+    }
+
+    window.set_fullscreen(None);
+    if let Some(scale) = mode.scale_factor_px() {
+        let size = PhysicalSize::new(160 * scale, 144 * scale + DEFAULT_MENU_BAR_HEIGHT_PX);
+        let _ = window.request_inner_size(size);
+    }
 }
 
 fn main() {
@@ -1526,6 +1714,13 @@ fn main() {
     let headless = args.headless;
     let rom_path = args.rom.clone();
 
+    let ui_config_path = ui_config::default_ui_config_path();
+    let mut ui_config = if ui_config_path.exists() {
+        ui_config::load_from_file(&ui_config_path)
+    } else {
+        UiConfig::default()
+    };
+
     let bootrom_data = match args.bootrom.as_ref() {
         Some(path) => match std::fs::read(path) {
             Ok(data) => Some(data),
@@ -1537,15 +1732,12 @@ fn main() {
         None => None,
     };
 
-    let use_power_on_state = bootrom_data.is_some();
-
-    let load_config = LoadConfig {
-        force_dmg: args.dmg,
-        force_cgb: args.cgb,
-        dmg_neutral: args.dmg_neutral,
-        bootrom: bootrom_data,
-        use_power_on_state,
-    };
+    let mut load_config = build_load_config(&ui_config, args.dmg_neutral, bootrom_data);
+    if args.dmg {
+        load_config.emulation_mode = EmulationMode::ForceDmg;
+    } else if args.cgb {
+        load_config.emulation_mode = EmulationMode::ForceCgb;
+    }
 
     let cart = match rom_path.as_ref() {
         Some(path) => match Cartridge::from_file(path) {
@@ -1563,12 +1755,11 @@ fn main() {
         return;
     }
 
-    let cgb_mode = if load_config.force_dmg {
-        false
-    } else if load_config.force_cgb {
-        true
-    } else {
-        cart.as_ref().is_some_and(|c| c.cgb)
+    let cart_is_cgb = cart.as_ref().is_some_and(|c| c.cgb);
+    let cgb_mode = match load_config.emulation_mode {
+        EmulationMode::ForceDmg => false,
+        EmulationMode::ForceCgb => true,
+        EmulationMode::Auto => cart_is_cgb,
     };
 
     let mut gb = build_gameboy_for_cart(cart, &load_config);
@@ -1710,6 +1901,7 @@ fn main() {
             serial_peripheral,
             ..Default::default()
         };
+        ui_state.current_rom_path = rom_path.clone();
         ui_state.paused = initial_paused;
 
         let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
@@ -1762,14 +1954,19 @@ fn main() {
         let mut sent_shutdown = false;
 
         let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::UpdateInput(0xFF)));
+
+        let initial_scale = ui_config
+            .window_size
+            .scale_factor_px()
+            .unwrap_or(DEFAULT_WINDOW_SCALE);
         let attrs = enforce_square_corners(
             Window::default_attributes()
                 .with_title("vibeEmu")
                 .with_window_icon(load_window_icon())
                 .with_resizable(false)
                 .with_inner_size(winit::dpi::LogicalSize::new(
-                    (160 * SCALE) as f64,
-                    (144 * SCALE + DEFAULT_MENU_BAR_HEIGHT_PX) as f64,
+                    (160 * initial_scale) as f64,
+                    (144 * initial_scale + DEFAULT_MENU_BAR_HEIGHT_PX) as f64,
                 )),
         );
         #[allow(deprecated)]
@@ -1793,18 +1990,18 @@ fn main() {
 
         log_wgpu_adapter_once(&pixels);
 
-        let mut imgui = ImguiContext::create();
-        imgui.io_mut().config_flags |= ConfigFlags::DOCKING_ENABLE;
-        let mut platform = WinitPlatform::new(&mut imgui);
-        platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
-
         let mut windows = HashMap::new();
-        let main_win = UiWindow::new(WindowKind::Main, window, pixels, (160, 144), &mut imgui);
+        let main_win = UiWindow::new(WindowKind::Main, window, pixels, (160, 144));
         let main_id = main_win.win.id();
         windows.insert(main_id, main_win);
         if let Some(win) = windows.get_mut(&main_id) {
             win.resize(win.win.inner_size());
         }
+
+        if let Some(main) = windows.get(&main_id) {
+            apply_window_size_setting(&main.win, ui_config.window_size);
+        }
+        ui_state.last_main_inner_size = None;
 
         let mut state = 0xFFu8;
 
@@ -1860,7 +2057,31 @@ fn main() {
                     ..
                 } => {
                     if let Some(win) = windows.get_mut(window_id) {
-                        platform.handle_event(imgui.io_mut(), &win.win, &event);
+                        let (want_capture_mouse, want_capture_keyboard, want_text_input) = {
+                            let ui::window::UiWindow {
+                                win: window,
+                                imgui,
+                                platform,
+                                ..
+                            } = win;
+
+                            let suspended = imgui
+                                .take()
+                                .expect("UiWindow missing imgui context (internal error)");
+                            let mut ctx = suspended.activate().expect(
+                                "no ImGui context should be active while handling a window event",
+                            );
+
+                            platform.handle_event(ctx.io_mut(), window, &event);
+                            let io = ctx.io();
+                            let res = (
+                                io.want_capture_mouse,
+                                io.want_capture_keyboard,
+                                io.want_text_input,
+                            );
+                            *imgui = Some(ctx.suspend());
+                            res
+                        };
 
                         // Ensure auxiliary windows (debugger/VRAM) stay responsive even if
                         // emulation frames are being dropped due to backpressure.
@@ -1875,8 +2096,8 @@ fn main() {
                             // auxiliary tools remain interactive.
                             if !matches!(win.kind, WindowKind::Main)
                                 || ui_state.paused
-                                || imgui.io().want_capture_mouse
-                                || imgui.io().want_capture_keyboard
+                                || want_capture_mouse
+                                || want_capture_keyboard
                             {
                                 win.win.request_redraw();
                             }
@@ -1948,7 +2169,7 @@ fn main() {
                                     // Quit is always honored.
                                     if code == keybinds.quit_key() {
                                         if pressed {
-                                            target.exit();
+                                            ui_state.pending_exit = true;
                                         }
                                         return;
                                     }
@@ -1956,7 +2177,7 @@ fn main() {
                                     // Pause toggle is always honored (unless ImGui is typing into a widget).
                                     if code == keybinds.pause_key()
                                         && pressed
-                                        && !imgui.io().want_text_input
+                                        && !want_text_input
                                         && !ui_state.menu_pause_active
                                     {
                                         ui_state.paused = !ui_state.paused;
@@ -1977,7 +2198,7 @@ fn main() {
                                     }
 
                                     // Joypad input is disabled while paused or while ImGui is consuming text.
-                                    if ui_state.paused || imgui.io().want_text_input {
+                                    if ui_state.paused || want_text_input {
                                         return;
                                     }
 
@@ -1998,74 +2219,104 @@ fn main() {
                                 // which otherwise leads to wgpu validation panics on scissor.
                                 win.ensure_surface_matches_window();
 
-                                // Keep ImGui's global display size/scale consistent for this window.
-                                sync_imgui_display_for_window(&mut imgui, &win.win);
-
-                                if let Err(e) = platform.prepare_frame(imgui.io_mut(), &win.win) {
-                                    error!("imgui prepare_frame failed: {e}");
-                                    return;
-                                }
-
-                                let fb_scale_y = imgui.io().display_framebuffer_scale[1];
-                                let ui = imgui.frame();
-
-                                let top_padding_px = if matches!(win.kind, WindowKind::Main) {
-                                    (ui.frame_height() * fb_scale_y).ceil().max(0.0) as u32
-                                } else {
-                                    0
-                                };
-
-                                if matches!(win.kind, WindowKind::Main)
-                                    && enforce_main_window_inner_size(
-                                        &mut ui_state,
-                                        &win.win,
-                                        top_padding_px,
-                                    )
-                                {
-                                    // The window size change will trigger a resize and a redraw.
-                                    // Skip GPU rendering this frame to avoid using a stale surface,
-                                    // but still end the ImGui frame (Render) to keep its internal
-                                    // frame counters consistent.
-                                    platform.prepare_render(ui, &win.win);
-                                    let _ = imgui.render();
-                                    win.win.request_redraw();
-                                    return;
-                                }
-
-                                match win.kind {
-                                    WindowKind::Main => {
-                                        build_ui(&mut ui_state, ui, mobile.is_some());
-                                        draw_game_screen(&mut win.pixels, &frame);
-                                    }
-                                    WindowKind::Debugger => {
-                                        let snap =
-                                            ui_snapshot.read().unwrap_or_else(|e| e.into_inner());
-                                        draw_debugger(&mut win.pixels, &snap, ui)
-                                    }
-                                    WindowKind::VramViewer => {
-                                        let snap =
-                                            ui_snapshot.read().unwrap_or_else(|e| e.into_inner());
-                                        draw_vram(win, &snap, ui)
-                                    }
-                                    WindowKind::Options => {
-                                        draw_options_window(&mut ui_state, &keybinds, ui);
-                                    }
-                                }
-
-                                platform.prepare_render(ui, &win.win);
-                                let draw_data = imgui.render();
-
                                 let (surface_w, surface_h) = win.surface_size();
                                 let is_main = matches!(win.kind, WindowKind::Main);
-                                let game_scaler = if is_main {
+                                let use_integer_scaling =
+                                    ui_config.window_size.use_integer_scaling();
+                                let game_scaler = if is_main && use_integer_scaling {
                                     win.game_scaler.clone()
                                 } else {
                                     None
                                 };
                                 let (buffer_w, buffer_h) = win.buffer_size();
 
+                                let ui::window::UiWindow {
+                                    win: window,
+                                    imgui,
+                                    platform,
+                                    pixels,
+                                    renderer,
+                                    kind,
+                                    vram_viewer,
+                                    ..
+                                } = win;
+
+                                let suspended = imgui
+                                    .take()
+                                    .expect("UiWindow missing imgui context (internal error)");
+                                let mut ctx = suspended
+                                    .activate()
+                                    .expect("no ImGui context should be active while rendering");
+
+                                if let Err(e) = platform.prepare_frame(ctx.io_mut(), window) {
+                                    error!("imgui prepare_frame failed: {e}");
+                                    *imgui = Some(ctx.suspend());
+                                    return;
+                                }
+
+                                let fb_scale_y = ctx.io().display_framebuffer_scale[1];
+                                let ui = ctx.frame();
+
+                                let top_padding_px = if matches!(*kind, WindowKind::Main) {
+                                    (ui.frame_height() * fb_scale_y).ceil().max(0.0) as u32
+                                } else {
+                                    0
+                                };
+
+                                if matches!(*kind, WindowKind::Main)
+                                    && !ui_config.window_size.is_fullscreen()
+                                    && enforce_main_window_inner_size(
+                                        &mut ui_state,
+                                        window,
+                                        ui_config
+                                            .window_size
+                                            .scale_factor_px()
+                                            .unwrap_or(DEFAULT_WINDOW_SCALE),
+                                        top_padding_px,
+                                    )
+                                {
+                                    platform.prepare_render(ui, window);
+                                    let _ = ctx.render();
+                                    *imgui = Some(ctx.suspend());
+                                    window.request_redraw();
+                                    return;
+                                }
+
+                                match *kind {
+                                    WindowKind::Main => {
+                                        build_ui(
+                                            &mut ui_state,
+                                            &mut ui_config,
+                                            ui,
+                                            mobile.is_some(),
+                                        );
+                                        draw_game_screen(pixels, &frame);
+                                    }
+                                    WindowKind::Debugger => {
+                                        let snap =
+                                            ui_snapshot.read().unwrap_or_else(|e| e.into_inner());
+                                        draw_debugger(pixels, &snap, ui)
+                                    }
+                                    WindowKind::VramViewer => {
+                                        let snap =
+                                            ui_snapshot.read().unwrap_or_else(|e| e.into_inner());
+                                        draw_vram(vram_viewer.as_mut(), renderer, pixels, &snap, ui)
+                                    }
+                                    WindowKind::Options => {
+                                        draw_options_window(
+                                            &mut ui_state,
+                                            &mut ui_config,
+                                            &keybinds,
+                                            ui,
+                                        );
+                                    }
+                                }
+
+                                platform.prepare_render(ui, window);
+                                let draw_data = ctx.render();
+
                                 let render_result =
-                                    win.pixels.render_with(|encoder, render_target, context| {
+                                    pixels.render_with(|encoder, render_target, context| {
                                         if is_main {
                                             if let Some(game_scaler) = game_scaler.as_deref() {
                                                 game_scaler.render(
@@ -2108,8 +2359,6 @@ fn main() {
                                             let (clip_x, clip_y, clip_w, clip_h) =
                                                 context.scaling_renderer.clip_rect();
 
-                                            // Clamp against the Pixels surface extent, not the OS window size.
-                                            // The render_target passed by pixels is the surface texture view.
                                             let max_w = surface_w;
                                             let max_h = surface_h;
 
@@ -2136,71 +2385,26 @@ fn main() {
 
                                             rpass.set_scissor_rect(clip_x, clip_y, clip_w, clip_h);
 
-                                            if let Err(e) = win.renderer.render_clamped(
+                                            if let Err(e) = renderer.render_clamped(
                                                 draw_data,
-                                                win.pixels.queue(),
-                                                win.pixels.device(),
+                                                pixels.queue(),
+                                                pixels.device(),
                                                 &mut rpass,
                                                 [surface_w, surface_h],
                                             ) {
                                                 error!("imgui render failed: {e}");
-                                                // Don't crash the process; skip ImGui for this frame.
                                                 return Ok(());
                                             }
                                         }
                                         Ok(())
                                     });
+
                                 if let Err(e) = render_result {
                                     error!("Pixels render failed: {e}");
                                     target.exit();
                                 }
 
-                                if ui_state.spawn_debugger
-                                    && !windows
-                                        .values()
-                                        .any(|w| matches!(w.kind, WindowKind::Debugger))
-                                {
-                                    spawn_debugger_window(
-                                        target,
-                                        &mut platform,
-                                        &mut imgui,
-                                        &mut windows,
-                                    );
-                                    ui_state.paused = true;
-                                    let _ = to_emu_tx
-                                        .send(UiToEmu::Command(EmuCommand::SetPaused(true)));
-                                    ui_state.spawn_debugger = false;
-                                }
-                                if ui_state.spawn_vram
-                                    && !windows
-                                        .values()
-                                        .any(|w| matches!(w.kind, WindowKind::VramViewer))
-                                {
-                                    spawn_vram_window(
-                                        target,
-                                        &mut platform,
-                                        &mut imgui,
-                                        &mut windows,
-                                    );
-                                    ui_state.paused = true;
-                                    let _ = to_emu_tx
-                                        .send(UiToEmu::Command(EmuCommand::SetPaused(true)));
-                                    ui_state.spawn_vram = false;
-                                }
-
-                                if ui_state.spawn_options
-                                    && !windows
-                                        .values()
-                                        .any(|w| matches!(w.kind, WindowKind::Options))
-                                {
-                                    spawn_options_window(
-                                        target,
-                                        &mut platform,
-                                        &mut imgui,
-                                        &mut windows,
-                                    );
-                                    ui_state.spawn_options = false;
-                                }
+                                *imgui = Some(ctx.suspend());
                             }
                             _ => {}
                         }
@@ -2234,6 +2438,53 @@ fn main() {
                         }
                     }
 
+                    if got_frame {
+                        for win in windows.values() {
+                            win.win.request_redraw();
+                        }
+                    }
+
+                    if ui_state.spawn_debugger
+                        && !windows
+                            .values()
+                            .any(|w| matches!(w.kind, WindowKind::Debugger))
+                    {
+                        spawn_debugger_window(target, &mut windows);
+                        ui_state.paused = true;
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
+                        ui_state.spawn_debugger = false;
+                    }
+                    if ui_state.spawn_vram
+                        && !windows
+                            .values()
+                            .any(|w| matches!(w.kind, WindowKind::VramViewer))
+                    {
+                        spawn_vram_window(target, &mut windows);
+                        ui_state.paused = true;
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
+                        ui_state.spawn_vram = false;
+                    }
+
+                    if ui_state.spawn_options
+                        && !windows
+                            .values()
+                            .any(|w| matches!(w.kind, WindowKind::Options))
+                    {
+                        spawn_options_window(target, &mut windows);
+                        ui_state.spawn_options = false;
+                    }
+
+                    if ui_state.pending_exit {
+                        ui_state.pending_exit = false;
+                        ui_state.pending_save_ui_config = true;
+                        if !sent_shutdown {
+                            let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::Shutdown));
+                            sent_shutdown = true;
+                        }
+                        target.exit();
+                        return;
+                    }
+
                     if let Some(peripheral) = ui_state.pending_serial_peripheral.take() {
                         let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetSerialPeripheral(
                             peripheral,
@@ -2244,6 +2495,35 @@ fn main() {
                         let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(paused)));
                     }
 
+                    if ui_state.pending_load_config_update {
+                        ui_state.pending_load_config_update = false;
+                        let updated = build_load_config(
+                            &ui_config,
+                            args.dmg_neutral,
+                            load_config.bootrom_override.clone(),
+                        );
+                        load_config = updated.clone();
+                        let _ =
+                            to_emu_tx.send(UiToEmu::Command(EmuCommand::UpdateLoadConfig(updated)));
+                    }
+
+                    if let Some(mode) = ui_state.pending_window_size.take() {
+                        if let Some(main) = windows
+                            .values()
+                            .find(|w| matches!(w.kind, WindowKind::Main))
+                        {
+                            apply_window_size_setting(&main.win, mode);
+                        }
+                        ui_state.last_main_inner_size = None;
+                    }
+
+                    if ui_state.pending_save_ui_config {
+                        ui_state.pending_save_ui_config = false;
+                        if let Err(e) = ui_config::save_to_file(&ui_config_path, &ui_config) {
+                            warn!("Failed to save UI config {}: {e}", ui_config_path.display());
+                        }
+                    }
+
                     if let Some(action) = ui_state.pending_action.take() {
                         let _ = to_emu_tx.send(UiToEmu::Action(action));
                         ui_state.paused = false;
@@ -2251,10 +2531,12 @@ fn main() {
                         got_frame = true;
                     }
 
-                    if got_frame {
-                        for win in windows.values() {
-                            win.win.request_redraw();
-                        }
+                    if got_frame
+                        && let Some(main) = windows
+                            .values()
+                            .find(|w| matches!(w.kind, WindowKind::Main))
+                    {
+                        main.win.request_redraw();
                     }
                 }
                 Event::LoopExiting => {
