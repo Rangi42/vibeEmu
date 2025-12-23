@@ -2073,10 +2073,8 @@ impl Apu {
             self.ch3.clock_length();
             self.ch4.clock_length();
         }
-        if step == 2 || step == 6 {
-            if self.ch1.clock_sweep() {
-                self.update_ch1_freq_regs();
-            }
+        if (step == 2 || step == 6) && self.ch1.clock_sweep() {
+            self.update_ch1_freq_regs();
         }
         if step == 7 {
             // No action here; envelope countdown scheduling is tied to DIV edges below.

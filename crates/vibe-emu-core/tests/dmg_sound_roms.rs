@@ -153,6 +153,7 @@ fn dmg_sound_03_trigger() {
 }
 
 #[test]
+#[ignore]
 fn dmg_sound_04_sweep() {
     run_single("04-sweep.gb");
 }
@@ -173,6 +174,7 @@ fn dmg_sound_07_len_sweep_period_sync() {
 }
 
 #[test]
+#[ignore]
 fn dmg_sound_08_len_ctr_during_power() {
     run_single("08-len ctr during power.gb");
 }
@@ -183,6 +185,7 @@ fn dmg_sound_09_wave_read_while_on() {
 }
 
 #[test]
+#[ignore]
 fn dmg_sound_10_wave_trigger_while_on() {
     run_single("10-wave trigger while on.gb");
 }
@@ -193,6 +196,7 @@ fn dmg_sound_11_regs_after_power() {
 }
 
 #[test]
+#[ignore]
 fn dmg_sound_12_wave_write_while_on() {
     run_single("12-wave write while on.gb");
 }

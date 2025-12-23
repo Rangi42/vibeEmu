@@ -246,21 +246,17 @@ impl DebuggerState {
             .enter_returns_true(true)
             .build();
         ui.same_line();
-        if ui.small_button("Add") || submitted {
-            if let Some(bp) =
+        if (ui.small_button("Add") || submitted)
+            && let Some(bp) =
                 parse_breakpoint_input(&self.add_breakpoint_hex, snapshot, self.sym.as_ref())
-            {
-                if self.breakpoints.insert(bp) {
-                    self.pending_breakpoints_sync = true;
-                }
-            }
+            && self.breakpoints.insert(bp)
+        {
+            self.pending_breakpoints_sync = true;
         }
         ui.same_line();
-        if ui.small_button("Clear") {
-            if !self.breakpoints.is_empty() {
-                self.breakpoints.clear();
-                self.pending_breakpoints_sync = true;
-            }
+        if ui.small_button("Clear") && !self.breakpoints.is_empty() {
+            self.breakpoints.clear();
+            self.pending_breakpoints_sync = true;
         }
 
         ui.same_line();
@@ -270,6 +266,7 @@ impl DebuggerState {
         }
 
         ui.same_line();
+        #[allow(clippy::collapsible_if)]
         if ui.small_button("Reload .sym") {
             if let Some(sym_path) = self.sym_path.clone() {
                 match fs::read_to_string(&sym_path) {
@@ -405,11 +402,11 @@ impl DebuggerState {
                 };
 
                 if self.pending_scroll_to_pc {
-                    if let Some(&row_idx) = cache.addr_to_row.get(pc as usize) {
-                        if row_idx != u32::MAX {
-                            let line_h = ui.text_line_height_with_spacing();
-                            ui.set_scroll_y(row_idx as f32 * line_h);
-                        }
+                    if let Some(&row_idx) = cache.addr_to_row.get(pc as usize)
+                        && row_idx != u32::MAX
+                    {
+                        let line_h = ui.text_line_height_with_spacing();
+                        ui.set_scroll_y(row_idx as f32 * line_h);
                     }
                     self.pending_scroll_to_pc = false;
                 }

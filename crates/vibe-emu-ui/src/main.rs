@@ -862,10 +862,10 @@ fn run_emulator_thread(
                         next_frame = Instant::now() + FRAME_TIME;
 
                         if paused {
-                            if let Ok(mut gb) = gb.lock() {
-                                if let Ok(mut snap) = ui_snapshot.try_write() {
-                                    *snap = UiSnapshot::from_gb(&mut gb, true);
-                                }
+                            if let Ok(mut gb) = gb.lock()
+                                && let Ok(mut snap) = ui_snapshot.try_write()
+                            {
+                                *snap = UiSnapshot::from_gb(&mut gb, true);
                             }
                             let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
                         }
