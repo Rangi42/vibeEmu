@@ -587,6 +587,12 @@ impl Cpu {
 
             self.ime = false;
 
+            // Interrupt entry consumes 5 M-cycles total. Two of those cycles are the
+            // stack pushes; the other 3 are internal cycles that occur before the
+            // pushes. Ordering matters because IE/IF can change while the CPU is
+            // acknowledging the interrupt (Pinball Deluxe relies on this).
+            self.tick(mmu, 3);
+
             // Interrupt entry pushes the return address onto the stack.
             // If the upper-byte push targets IE ($FFFF), the write can change
             // which interrupt is dispatched (or cancel dispatch entirely).
@@ -599,34 +605,61 @@ impl Cpu {
             self.write8(mmu, self.sp, (return_pc >> 8) as u8);
 
             let queue = (mmu.ie_reg & mmu.if_reg) & 0x1F;
-            if queue == 0 {
-                // Lower byte push still occurs, but the dispatch is cancelled.
-                Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
-                self.sp = self.sp.wrapping_sub(1);
-                self.write8(mmu, self.sp, return_pc as u8);
 
-                self.exit_halt();
-                self.pc = 0;
-                self.tick(mmu, 3);
-                return;
+            #[cfg(feature = "cpu-trace")]
+            {
+                if queue != pending || (queue != 0 && Self::next_interrupt(queue).0 != initial_bit)
+                {
+                    log::trace!(
+                        "irq-entry change: pc={:04X} sp={:04X} pending={:02X} queue={:02X} if={:02X} ie={:02X}",
+                        self.pc,
+                        self.sp,
+                        pending,
+                        queue,
+                        mmu.if_reg,
+                        mmu.ie_reg
+                    );
+                }
             }
 
-            let (bit, vector) = Self::next_interrupt(queue);
-            mmu.if_reg &= !bit;
+            // The low-byte push still occurs even if the dispatch is cancelled.
+            let (bit, vector) = if queue == 0 {
+                (0, 0)
+            } else {
+                Self::next_interrupt(queue)
+            };
 
             // Lower byte push.
             Self::dmg_oam_bug_idu_if_needed(mmu, self.sp, OamBugAccess::Write);
             self.sp = self.sp.wrapping_sub(1);
             self.write8(mmu, self.sp, return_pc as u8);
 
-            if (self.halt_pending & bit) != 0 {
-                self.halt_pending &= !bit;
+            if bit != 0 {
+                mmu.if_reg &= !bit;
+                if (self.halt_pending & bit) != 0 {
+                    self.halt_pending &= !bit;
+                } else {
+                    self.exit_halt();
+                }
+                self.pc = vector;
             } else {
                 self.exit_halt();
+                self.pc = 0;
             }
 
-            self.pc = vector;
-            self.tick(mmu, 3);
+            #[cfg(feature = "cpu-trace")]
+            {
+                if bit != 0 && bit != initial_bit {
+                    log::trace!(
+                        "irq hijack: initial={:02X} chosen={:02X} vector={:04X} if={:02X} ie={:02X}",
+                        initial_bit,
+                        bit,
+                        vector,
+                        mmu.if_reg,
+                        mmu.ie_reg
+                    );
+                }
+            }
         } else if self.halted {
             self.exit_halt();
         }

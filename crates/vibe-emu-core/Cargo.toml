@@ -12,6 +12,7 @@ log = "0.4"
 default = []
 ppu-trace = []
 apu-trace = []
+cpu-trace = []
 
 [dev-dependencies]
 once_cell = "1"
