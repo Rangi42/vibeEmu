@@ -310,6 +310,52 @@ impl Mbc3Rtc {
 }
 
 impl Cartridge {
+    /// Returns the currently selected ROM bank for the $4000-$7FFF window.
+    ///
+    /// This is intended for UI/debugger tooling; core emulation should not rely
+    /// on this for correctness.
+    pub fn current_rom_bank(&self) -> u16 {
+        match &self.mbc_state {
+            MbcState::NoMbc => 1,
+            MbcState::Mbc1 { rom_bank, .. } => (*rom_bank).into(),
+            MbcState::Mbc2 { rom_bank, .. } => (*rom_bank).into(),
+            MbcState::Mbc3 { rom_bank, .. } => (*rom_bank).into(),
+            MbcState::Mbc30 { rom_bank, .. } => (*rom_bank).into(),
+            MbcState::Mbc5 { rom_bank, .. } => *rom_bank,
+            MbcState::Unknown => 1,
+        }
+    }
+
+    /// Returns the currently selected external RAM bank (if the mapper supports banking).
+    ///
+    /// This is intended for UI/debugger tooling.
+    pub fn current_ram_bank(&self) -> u8 {
+        match &self.mbc_state {
+            MbcState::NoMbc => 0,
+            MbcState::Mbc1 { ram_bank, .. } => *ram_bank,
+            MbcState::Mbc2 { .. } => 0,
+            MbcState::Mbc3 { ram_bank, .. } => *ram_bank,
+            MbcState::Mbc30 { ram_bank, .. } => *ram_bank,
+            MbcState::Mbc5 { ram_bank, .. } => *ram_bank,
+            MbcState::Unknown => 0,
+        }
+    }
+
+    /// Returns whether external RAM / RTC is currently enabled for the $A000-$BFFF window.
+    ///
+    /// This is intended for UI/debugger tooling.
+    pub fn ram_enabled(&self) -> bool {
+        match &self.mbc_state {
+            MbcState::NoMbc => true,
+            MbcState::Mbc1 { ram_enable, .. } => *ram_enable,
+            MbcState::Mbc2 { ram_enable, .. } => *ram_enable,
+            MbcState::Mbc3 { ram_enable, .. } => *ram_enable,
+            MbcState::Mbc30 { ram_enable, .. } => *ram_enable,
+            MbcState::Mbc5 { ram_enable, .. } => *ram_enable,
+            MbcState::Unknown => false,
+        }
+    }
+
     pub fn step_rtc(&mut self, cpu_cycles: u16) {
         if let Some(rtc) = self.rtc_mut() {
             rtc.step(cpu_cycles as u64);

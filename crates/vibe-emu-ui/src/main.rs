@@ -25,7 +25,7 @@ use vibe_emu_mobile::{
 use winit::event::{ElementState, Event, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
-use winit::window::{Icon, Window, WindowAttributes};
+use winit::window::{Icon, UserAttentionType, Window, WindowAttributes};
 
 use crossbeam_channel as cb;
 use keybinds::KeyBindings;
@@ -216,6 +216,11 @@ struct UiState {
     serial_peripheral: SerialPeripheral,
     pending_serial_peripheral: Option<SerialPeripheral>,
     last_main_inner_size: Option<(u32, u32)>,
+
+    debugger: ui::debugger::DebuggerState,
+    debugger_focus_pause_active: bool,
+    debugger_focus_resume_armed: bool,
+    debugger_pending_focus: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,6 +261,8 @@ enum SerialPeripheral {
 #[derive(Clone)]
 enum EmuCommand {
     SetPaused(bool),
+    Step(u32),
+    SetBreakpoints(Vec<ui::debugger::BreakpointSpec>),
     SetSpeed(Speed),
     UpdateInput(u8),
     SetSerialPeripheral(SerialPeripheral),
@@ -271,6 +278,8 @@ enum UiToEmu {
 #[derive(Clone, Copy, Debug)]
 enum UserEvent {
     EmuWake,
+    DebuggerWake,
+    DebuggerBreak { bank: u8, addr: u16 },
 }
 
 struct EmuThreadChannels {
@@ -607,6 +616,12 @@ fn enforce_main_window_inner_size(
     true
 }
 
+fn request_attention_and_focus(window: &winit::window::Window) {
+    window.set_minimized(false);
+    window.request_user_attention(Some(UserAttentionType::Critical));
+    window.focus_window();
+}
+
 fn spawn_debugger_window(
     event_loop: &ActiveEventLoop,
     windows: &mut HashMap<winit::window::WindowId, UiWindow>,
@@ -616,7 +631,7 @@ fn spawn_debugger_window(
         Window::default_attributes()
             .with_title("vibeEmu \u{2013} Debugger")
             .with_window_icon(load_window_icon())
-            .with_inner_size(LogicalSize::new((160 * SCALE) as f64, (144 * SCALE) as f64)),
+            .with_inner_size(LogicalSize::new(900.0, 700.0)),
     );
     let w = match event_loop.create_window(attrs) {
         Ok(w) => w,
@@ -814,6 +829,9 @@ fn run_emulator_thread(
 
     let mut load_config = load_config;
     let mut paused = initial_paused;
+    let mut step_budget: u32 = 0;
+    let mut breakpoints: std::collections::HashSet<ui::debugger::BreakpointSpec> =
+        std::collections::HashSet::new();
     let mut frame_count = 0u64;
     let mut next_frame = Instant::now() + FRAME_TIME;
     let mut audio_stream = None;
@@ -842,6 +860,24 @@ fn run_emulator_thread(
                     EmuCommand::SetPaused(p) => {
                         paused = p;
                         next_frame = Instant::now() + FRAME_TIME;
+
+                        if paused {
+                            if let Ok(mut gb) = gb.lock() {
+                                if let Ok(mut snap) = ui_snapshot.try_write() {
+                                    *snap = UiSnapshot::from_gb(&mut gb, true);
+                                }
+                            }
+                            let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
+                        }
+                    }
+                    EmuCommand::Step(count) => {
+                        step_budget = step_budget.saturating_add(count);
+                        paused = true;
+                        next_frame = Instant::now() + FRAME_TIME;
+                    }
+                    EmuCommand::SetBreakpoints(list) => {
+                        breakpoints.clear();
+                        breakpoints.extend(list);
                     }
                     EmuCommand::SetSpeed(new_speed) => {
                         speed = new_speed;
@@ -908,7 +944,25 @@ fn run_emulator_thread(
         }
 
         if paused {
-            thread::sleep(Duration::from_millis(1));
+            if step_budget == 0 {
+                thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+
+            if let Ok(mut gb) = gb.lock() {
+                let (cpu, mmu) = {
+                    let GameBoy { cpu, mmu, .. } = &mut *gb;
+                    (cpu, mmu)
+                };
+                cpu.step(mmu);
+
+                if let Ok(mut snap) = ui_snapshot.try_write() {
+                    *snap = UiSnapshot::from_gb(&mut gb, true);
+                }
+            }
+
+            step_budget = step_budget.saturating_sub(1);
+            let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
             continue;
         }
 
@@ -919,36 +973,72 @@ fn run_emulator_thread(
         if let Ok(mut gb) = gb.lock() {
             gb.mmu.apu.set_speed(speed.factor);
 
+            let mut break_hit: Option<(u8, u16)> = None;
+
             {
                 let (cpu, mmu) = {
                     let GameBoy { cpu, mmu, .. } = &mut *gb;
                     (cpu, mmu)
                 };
                 while !mmu.ppu.frame_ready() {
+                    if !breakpoints.is_empty() {
+                        let pc = cpu.pc;
+                        let bank = if pc < 0x4000 {
+                            0u8
+                        } else if (0x4000..=0x7FFF).contains(&pc) {
+                            mmu.cart
+                                .as_ref()
+                                .map(|c| c.current_rom_bank().min(0xFF) as u8)
+                                .unwrap_or(1)
+                        } else {
+                            0xFF
+                        };
+
+                        let key = ui::debugger::BreakpointSpec { bank, addr: pc };
+                        if breakpoints.contains(&key) {
+                            break_hit = Some((bank, pc));
+                            break;
+                        }
+                    }
+
                     cpu.step(mmu);
                 }
 
-                // Avoid allocating every frame. If no free buffers are
-                // available, drop this frame rather than allocating.
-                if let Ok(mut buf) = frame_pool_rx.try_recv() {
-                    // Core framebuffer is 0x00RRGGBB; convert to a u32 layout whose
-                    // *in-memory bytes* match Pixels RGBA8 on little-endian: [R,G,B,A].
-                    for (dst, &src) in buf.iter_mut().zip(mmu.ppu.framebuffer().iter()) {
-                        // 0x00RRGGBB -> 0xFFBBGGRR (bytes RR GG BB FF)
-                        *dst = 0xFF00_0000
-                            | ((src & 0x0000_00FF) << 16)
-                            | (src & 0x0000_FF00)
-                            | ((src & 0x00FF_0000) >> 16);
+                if break_hit.is_some() {
+                    // Breakpoint hit; do not attempt to complete or present a video frame.
+                    // We'll publish a snapshot after we drop the CPU/MMU borrows.
+                } else {
+                    // Avoid allocating every frame. If no free buffers are
+                    // available, drop this frame rather than allocating.
+                    if let Ok(mut buf) = frame_pool_rx.try_recv() {
+                        // Core framebuffer is 0x00RRGGBB; convert to a u32 layout whose
+                        // *in-memory bytes* match Pixels RGBA8 on little-endian: [R,G,B,A].
+                        for (dst, &src) in buf.iter_mut().zip(mmu.ppu.framebuffer().iter()) {
+                            // 0x00RRGGBB -> 0xFFBBGGRR (bytes RR GG BB FF)
+                            *dst = 0xFF00_0000
+                                | ((src & 0x0000_00FF) << 16)
+                                | (src & 0x0000_FF00)
+                                | ((src & 0x00FF_0000) >> 16);
+                        }
+                        frame_buf = Some(buf);
                     }
-                    frame_buf = Some(buf);
+                    mmu.ppu.clear_frame_flag();
                 }
-                mmu.ppu.clear_frame_flag();
+            }
+
+            if let Some((bank, pc)) = break_hit {
+                paused = true;
+                if let Ok(mut snap) = ui_snapshot.try_write() {
+                    *snap = UiSnapshot::from_gb(&mut gb, true);
+                }
+                let _ = wake_proxy.send_event(UserEvent::DebuggerBreak { bank, addr: pc });
+                continue;
             }
 
             // Publish a UI snapshot while we already hold the emulation lock.
             // Use try_write to avoid stalling emulation if the UI is mid-draw.
             if let Ok(mut snap) = ui_snapshot.try_write() {
-                *snap = UiSnapshot::from_gb(&mut gb);
+                *snap = UiSnapshot::from_gb(&mut gb, paused);
             }
 
             if !speed.fast {
@@ -1034,85 +1124,6 @@ fn run_emulator_thread(
     }
 }
 
-fn draw_debugger(pixels: &mut Pixels, snapshot: &UiSnapshot, ui: &imgui::Ui) {
-    let _ = pixels.frame_mut();
-    let cpu = &snapshot.cpu;
-
-    let display = ui.io().display_size;
-    let flags = imgui::WindowFlags::NO_MOVE
-        | imgui::WindowFlags::NO_RESIZE
-        | imgui::WindowFlags::NO_COLLAPSE;
-
-    ui.window("Debugger")
-        .position([0.0, 0.0], imgui::Condition::Always)
-        .size(display, imgui::Condition::Always)
-        .flags(flags)
-        .build(|| {
-            if let Some(_table) = ui.begin_table("regs", 2) {
-                ui.table_next_row();
-                ui.table_next_column();
-                ui.text("A");
-                ui.table_next_column();
-                ui.text(format!("{:02X}", cpu.a));
-
-                ui.table_next_column();
-                ui.text("F");
-                ui.table_next_column();
-                ui.text(format!("{:02X}", cpu.f));
-
-                ui.table_next_column();
-                ui.text("B");
-                ui.table_next_column();
-                ui.text(format!("{:02X}", cpu.b));
-
-                ui.table_next_column();
-                ui.text("C");
-                ui.table_next_column();
-                ui.text(format!("{:02X}", cpu.c));
-
-                ui.table_next_column();
-                ui.text("D");
-                ui.table_next_column();
-                ui.text(format!("{:02X}", cpu.d));
-
-                ui.table_next_column();
-                ui.text("E");
-                ui.table_next_column();
-                ui.text(format!("{:02X}", cpu.e));
-
-                ui.table_next_column();
-                ui.text("H");
-                ui.table_next_column();
-                ui.text(format!("{:02X}", cpu.h));
-
-                ui.table_next_column();
-                ui.text("L");
-                ui.table_next_column();
-                ui.text(format!("{:02X}", cpu.l));
-
-                ui.table_next_column();
-                ui.text("SP");
-                ui.table_next_column();
-                ui.text(format!("{:04X}", cpu.sp));
-
-                ui.table_next_column();
-                ui.text("PC");
-                ui.table_next_column();
-                ui.text(format!("{:04X}", cpu.pc));
-
-                ui.table_next_column();
-                ui.text("IME");
-                ui.table_next_column();
-                ui.text(format!("{}", cpu.ime));
-
-                ui.table_next_column();
-                ui.text("Cycles");
-                ui.table_next_column();
-                ui.text(format!("{}", cpu.cycles));
-            }
-        });
-}
-
 fn draw_vram(
     viewer: Option<&mut ui::vram_viewer::VramViewerWindow>,
     renderer: &mut imgui_wgpu::Renderer,
@@ -1155,6 +1166,7 @@ fn build_ui(state: &mut UiState, cfg: &mut UiConfig, ui: &imgui::Ui, mobile_avai
                     .pick_file()
             {
                 state.current_rom_path = Some(path.clone());
+                state.debugger.load_symbols_for_rom_path(Some(&path));
                 state.pending_action = Some(UiAction::LoadPath(path));
             }
             if ui.menu_item("Reset") {
@@ -1903,6 +1915,9 @@ fn main() {
         };
         ui_state.current_rom_path = rom_path.clone();
         ui_state.paused = initial_paused;
+        ui_state
+            .debugger
+            .load_symbols_for_rom_path(ui_state.current_rom_path.as_deref());
 
         let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
             Ok(el) => el,
@@ -2051,6 +2066,21 @@ fn main() {
                         }
                     }
                 }
+                Event::UserEvent(UserEvent::DebuggerWake) => {
+                    for win in windows.values() {
+                        win.win.request_redraw();
+                    }
+                }
+                Event::UserEvent(UserEvent::DebuggerBreak { .. }) => {
+                    ui_state.paused = true;
+                    ui_state.pending_pause = Some(true);
+                    ui_state.menu_resume_armed = false;
+                    ui_state.spawn_debugger = true;
+                    ui_state.debugger_pending_focus = true;
+                    for win in windows.values() {
+                        win.win.request_redraw();
+                    }
+                }
                 Event::WindowEvent {
                     window_id,
                     event: win_event,
@@ -2126,6 +2156,33 @@ fn main() {
                                 // size can be queried from the window.
                                 win.resize(win.win.inner_size());
                                 win.win.request_redraw();
+                            }
+                            WindowEvent::Focused(focused) => {
+                                let focused = *focused;
+
+                                if matches!(win.kind, WindowKind::Debugger) {
+                                    if focused {
+                                        // Always request a paused snapshot on focus so the
+                                        // disassembly highlights the current paused PC.
+                                        ui_state.pending_pause = Some(true);
+
+                                        if !ui_state.debugger_focus_pause_active {
+                                            ui_state.debugger_focus_pause_active = true;
+                                            ui_state.debugger_focus_resume_armed = !ui_state.paused;
+                                            if !ui_state.paused {
+                                                ui_state.paused = true;
+                                                ui_state.pending_pause = Some(true);
+                                            }
+                                        }
+                                    } else if ui_state.debugger_focus_pause_active {
+                                        ui_state.debugger_focus_pause_active = false;
+                                        if ui_state.debugger_focus_resume_armed {
+                                            ui_state.debugger_focus_resume_armed = false;
+                                            ui_state.paused = false;
+                                            ui_state.pending_pause = Some(false);
+                                        }
+                                    }
+                                }
                             }
                             WindowEvent::KeyboardInput { event, .. }
                                 if matches!(win.kind, WindowKind::Main | WindowKind::Options) =>
@@ -2213,6 +2270,32 @@ fn main() {
                                     }
                                 }
                             }
+                            WindowEvent::KeyboardInput { event, .. }
+                                if matches!(win.kind, WindowKind::Debugger) =>
+                            {
+                                if let PhysicalKey::Code(code) = event.physical_key {
+                                    let pressed = event.state == ElementState::Pressed;
+
+                                    if pressed && code == keybinds.quit_key() {
+                                        ui_state.pending_exit = true;
+                                        return;
+                                    }
+
+                                    if want_text_input {
+                                        return;
+                                    }
+
+                                    if pressed && code == winit::keyboard::KeyCode::F5 {
+                                        ui_state.debugger.request_continue_and_focus_main();
+                                        win.win.request_redraw();
+                                    }
+
+                                    if pressed && code == winit::keyboard::KeyCode::F10 {
+                                        ui_state.debugger.request_step();
+                                        win.win.request_redraw();
+                                    }
+                                }
+                            }
                             WindowEvent::RedrawRequested => {
                                 // Ensure the Pixels surface matches the actual window size.
                                 // In some multi-window + DPI scenarios we can miss/lose a resize event,
@@ -2295,7 +2378,8 @@ fn main() {
                                     WindowKind::Debugger => {
                                         let snap =
                                             ui_snapshot.read().unwrap_or_else(|e| e.into_inner());
-                                        draw_debugger(pixels, &snap, ui)
+                                        let _ = pixels.frame_mut();
+                                        ui_state.debugger.ui(ui, &snap);
                                     }
                                     WindowKind::VramViewer => {
                                         let snap =
@@ -2454,6 +2538,16 @@ fn main() {
                         let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
                         ui_state.spawn_debugger = false;
                     }
+
+                    if ui_state.debugger_pending_focus {
+                        if let Some(dbg) = windows
+                            .values()
+                            .find(|w| matches!(w.kind, WindowKind::Debugger))
+                        {
+                            request_attention_and_focus(&dbg.win);
+                        }
+                        ui_state.debugger_pending_focus = false;
+                    }
                     if ui_state.spawn_vram
                         && !windows
                             .values()
@@ -2489,6 +2583,34 @@ fn main() {
                         let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetSerialPeripheral(
                             peripheral,
                         )));
+                    }
+
+                    let dbg_actions = ui_state.debugger.take_actions();
+                    if dbg_actions.breakpoints_updated {
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetBreakpoints(
+                            dbg_actions.breakpoints,
+                        )));
+                    }
+                    if dbg_actions.request_step {
+                        ui_state.paused = true;
+                        ui_state.pending_pause = Some(true);
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::Step(1)));
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
+                    }
+                    if dbg_actions.request_pause {
+                        ui_state.paused = true;
+                        ui_state.pending_pause = Some(true);
+                    }
+                    if dbg_actions.request_continue {
+                        ui_state.paused = false;
+                        ui_state.pending_pause = Some(false);
+
+                        if let Some(main) = windows
+                            .values()
+                            .find(|w| matches!(w.kind, WindowKind::Main))
+                        {
+                            request_attention_and_focus(&main.win);
+                        }
                     }
 
                     if let Some(paused) = ui_state.pending_pause.take() {

@@ -22,8 +22,10 @@ pub struct PpuSnapshot {
     pub cgb: bool,
 
     pub lcdc: u8,
+    pub stat: u8,
     pub scy: u8,
     pub scx: u8,
+    pub ly: u8,
     pub bgp: u8,
     pub obp0: u8,
     pub obp1: u8,
@@ -58,10 +60,53 @@ impl PpuSnapshot {
 pub struct UiSnapshot {
     pub cpu: CpuSnapshot,
     pub ppu: PpuSnapshot,
+    pub debugger: DebuggerSnapshot,
+}
+
+#[derive(Clone, Debug)]
+pub struct DebuggerSnapshot {
+    pub paused: bool,
+    pub if_reg: u8,
+    pub ie_reg: u8,
+    pub active_rom_bank: u16,
+    pub disassembly_base: u16,
+    pub disassembly_bytes: Vec<u8>,
+    pub stack_base: u16,
+    pub stack_bytes: Vec<u8>,
+    pub cgb_mode: bool,
+    pub vram_bank: u8,
+    pub wram_bank: u8,
+    pub sram_bank: u8,
+    pub sram_enabled: bool,
+
+    /// Full $0000-$FFFF memory image while paused. This is used for the virtualized
+    /// full-address-space disassembly view.
+    pub mem_image: Option<Box<[u8; 0x10000]>>,
+}
+
+impl Default for DebuggerSnapshot {
+    fn default() -> Self {
+        Self {
+            paused: true,
+            if_reg: 0,
+            ie_reg: 0,
+            active_rom_bank: 1,
+            disassembly_base: 0,
+            disassembly_bytes: vec![0; 0x200],
+            stack_base: 0,
+            stack_bytes: vec![0; 0x40],
+            cgb_mode: false,
+            vram_bank: 0,
+            wram_bank: 1,
+            sram_bank: 0,
+            sram_enabled: false,
+            mem_image: None,
+        }
+    }
 }
 
 impl UiSnapshot {
-    pub fn from_gb(gb: &mut GameBoy) -> Self {
+    pub fn from_gb(gb: &mut GameBoy, paused: bool) -> Self {
         let cpu = CpuSnapshot {
             a: gb.cpu.a,
             f: gb.cpu.f,
@@ -93,8 +138,10 @@ impl UiSnapshot {
             frame_counter: ppu.frames(),
             cgb: ppu.is_cgb(),
             lcdc: ppu.read_reg(0xFF40),
+            stat: ppu.read_reg(0xFF41),
             scy: ppu.read_reg(0xFF42),
             scx: ppu.read_reg(0xFF43),
+            ly: ppu.read_reg(0xFF44),
             bgp: ppu.read_reg(0xFF47),
             obp0: ppu.read_reg(0xFF48),
             obp1: ppu.read_reg(0xFF49),
@@ -105,6 +152,74 @@ impl UiSnapshot {
             cgb_ob_colors,
         };
 
-        Self { cpu, ppu: ppu_snap }
+        let active_rom_bank = gb
+            .mmu
+            .cart
+            .as_ref()
+            .map(|c| c.current_rom_bank())
+            .unwrap_or(1);
+
+        let sram_bank = gb
+            .mmu
+            .cart
+            .as_ref()
+            .map(|c| c.current_ram_bank())
+            .unwrap_or(0);
+
+        let sram_enabled = gb
+            .mmu
+            .cart
+            .as_ref()
+            .map(|c| c.ram_enabled())
+            .unwrap_or(false);
+
+        let cgb_mode = gb.mmu.is_cgb();
+        let vram_bank = gb.mmu.ppu.vram_bank as u8;
+        let wram_bank = gb.mmu.wram_bank as u8;
+
+        let mem_image = if paused {
+            let mut mem = Box::new([0u8; 0x10000]);
+            for (addr, b) in mem.iter_mut().enumerate() {
+                *b = gb.mmu.read_byte(addr as u16);
+            }
+            Some(mem)
+        } else {
+            None
+        };
+
+        let disassembly_base = cpu.pc.saturating_sub(0x40);
+        let mut disassembly_bytes = vec![0u8; 0x200];
+        for (i, b) in disassembly_bytes.iter_mut().enumerate() {
+            *b = gb.mmu.read_byte(disassembly_base.wrapping_add(i as u16));
+        }
+
+        let stack_base = cpu.sp;
+        let mut stack_bytes = vec![0u8; 0x40];
+        for (i, b) in stack_bytes.iter_mut().enumerate() {
+            *b = gb.mmu.read_byte(stack_base.wrapping_add(i as u16));
+        }
+
+        let dbg = DebuggerSnapshot {
+            paused,
+            if_reg: gb.mmu.if_reg,
+            ie_reg: gb.mmu.ie_reg,
+            active_rom_bank,
+            disassembly_base,
+            disassembly_bytes,
+            stack_base,
+            stack_bytes,
+            cgb_mode,
+            vram_bank,
+            wram_bank,
+            sram_bank,
+            sram_enabled,
+            mem_image,
+        };
+
+        Self {
+            cpu,
+            ppu: ppu_snap,
+            debugger: dbg,
+        }
     }
 }
