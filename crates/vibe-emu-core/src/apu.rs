@@ -1808,12 +1808,6 @@ impl Apu {
             if ch.length == 0 {
                 ch.length = 64;
             }
-            if ch.length == 64 && length_enable {
-                let upcoming = self.sequencer.step;
-                if matches!(upcoming, 0 | 2 | 4 | 6) {
-                    ch.length = 63;
-                }
-            }
         }
 
         if idx == 1 && freq_updated {
@@ -1889,12 +1883,6 @@ impl Apu {
 
         if self.ch3.length == 0 {
             self.ch3.length = 256;
-        }
-        if self.ch3.length == 256 && self.ch3.length_enable {
-            let upcoming = self.sequencer.step;
-            if matches!(upcoming, 0 | 2 | 4 | 6) {
-                self.ch3.length = 255;
-            }
         }
     }
 
@@ -2373,12 +2361,6 @@ impl Apu {
 
         if self.ch4.length == 0 {
             self.ch4.length = 64;
-        }
-        if self.ch4.length == 64 && self.ch4.length_enable {
-            let upcoming = self.sequencer.step;
-            if matches!(upcoming, 0 | 2 | 4 | 6) {
-                self.ch4.length = 63;
-            }
         }
 
         self.ch4.enabled = true;
