@@ -1493,18 +1493,13 @@ fn configure_wgpu_backend(args: &Args) {
                 std::env::set_var("WGPU_BACKEND", value);
             }
         }
-        return;
-    }
-
-    if std::env::var_os("WGPU_BACKEND").is_some() {
-        return;
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // Prefer DirectX on Windows to avoid Vulkan/ANGLE present-mode quirks on some setups.
-        unsafe {
-            std::env::set_var("WGPU_BACKEND", "dx12");
+    } else if std::env::var_os("WGPU_BACKEND").is_none() {
+        #[cfg(target_os = "windows")]
+        {
+            // Prefer DirectX on Windows to avoid Vulkan/ANGLE present-mode quirks on some setups.
+            unsafe {
+                std::env::set_var("WGPU_BACKEND", "dx12");
+            }
         }
     }
 }
