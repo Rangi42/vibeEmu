@@ -4,27 +4,42 @@ use crate::{
     mmu::Mmu,
 };
 
+/// High-level emulator facade representing a single Game Boy / Game Boy Color.
+///
+/// `GameBoy` owns the CPU and MMU and provides constructors for common initial
+/// states (post-boot vs. power-on) across DMG/CGB modes and hardware revisions.
 pub struct GameBoy {
+    /// CPU core.
     pub cpu: Cpu,
+    /// Memory map and attached devices (PPU/APU/timer/cartridge/etc).
     pub mmu: Mmu,
+    /// Whether the machine is running in CGB mode.
     pub cgb: bool,
+    /// DMG CPU/board revision used for revision-specific quirks.
     pub dmg_revision: DmgRevision,
+    /// CGB revision used for revision-specific quirks.
     pub cgb_revision: CgbRevision,
 }
 
 impl GameBoy {
+    /// Creates a DMG-mode machine in the post-boot state.
     pub fn new() -> Self {
         Self::new_with_mode(false)
     }
 
+    /// Creates a machine in the post-boot state.
+    ///
+    /// When `cgb` is `true`, the machine runs in CGB mode with default revisions.
     pub fn new_with_mode(cgb: bool) -> Self {
         Self::new_with_revisions(cgb, DmgRevision::default(), CgbRevision::default())
     }
 
+    /// Creates a machine in the post-boot state with an explicit CGB revision.
     pub fn new_with_revision(cgb: bool, revision: CgbRevision) -> Self {
         Self::new_with_revisions(cgb, DmgRevision::default(), revision)
     }
 
+    /// Creates a machine in the post-boot state with explicit DMG + CGB revisions.
     pub fn new_with_revisions(
         cgb: bool,
         dmg_revision: DmgRevision,
@@ -39,8 +54,10 @@ impl GameBoy {
         }
     }
 
-    /// Create a Game Boy initialized to an approximate power-on state suitable
-    /// for executing a boot ROM.
+    /// Creates a machine initialized to an approximate power-on state.
+    ///
+    /// This is intended for executing a boot ROM. If you are skipping the boot
+    /// ROM, prefer [`Self::new_with_revisions`].
     pub fn new_power_on_with_revisions(
         cgb: bool,
         dmg_revision: DmgRevision,
@@ -55,12 +72,12 @@ impl GameBoy {
         }
     }
 
+    /// Creates a power-on machine with an explicit CGB revision.
     pub fn new_power_on_with_revision(cgb: bool, revision: CgbRevision) -> Self {
         Self::new_power_on_with_revisions(cgb, DmgRevision::default(), revision)
     }
 
-    /// Reset the Game Boy to its initial power-on state while
-    /// preserving the loaded cartridge and boot ROM.
+    /// Resets to the post-boot state, preserving cartridge and boot ROM.
     pub fn reset(&mut self) {
         let cart = self.mmu.cart.take();
         let boot = self.mmu.boot_rom.take();
@@ -74,8 +91,9 @@ impl GameBoy {
         }
     }
 
-    /// Reset to a power-on state (instead of the post-boot state used when
-    /// skipping the boot ROM), while preserving loaded cartridge and boot ROM.
+    /// Resets to the power-on state, preserving cartridge and boot ROM.
+    ///
+    /// This is useful when you want to re-run the boot ROM sequence.
     pub fn reset_power_on(&mut self) {
         let cart = self.mmu.cart.take();
         let boot = self.mmu.boot_rom.take();

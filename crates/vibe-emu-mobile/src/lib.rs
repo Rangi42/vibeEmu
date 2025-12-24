@@ -3,6 +3,12 @@
     allow(unsafe_op_in_unsafe_fn)
 )]
 
+//! Safe wrapper for the Game Boy Mobile Adapter (libmobile).
+//!
+//! This crate provides a host-driven [`MobileAdapter`] that can be wired into the
+//! emulator serial unit via [`MobileLinkPort`]. The underlying backend is enabled
+//! by the `bundled` or `system` features.
+
 use std::{
     fmt,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -23,13 +29,17 @@ mod std_host;
 
 pub use std_host::StdMobileHost;
 
-// Mirrors libmobile public ABI constants.
+/// Maximum number of concurrent libmobile connections.
 pub const MOBILE_MAX_CONNECTIONS: usize = 2;
+/// Maximum number of independent libmobile timers.
 pub const MOBILE_MAX_TIMERS: usize = 4;
+/// Size of the persisted configuration blob.
 pub const MOBILE_CONFIG_SIZE: usize = 0x200;
+/// Byte value returned by libmobile while the serial line is idle.
 pub const MOBILE_SERIAL_IDLE_BYTE: u8 = 0xD2;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+/// Cosmetic device selection for the Mobile Adapter.
 pub enum MobileAdapterDevice {
     #[default]
     Blue,
@@ -53,18 +63,21 @@ pub struct MobileConfig {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// Which phone number (user or peer) is being updated.
 pub enum MobileNumber {
     User,
     Peer,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// Socket type requested by libmobile.
 pub enum MobileSockType {
     Tcp,
     Udp,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
+/// IP address + port representation used by libmobile.
 pub enum MobileAddr {
     #[default]
     None,
@@ -79,6 +92,9 @@ pub enum MobileAddr {
 }
 
 impl MobileAddr {
+    /// Converts this address into a standard library `SocketAddr`.
+    ///
+    /// Returns `None` for [`MobileAddr::None`].
     pub fn to_socket_addr(&self) -> Option<SocketAddr> {
         match self {
             MobileAddr::None => None,
@@ -94,11 +110,19 @@ impl MobileAddr {
     }
 }
 
+/// Host callbacks required by [`MobileAdapter`].
+///
+/// The host provides persistence for the `MOBILE_CONFIG_SIZE` blob and implements
+/// network socket I/O.
 pub trait MobileHost: Send {
+    /// Optional debug log line emitted by libmobile.
     fn debug_log(&mut self, _line: &str) {}
+    /// Optional callback used to expose the user/peer phone numbers.
     fn update_number(&mut self, _which: MobileNumber, _number: Option<&str>) {}
 
+    /// Reads bytes from the persisted config blob into `dest`.
     fn config_read(&mut self, dest: &mut [u8], offset: usize) -> bool;
+    /// Writes bytes from `src` into the persisted config blob.
     fn config_write(&mut self, src: &[u8], offset: usize) -> bool;
 
     fn sock_open(
@@ -108,9 +132,13 @@ pub trait MobileHost: Send {
         addr: &MobileAddr,
         bind_port: u16,
     ) -> bool;
+    /// Closes the socket associated with `conn`.
     fn sock_close(&mut self, conn: u32);
+    /// Connects the socket for `conn` to `addr`.
     fn sock_connect(&mut self, conn: u32, addr: &MobileAddr) -> i32;
+    /// Starts listening on the socket for `conn`.
     fn sock_listen(&mut self, conn: u32) -> bool;
+    /// Accepts a pending connection for `conn`.
     fn sock_accept(&mut self, conn: u32) -> bool;
 
     fn sock_send(&mut self, conn: u32, data: &[u8], addr: Option<&MobileAddr>) -> i32;
@@ -202,6 +230,9 @@ impl MobileAdapter {
         }
     }
 
+    /// Stops libmobile.
+    ///
+    /// Stopping is idempotent; if the backend isn't running, this returns `Ok(())`.
     pub fn stop(&mut self) -> Result<(), MobileError> {
         #[cfg(any(feature = "bundled", feature = "system"))]
         {
@@ -241,6 +272,9 @@ impl MobileAdapter {
         }
     }
 
+    /// Transfers a single serial byte through libmobile.
+    ///
+    /// This is intended to be called from the emulator serial unit.
     pub fn transfer_byte(&mut self, byte: u8) -> Result<u8, MobileError> {
         #[cfg(any(feature = "bundled", feature = "system"))]
         {
@@ -279,6 +313,7 @@ impl MobileAdapter {
         }
     }
 
+    /// Returns the idle filler byte used by the mobile serial protocol.
     pub fn idle_byte() -> u8 {
         MOBILE_SERIAL_IDLE_BYTE
     }
@@ -293,6 +328,7 @@ pub struct MobileLinkPort {
 }
 
 impl MobileLinkPort {
+    /// Wraps a [`MobileAdapter`] behind a mutex and exposes it as a `LinkPort`.
     pub fn new(adapter: std::sync::Arc<std::sync::Mutex<MobileAdapter>>) -> Self {
         Self { adapter }
     }

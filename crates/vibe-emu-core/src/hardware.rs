@@ -1,4 +1,8 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// DMG hardware revision.
+///
+/// Used to model revision-specific quirks that affect timing and observable
+/// behavior.
 pub enum DmgRevision {
     Rev0,
     RevA,
@@ -8,6 +12,10 @@ pub enum DmgRevision {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// CGB hardware revision.
+///
+/// Used to model revision-specific quirks (e.g. PPU and APU behaviors) that
+/// differ across CGB motherboard revisions.
 pub enum CgbRevision {
     Rev0,
     RevA,
@@ -20,11 +28,13 @@ pub enum CgbRevision {
 
 impl CgbRevision {
     #[inline]
+    /// Returns whether this revision supports the DE window behavior.
     pub const fn supports_de_window(self) -> bool {
         matches!(self, CgbRevision::RevD | CgbRevision::RevE)
     }
 
     #[inline]
+    /// Returns whether this revision exhibits the PCM mask glitch.
     pub const fn has_pcm_mask_glitch(self) -> bool {
         matches!(
             self,

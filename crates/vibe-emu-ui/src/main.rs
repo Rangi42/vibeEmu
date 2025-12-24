@@ -389,7 +389,7 @@ struct Args {
     #[arg(long)]
     mobile_unmetered: bool,
 
-    /// Override DNS server 1 as ip:port (e.g. 8.8.8.8:53 or [2001:4860:4860::8888]:53)
+    /// Override DNS server 1 as ip:port (e.g. `8.8.8.8:53` or `[2001:4860:4860::8888]:53`)
     #[arg(long)]
     mobile_dns1: Option<String>,
 

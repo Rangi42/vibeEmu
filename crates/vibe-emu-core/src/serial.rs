@@ -1,5 +1,8 @@
 use crate::hardware::DmgRevision;
 
+/// Endpoint abstraction for the Game Boy link cable.
+///
+/// Implementations may simulate a remote peer or bridge to an external system.
 pub trait LinkPort: Send {
     /// Transfer a byte over the link. Returns the byte received from the
     /// partner. Implementations may perform the transfer immediately.
@@ -16,6 +19,10 @@ pub struct NullLinkPort {
 }
 
 impl NullLinkPort {
+    /// Creates a new stub link port.
+    ///
+    /// If `loopback` is `true`, transferred bytes are echoed back. Otherwise the
+    /// port behaves like an open line (incoming bits read as 1), returning `0xFF`.
     pub fn new(loopback: bool) -> Self {
         Self { loopback }
     }
@@ -84,6 +91,7 @@ impl TransferState {
 }
 
 impl Serial {
+    /// Creates a new serial unit.
     pub fn new(cgb: bool, dmg_revision: DmgRevision) -> Self {
         Self {
             sb: 0,
@@ -97,10 +105,12 @@ impl Serial {
         }
     }
 
+    /// Attaches a link cable endpoint.
     pub fn connect(&mut self, port: Box<dyn LinkPort + Send>) {
         self.port = port;
     }
 
+    /// Reads the SB/SC registers.
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             0xFF01 => self.sb,
@@ -115,6 +125,7 @@ impl Serial {
         }
     }
 
+    /// Writes the SB/SC registers.
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
             0xFF01 => {
