@@ -152,6 +152,7 @@ pub struct Ppu {
     pub framebuffer: [u32; SCREEN_WIDTH * SCREEN_HEIGHT],
     line_priority: [bool; SCREEN_WIDTH],
     line_color_zero: [bool; SCREEN_WIDTH],
+    cgb_line_obj_enabled: [bool; SCREEN_WIDTH],
     /// Latched sprites for the current scanline
     line_sprites: [Sprite; MAX_SPRITES_PER_LINE],
     sprite_count: usize,
@@ -179,6 +180,14 @@ pub struct Ppu {
     dmg_line_bgp_base: u8,
     dmg_bgp_event_count: usize,
     dmg_bgp_events: [DmgBgpEvent; DMG_BGP_EVENTS_MAX],
+
+    // --- CGB timing quirks ---
+    //
+    // Some CGB test ROMs rely on mid-scanline LCDC writes changing the tile
+    // fetch pipeline (notably LCDC bit 4 TILE_SEL mixing/glitches).
+    mode3_lcdc_base: u8,
+    mode3_lcdc_event_count: usize,
+    mode3_lcdc_events: [Mode3LcdcEvent; MODE3_LCDC_EVENTS_MAX],
 }
 
 #[derive(Copy, Clone, Default)]
@@ -188,6 +197,14 @@ struct DmgBgpEvent {
 }
 
 const DMG_BGP_EVENTS_MAX: usize = 64;
+
+const MODE3_LCDC_EVENTS_MAX: usize = 64;
+
+#[derive(Copy, Clone, Default)]
+struct Mode3LcdcEvent {
+    t: u16,
+    val: u8,
+}
 
 /// Default DMG palette colors in 0x00RRGGBB order for the `pixels` crate.
 const DMG_PALETTE: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
@@ -240,6 +257,7 @@ impl Ppu {
             framebuffer: [0; SCREEN_WIDTH * SCREEN_HEIGHT],
             line_priority: [false; SCREEN_WIDTH],
             line_color_zero: [false; SCREEN_WIDTH],
+            cgb_line_obj_enabled: [true; SCREEN_WIDTH],
             line_sprites: [Sprite::default(); MAX_SPRITES_PER_LINE],
             sprite_count: 0,
             frame_ready: false,
@@ -254,6 +272,10 @@ impl Ppu {
             dmg_line_bgp_base: 0,
             dmg_bgp_event_count: 0,
             dmg_bgp_events: [DmgBgpEvent::default(); DMG_BGP_EVENTS_MAX],
+
+            mode3_lcdc_base: 0,
+            mode3_lcdc_event_count: 0,
+            mode3_lcdc_events: [Mode3LcdcEvent::default(); MODE3_LCDC_EVENTS_MAX],
             #[cfg(feature = "ppu-trace")]
             debug_lcd_enable_timer: None,
             #[cfg(feature = "ppu-trace")]
@@ -311,6 +333,21 @@ impl Ppu {
     fn dmg_begin_transfer_line(&mut self) {
         self.dmg_line_bgp_base = self.bgp;
         self.dmg_bgp_event_count = 0;
+    }
+
+    fn begin_mode3_line(&mut self) {
+        self.mode3_lcdc_base = self.lcdc;
+        self.mode3_lcdc_event_count = 0;
+    }
+
+    fn record_mode3_lcdc_event(&mut self, mode3_t: u16, val: u8) {
+        let t = mode3_t.min(self.mode3_target_cycles.saturating_sub(1));
+        if self.mode3_lcdc_event_count >= MODE3_LCDC_EVENTS_MAX {
+            self.mode3_lcdc_events[MODE3_LCDC_EVENTS_MAX - 1] = Mode3LcdcEvent { t, val };
+            return;
+        }
+        self.mode3_lcdc_events[self.mode3_lcdc_event_count] = Mode3LcdcEvent { t, val };
+        self.mode3_lcdc_event_count += 1;
     }
 
     fn record_dmg_bgp_event(&mut self, mode3_t: u16, val: u8) {
@@ -688,7 +725,19 @@ impl Ppu {
 
     fn compute_mode3_cycles_for_line(&self) -> u16 {
         if self.cgb && !self.dmg_compat {
-            MODE3_CYCLES
+            // CGB mode 3 duration is not constant; sprite fetches can stall the
+            // background pipeline. We model a minimal subset that is required
+            // for mid-scanline timing tests (e.g. cgb-acid-hell).
+            let mut cycles = MODE3_CYCLES;
+            if (self.lcdc & 0x02) != 0
+                && self.sprite_count > 0
+                && self.line_sprites[..self.sprite_count]
+                    .iter()
+                    .any(|s| s.x <= 0)
+            {
+                cycles = cycles.saturating_add(6);
+            }
+            cycles
         } else {
             self.dmg_compute_mode3_cycles_for_line()
         }
@@ -1590,6 +1639,14 @@ impl Ppu {
         match addr {
             0xFF40 => {
                 let was_on = self.lcdc & 0x80 != 0;
+                if self.mode == MODE_TRANSFER
+                    && self.ly < SCREEN_HEIGHT as u8
+                    && was_on
+                    && self.mode_clock <= self.mode3_target_cycles
+                {
+                    self.record_mode3_lcdc_event(self.mode_clock, val);
+                }
+
                 self.lcdc = val;
                 if was_on && self.lcdc & 0x80 == 0 {
                     self.set_mode(MODE_HBLANK);
@@ -1715,6 +1772,7 @@ impl Ppu {
 
         self.line_priority.fill(false);
         self.line_color_zero.fill(false);
+        self.cgb_line_obj_enabled.fill(self.lcdc & 0x02 != 0);
 
         let cgb_render = self.cgb && !self.dmg_compat;
 
@@ -1756,59 +1814,39 @@ impl Ppu {
         }
 
         if bg_enabled {
-            let tile_map_base = if self.lcdc & 0x08 != 0 {
-                BG_MAP_1_BASE
+            if cgb_render {
+                self.render_cgb_bg_window_scanline_with_mode3_lcdc();
             } else {
-                BG_MAP_0_BASE
-            };
-            let tile_data_base = if self.lcdc & 0x10 != 0 {
-                TILE_DATA_0_BASE
-            } else {
-                TILE_DATA_1_BASE
-            };
-
-            // draw background
-            for x in 0..SCREEN_WIDTH as u16 {
-                let scx = self.scx as u16;
-                let px = x.wrapping_add(scx) & 0xFF;
-                let tile_col = (px / 8) as usize;
-                let tile_row = (((self.ly as u16 + self.scy as u16) & 0xFF) / 8) as usize;
-                let mut tile_y = (((self.ly as u16 + self.scy as u16) & 0xFF) % 8) as usize;
-
-                let tile_index =
-                    self.vram_read_for_render(0, tile_map_base + tile_row * 32 + tile_col);
-                let addr = if self.lcdc & 0x10 != 0 {
-                    tile_data_base + tile_index as usize * 16
+                let tile_map_base = if self.lcdc & 0x08 != 0 {
+                    BG_MAP_1_BASE
                 } else {
-                    tile_data_base + ((tile_index as i8 as i16 + 128) as usize) * 16
+                    BG_MAP_0_BASE
                 };
-                let mut bit = 7 - (px % 8) as usize;
-                let mut priority = false;
-                let mut palette = 0usize;
-                let mut bank = 0usize;
-                if cgb_render {
-                    let attr =
-                        self.vram_read_for_render(1, tile_map_base + tile_row * 32 + tile_col);
-                    palette = (attr & 0x07) as usize;
-                    bank = if attr & 0x08 != 0 { 1 } else { 0 };
-                    if attr & 0x20 != 0 {
-                        bit = (px % 8) as usize;
-                    }
-                    if attr & 0x40 != 0 {
-                        tile_y = 7 - tile_y;
-                    }
-                    priority = attr & 0x80 != 0;
-                }
-                let lo = self.vram_read_for_render(bank, addr + tile_y * 2);
-                let hi = self.vram_read_for_render(bank, addr + tile_y * 2 + 1);
-                let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                let (color, color_idx) = if cgb_render {
-                    let off = palette * 8 + color_id as usize * 2;
-                    (
-                        Self::decode_cgb_color(self.bgpd[off], self.bgpd[off + 1]),
-                        color_id,
-                    )
+                let tile_data_base = if self.lcdc & 0x10 != 0 {
+                    TILE_DATA_0_BASE
                 } else {
+                    TILE_DATA_1_BASE
+                };
+
+                // draw background
+                for x in 0..SCREEN_WIDTH as u16 {
+                    let scx = self.scx as u16;
+                    let px = x.wrapping_add(scx) & 0xFF;
+                    let tile_col = (px / 8) as usize;
+                    let tile_row = (((self.ly as u16 + self.scy as u16) & 0xFF) / 8) as usize;
+                    let tile_y = (((self.ly as u16 + self.scy as u16) & 0xFF) % 8) as usize;
+
+                    let tile_index =
+                        self.vram_read_for_render(0, tile_map_base + tile_row * 32 + tile_col);
+                    let addr = if self.lcdc & 0x10 != 0 {
+                        tile_data_base + tile_index as usize * 16
+                    } else {
+                        tile_data_base + ((tile_index as i8 as i16 + 128) as usize) * 16
+                    };
+                    let bit = 7 - (px % 8) as usize;
+                    let lo = self.vram_read_for_render(0, addr + tile_y * 2);
+                    let hi = self.vram_read_for_render(0, addr + tile_y * 2 + 1);
+                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
                     let bgp = self.dmg_bgp_for_pixel(x as usize);
                     let idx = Self::dmg_shade(bgp, color_id);
                     let color = if self.dmg_compat {
@@ -1817,64 +1855,38 @@ impl Ppu {
                     } else {
                         self.dmg_palette[idx as usize]
                     };
-                    (color, idx)
-                };
-                let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
-                self.framebuffer[idx] = color;
-                self.line_priority[x as usize] = priority;
-                self.line_color_zero[x as usize] = color_idx == 0;
-            }
+                    let idx_fb = self.ly as usize * SCREEN_WIDTH + x as usize;
+                    self.framebuffer[idx_fb] = color;
+                    self.line_color_zero[x as usize] = idx == 0;
+                }
 
-            // window
-            let mut window_drawn = false;
-            if self.lcdc & 0x20 != 0 && self.ly >= self.wy && self.wx <= WINDOW_X_MAX {
-                let wx = self.wx.wrapping_sub(7) as u16;
-                let window_map_base = if self.lcdc & 0x40 != 0 {
-                    BG_MAP_1_BASE
-                } else {
-                    BG_MAP_0_BASE
-                };
-                let window_y = self.win_line_counter as usize;
-                for x in wx..SCREEN_WIDTH as u16 {
-                    let window_x = (x - wx) as usize;
-                    let tile_col = window_x / 8;
-                    let tile_row = window_y / 8;
-                    let mut tile_y = window_y % 8;
-                    let tile_x = window_x % 8;
-                    let tile_index =
-                        self.vram_read_for_render(0, window_map_base + tile_row * 32 + tile_col);
-                    let addr = if self.lcdc & 0x10 != 0 {
-                        tile_data_base + tile_index as usize * 16
+                // window
+                let mut window_drawn = false;
+                if self.lcdc & 0x20 != 0 && self.ly >= self.wy && self.wx <= WINDOW_X_MAX {
+                    let wx = self.wx.wrapping_sub(7) as u16;
+                    let window_map_base = if self.lcdc & 0x40 != 0 {
+                        BG_MAP_1_BASE
                     } else {
-                        tile_data_base + ((tile_index as i8 as i16 + 128) as usize) * 16
+                        BG_MAP_0_BASE
                     };
-                    let mut bit = 7 - tile_x;
-                    let mut priority = false;
-                    let mut palette = 0usize;
-                    let mut bank = 0usize;
-                    if cgb_render {
-                        let attr = self
-                            .vram_read_for_render(1, window_map_base + tile_row * 32 + tile_col);
-                        palette = (attr & 0x07) as usize;
-                        bank = if attr & 0x08 != 0 { 1 } else { 0 };
-                        if attr & 0x20 != 0 {
-                            bit = tile_x;
-                        }
-                        if attr & 0x40 != 0 {
-                            tile_y = 7 - tile_y;
-                        }
-                        priority = attr & 0x80 != 0;
-                    }
-                    let lo = self.vram_read_for_render(bank, addr + tile_y * 2);
-                    let hi = self.vram_read_for_render(bank, addr + tile_y * 2 + 1);
-                    let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
-                    let (color, color_idx) = if cgb_render {
-                        let off = palette * 8 + color_id as usize * 2;
-                        (
-                            Self::decode_cgb_color(self.bgpd[off], self.bgpd[off + 1]),
-                            color_id,
-                        )
-                    } else {
+                    let window_y = self.win_line_counter as usize;
+                    for x in wx..SCREEN_WIDTH as u16 {
+                        let window_x = (x - wx) as usize;
+                        let tile_col = window_x / 8;
+                        let tile_row = window_y / 8;
+                        let tile_y = window_y % 8;
+                        let tile_x = window_x % 8;
+                        let tile_index = self
+                            .vram_read_for_render(0, window_map_base + tile_row * 32 + tile_col);
+                        let addr = if self.lcdc & 0x10 != 0 {
+                            tile_data_base + tile_index as usize * 16
+                        } else {
+                            tile_data_base + ((tile_index as i8 as i16 + 128) as usize) * 16
+                        };
+                        let bit = 7 - tile_x;
+                        let lo = self.vram_read_for_render(0, addr + tile_y * 2);
+                        let hi = self.vram_read_for_render(0, addr + tile_y * 2 + 1);
+                        let color_id = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
                         let bgp = self.dmg_bgp_for_pixel(x as usize);
                         let idx = Self::dmg_shade(bgp, color_id);
                         let color = if self.dmg_compat {
@@ -1883,24 +1895,28 @@ impl Ppu {
                         } else {
                             self.dmg_palette[idx as usize]
                         };
-                        (color, idx)
-                    };
-                    let idx = self.ly as usize * SCREEN_WIDTH + x as usize;
-                    self.framebuffer[idx] = color;
-                    if (x as usize) < SCREEN_WIDTH {
-                        self.line_priority[x as usize] = priority;
-                        self.line_color_zero[x as usize] = color_idx == 0;
+                        let idx_fb = self.ly as usize * SCREEN_WIDTH + x as usize;
+                        self.framebuffer[idx_fb] = color;
+                        if (x as usize) < SCREEN_WIDTH {
+                            self.line_color_zero[x as usize] = idx == 0;
+                        }
                     }
+                    window_drawn = true;
                 }
-                window_drawn = true;
-            }
-            if window_drawn {
-                self.win_line_counter = self.win_line_counter.wrapping_add(1);
+                if window_drawn {
+                    self.win_line_counter = self.win_line_counter.wrapping_add(1);
+                }
             }
         }
 
         // sprites
-        if self.lcdc & 0x02 != 0 {
+        let any_obj_enabled = if cgb_render {
+            self.cgb_line_obj_enabled.iter().any(|&v| v)
+        } else {
+            self.lcdc & 0x02 != 0
+        };
+
+        if any_obj_enabled {
             let sprite_height: i16 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
             let mut drawn = [false; SCREEN_WIDTH];
             for s in &self.line_sprites[..self.sprite_count] {
@@ -1929,6 +1945,10 @@ impl Ppu {
                     }
                     let sx = s.x + px as i16;
                     if !(0i16..SCREEN_WIDTH as i16).contains(&sx) || drawn[sx as usize] {
+                        continue;
+                    }
+
+                    if cgb_render && !self.cgb_line_obj_enabled[sx as usize] {
                         continue;
                     }
                     let bg_zero = if !bg_enabled {
@@ -2091,6 +2111,7 @@ impl Ppu {
                         self.mode_clock -= MODE2_CYCLES;
                         self.oam_scan();
                         self.set_mode(MODE_TRANSFER);
+                        self.begin_mode3_line();
                         self.mode3_target_cycles = self.compute_mode3_cycles_for_line();
                         self.mode0_target_cycles = LINE_CYCLES
                             .saturating_sub(MODE2_CYCLES.saturating_add(self.mode3_target_cycles));
@@ -2157,6 +2178,248 @@ impl Ppu {
             self.update_stat_irq(if_reg);
         }
         hblank_triggered
+    }
+
+    fn render_cgb_bg_window_scanline_with_mode3_lcdc(&mut self) {
+        use std::collections::VecDeque;
+
+        #[derive(Clone, Copy)]
+        struct FifoPixel {
+            color_id: u8,
+            palette: u8,
+            priority: bool,
+        }
+
+        let mut lcdc_cur = self.mode3_lcdc_base;
+        let mut event_idx = 0usize;
+        let events = &self.mode3_lcdc_events[..self.mode3_lcdc_event_count];
+
+        let scx = self.scx;
+        let scy = self.scy;
+        let ly = self.ly;
+
+        let mut fifo: VecDeque<FifoPixel> = VecDeque::with_capacity(32);
+
+        let mut out_x: usize = 0;
+        let mut discard: u8 = scx & 7;
+
+        let mut fetcher_step: u8 = 0;
+        let mut fetcher_subdot: u8 = 0;
+        let mut tile_fetch_index: u16 = 0;
+
+        let mut cur_tile: u8 = 0;
+        let mut cur_attr: u8 = 0;
+        let mut cur_lo: u8 = 0;
+        let mut cur_hi: u8 = 0;
+        let mut hi_glitch = false;
+        let bg_y = ly.wrapping_add(scy);
+        let bg_tile_row = ((bg_y / 8) & 31) as usize;
+        let bg_tile_y_raw = (bg_y & 7) as usize;
+
+        let bg_col_base = (scx as u16 / 8) & 31;
+
+        let mut window_active = false;
+        let mut window_drawn = false;
+        let wx = self.wx;
+        let wy = self.wy;
+        let window_eligible = ly >= wy && wx <= WINDOW_X_MAX;
+        let window_tile_y_raw = (self.win_line_counter & 7) as usize;
+        let window_tile_row = ((self.win_line_counter / 8) & 31) as usize;
+
+        let mut stall_dots: u8 = 0;
+        if (self.mode3_lcdc_base & 0x02) != 0
+            && self.sprite_count > 0
+            && self.line_sprites[..self.sprite_count]
+                .iter()
+                .any(|s| s.x <= 0)
+        {
+            stall_dots = 6;
+        }
+
+        for t in 0..self.mode3_target_cycles {
+            while event_idx < events.len() && events[event_idx].t == t {
+                let old = lcdc_cur;
+                lcdc_cur = events[event_idx].val;
+
+                if ((old ^ lcdc_cur) & 0x10) != 0 {
+                    let old_sel = (old & 0x10) != 0;
+                    let new_sel = (lcdc_cur & 0x10) != 0;
+
+                    // cgb-acid-hell relies on the classic TILE_SEL mid-fetch glitch:
+                    // clearing bit 4 during the upper bitplane fetch causes the fetched
+                    // byte to come from the tile index path instead.
+                    if old_sel && !new_sel {
+                        // If the write lands slightly earlier in our simplified fetcher
+                        // model, carry the glitch forward until the next hi-byte read.
+                        if fetcher_step == 1 || fetcher_step == 2 {
+                            hi_glitch = true;
+                        }
+                    }
+                }
+
+                event_idx += 1;
+            }
+
+            if !window_active
+                && window_eligible
+                && (lcdc_cur & 0x20) != 0
+                && out_x < SCREEN_WIDTH
+                && (out_x as i16 + 7) >= wx as i16
+            {
+                window_active = true;
+                window_drawn = true;
+                fifo.clear();
+                fetcher_step = 0;
+                fetcher_subdot = 0;
+                tile_fetch_index = 0;
+                cur_tile = 0;
+                cur_attr = 0;
+                cur_lo = 0;
+                cur_hi = 0;
+                hi_glitch = false;
+            }
+
+            if stall_dots > 0 {
+                stall_dots -= 1;
+            } else if fifo.len() <= 8 {
+                if fetcher_subdot == 1 {
+                    let tile_map_base = if window_active {
+                        if lcdc_cur & 0x40 != 0 {
+                            BG_MAP_1_BASE
+                        } else {
+                            BG_MAP_0_BASE
+                        }
+                    } else if lcdc_cur & 0x08 != 0 {
+                        BG_MAP_1_BASE
+                    } else {
+                        BG_MAP_0_BASE
+                    };
+
+                    let tile_row = if window_active {
+                        window_tile_row
+                    } else {
+                        bg_tile_row
+                    };
+
+                    let tile_col = if window_active {
+                        (tile_fetch_index & 31) as usize
+                    } else {
+                        ((bg_col_base + tile_fetch_index) & 31) as usize
+                    };
+
+                    let map_addr = tile_map_base + tile_row * 32 + tile_col;
+
+                    match fetcher_step {
+                        0 => {
+                            cur_tile = self.vram_read_for_render(0, map_addr);
+                            cur_attr = self.vram_read_for_render(1, map_addr);
+                        }
+                        1 => {
+                            let tile_y_raw = if window_active {
+                                window_tile_y_raw
+                            } else {
+                                bg_tile_y_raw
+                            };
+                            let tile_y = if (cur_attr & 0x40) != 0 {
+                                7usize.saturating_sub(tile_y_raw)
+                            } else {
+                                tile_y_raw
+                            };
+                            let tile_data_base = if lcdc_cur & 0x10 != 0 {
+                                TILE_DATA_0_BASE
+                            } else {
+                                TILE_DATA_1_BASE
+                            };
+                            let base_addr = if lcdc_cur & 0x10 != 0 {
+                                tile_data_base + cur_tile as usize * 16
+                            } else {
+                                tile_data_base + ((cur_tile as i8 as i16 + 128) as usize) * 16
+                            };
+                            let bank = if (cur_attr & 0x08) != 0 { 1 } else { 0 };
+                            let addr = base_addr + tile_y * 2;
+                            cur_lo = self.vram_read_for_render(bank, addr);
+                        }
+                        2 => {
+                            let tile_y_raw = if window_active {
+                                window_tile_y_raw
+                            } else {
+                                bg_tile_y_raw
+                            };
+                            let tile_y = if (cur_attr & 0x40) != 0 {
+                                7usize.saturating_sub(tile_y_raw)
+                            } else {
+                                tile_y_raw
+                            };
+                            let tile_data_base = if lcdc_cur & 0x10 != 0 {
+                                TILE_DATA_0_BASE
+                            } else {
+                                TILE_DATA_1_BASE
+                            };
+                            let base_addr = if lcdc_cur & 0x10 != 0 {
+                                tile_data_base + cur_tile as usize * 16
+                            } else {
+                                tile_data_base + ((cur_tile as i8 as i16 + 128) as usize) * 16
+                            };
+                            let bank = if (cur_attr & 0x08) != 0 { 1 } else { 0 };
+                            let addr = base_addr + tile_y * 2 + 1;
+                            cur_hi = if hi_glitch {
+                                cur_tile
+                            } else {
+                                self.vram_read_for_render(bank, addr)
+                            };
+                            hi_glitch = false;
+                        }
+                        3 => {
+                            let palette = cur_attr & 0x07;
+                            let priority = (cur_attr & 0x80) != 0;
+                            let x_flip = (cur_attr & 0x20) != 0;
+                            for i in 0..8u8 {
+                                let bit = if x_flip { i } else { 7 - i };
+                                let color_id = (((cur_hi >> bit) & 1) << 1) | ((cur_lo >> bit) & 1);
+                                fifo.push_back(FifoPixel {
+                                    color_id,
+                                    palette,
+                                    priority,
+                                });
+                            }
+                            tile_fetch_index = tile_fetch_index.wrapping_add(1);
+                        }
+                        _ => {}
+                    }
+                }
+
+                fetcher_subdot ^= 1;
+                if fetcher_subdot == 0 {
+                    fetcher_step = (fetcher_step + 1) % 4;
+                }
+            }
+
+            if let Some(pix) = fifo.pop_front() {
+                if discard > 0 {
+                    discard -= 1;
+                } else if out_x < SCREEN_WIDTH {
+                    self.cgb_line_obj_enabled[out_x] = (lcdc_cur & 0x02) != 0;
+                    let off = pix.palette as usize * 8 + pix.color_id as usize * 2;
+                    let color = Self::decode_cgb_color(self.bgpd[off], self.bgpd[off + 1]);
+                    let idx_fb = ly as usize * SCREEN_WIDTH + out_x;
+                    self.framebuffer[idx_fb] = color;
+                    self.line_priority[out_x] = pix.priority;
+                    self.line_color_zero[out_x] = pix.color_id == 0;
+                    out_x += 1;
+
+                    if window_active {
+                        window_drawn = true;
+                    }
+                }
+            }
+            if out_x >= SCREEN_WIDTH {
+                break;
+            }
+        }
+
+        if window_drawn {
+            self.win_line_counter = self.win_line_counter.wrapping_add(1);
+        }
     }
 
     fn dmg_startup_stage_bounds(stage: usize) -> (u16, u16) {
