@@ -2236,7 +2236,18 @@ impl Ppu {
             stall_dots = 6;
         }
 
-        for t in 0..self.mode3_target_cycles {
+        // In the real hardware the pixel pipeline always produces 160 output pixels.
+        // Our simplified fetcher model can under-produce if the mode 3 duration is
+        // shortened or if we start late (e.g. due to SCX discard + FIFO warmup).
+        // If we leave pixels untouched, stale framebuffer content shows up as a
+        // right-edge strip that looks like tearing during scrolling.
+        let max_dots = self
+            .mode3_target_cycles
+            .max(MODE3_CYCLES)
+            .saturating_add(64);
+
+        let mut t: u16 = 0;
+        while out_x < SCREEN_WIDTH && t < max_dots {
             while event_idx < events.len() && events[event_idx].t == t {
                 let old = lcdc_cur;
                 lcdc_cur = events[event_idx].val;
@@ -2415,6 +2426,8 @@ impl Ppu {
             if out_x >= SCREEN_WIDTH {
                 break;
             }
+
+            t = t.saturating_add(1);
         }
 
         if window_drawn {
