@@ -294,10 +294,20 @@ impl Cpu {
             self.double_speed,
             &mut mmu.if_reg,
         );
-        if mmu.ppu.step(dot_cycles, &mut mmu.if_reg) {
-            mmu.hdma_hblank_transfer();
+
+        if mmu.dma_active() {
+            for _ in 0..dot_cycles {
+                mmu.dma_step(1);
+                if mmu.ppu.step(1, &mut mmu.if_reg) {
+                    mmu.hdma_hblank_transfer();
+                }
+            }
+        } else {
+            if mmu.ppu.step(dot_cycles, &mut mmu.if_reg) {
+                mmu.hdma_hblank_transfer();
+            }
+            mmu.dma_step(dot_cycles);
         }
-        mmu.dma_step(dot_cycles);
     }
 
     fn speed_switch_stall(&mut self, mmu: &mut crate::mmu::Mmu) {

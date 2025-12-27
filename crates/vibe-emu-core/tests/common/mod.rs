@@ -24,7 +24,30 @@ fn ensure_test_roms() {
         ensure_c_sp_test_rom_bundle(&dir);
         ensure_daid_test_roms(&dir);
         ensure_bullygb_test_roms(&dir);
+        ensure_hacktix_test_roms(&dir);
     });
+}
+
+fn ensure_hacktix_test_roms(dir: &Path) {
+    // Hacktix ROMs are hosted in GBEmulatorShootout and not included in the c-sp bundle.
+    // Keep them under test_roms/hacktix/ to avoid collisions.
+    let base = dir.join("hacktix");
+
+    let rom_path = base.join("strikethrough.gb");
+    let png_path = base.join("strikethrough.png");
+
+    if !rom_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/vulcandth/GBEmulatorShootout/main/testroms/hacktix/strikethrough.gb",
+            &rom_path,
+        );
+    }
+    if !png_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/vulcandth/GBEmulatorShootout/main/testroms/hacktix/strikethrough.png",
+            &png_path,
+        );
+    }
 }
 
 fn ensure_bullygb_test_roms(dir: &Path) {

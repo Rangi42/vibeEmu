@@ -28,6 +28,7 @@ Commands executed:
 - `cargo test --release --test oam_bug_rom_singles -- --include-ignored`
 - `cargo test --release --test ppu -- --include-ignored`
 - `cargo test --release --test same_suite -- --include-ignored`
+- `cargo test --release --test strikethrough -- --include-ignored`
 - `cargo test --release --test timer -- --include-ignored`
 
 
@@ -38,10 +39,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1684 | 1953 | 0 | 0 | 3637 | 46.3% |
+| ROM Test Suites | 1684 | 1947 | 0 | 0 | 3631 | 46.4% |
 | Integration Tests | 130 | 52 | 0 | 0 | 182 | 71.4% |
-| Unit Tests | 39 | 1 | 0 | 0 | 40 | 97.5% |
-| **Overall** | 1853 | 2006 | 0 | 0 | 3859 | 48.0% |
+| Unit Tests | 40 | 0 | 0 | 0 | 40 | 100.0% |
+| **Overall** | 1854 | 1999 | 0 | 0 | 3853 | 48.1% |
 
 ## Detailed Results
 
@@ -124,7 +125,7 @@ Combined exit code: 101
 | `dmg_sound_10_wave_trigger_while_on` | ❌ Fail |
 | `dmg_sound_12_wave_write_while_on` | ❌ Fail |
 
-#### gambatte (1500/3429 passing, 43.7%)
+#### gambatte (1499/3422 passing, 43.8%)
 
 | Test | Result |
 | --- | --- |
@@ -1026,7 +1027,6 @@ Combined exit code: 101
 | `sound/ch1_duty0_pattern_pos4_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pattern_pos5_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pattern_pos6_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
-| `sound/ch1_duty0_pattern_pos8_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pos6_to_pos7_timing_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_3_cgb04c_outaudio0.gbc` | ✅ Pass |
@@ -1063,12 +1063,10 @@ Combined exit code: 101
 | `sound/ch2_div_write_reset_length_counter_timing_nr52_1_dmg08_cgb04c_outF2.gbc` | ✅ Pass |
 | `sound/ch2_div_write_reset_length_counter_timing_nr52_2_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch2_init_env_counter_timing_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
-| `sound/ch2_init_pos_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_pos_2_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_env_counter_timing_13_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_env_counter_timing_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_env_counter_timing_3_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
-| `sound/ch2_init_reset_env_counter_timing_9_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_length_counter_timing_4_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_length_counter_timing_8_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_length_counter_timing_nr52_3_dmg08_cgb04c_out2.gbc` | ✅ Pass |
@@ -1263,6 +1261,7 @@ Combined exit code: 101
 | `sprites/late_sizechange2_sp00_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `sprites/late_sizechange2_sp00_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/late_sizechange2_sp01_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
+| `sprites/late_sizechange2_sp01_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/late_sizechange2_sp01_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/late_sizechange2_sp02_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `sprites/late_sizechange2_sp39_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
@@ -1274,6 +1273,7 @@ Combined exit code: 101
 | `sprites/late_sizechange_sp00_3_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `sprites/late_sizechange_sp00_ds_1_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/late_sizechange_sp01_1_dmg08_cgb04c_out0.gbc` | ✅ Pass |
+| `sprites/late_sizechange_sp01_3_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `sprites/late_sizechange_sp01_ds_1_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/late_sizechange_sp02_1_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/late_sizechange_sp39_1_dmg08_cgb04c_out0.gbc` | ✅ Pass |
@@ -2911,7 +2911,6 @@ Combined exit code: 101
 | `sound/ch1_duty3_pattern_pos3_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_duty3_pattern_pos4_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_duty3_pattern_pos5_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
-| `sound/ch1_duty3_pattern_pos6_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_init_pos_1_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_init_pos_2_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_init_pos_3_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
@@ -2934,8 +2933,6 @@ Combined exit code: 101
 | `sound/ch2_init_reset_env_counter_timing_10_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_11_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_12_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
-| `sound/ch2_init_reset_env_counter_timing_14_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
-| `sound/ch2_init_reset_env_counter_timing_15_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_16_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_2_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_4_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
@@ -2947,7 +2944,6 @@ Combined exit code: 101
 | `sound/ch2_init_reset_length_counter_timing_2_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_3_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_5_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
-| `sound/ch2_init_reset_length_counter_timing_6_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_7_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_nr52_1_dmg08_out2_cgb04c_out0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_nr52_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
@@ -3173,7 +3169,6 @@ Combined exit code: 101
 | `sprites/late_disable_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/late_sizechange2_sp00_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/late_sizechange2_sp00_ds_1_cgb04c_out3.gbc` | ❌ Fail |
-| `sprites/late_sizechange2_sp01_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/late_sizechange2_sp01_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/late_sizechange2_sp02_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/late_sizechange2_sp39_ds_1_cgb04c_out3.gbc` | ❌ Fail |
@@ -3184,7 +3179,6 @@ Combined exit code: 101
 | `sprites/late_sizechange_sp00_4_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/late_sizechange_sp00_ds_2_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/late_sizechange_sp01_2_dmg08_out0_cgb04c_out3.gbc` | ❌ Fail |
-| `sprites/late_sizechange_sp01_3_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/late_sizechange_sp01_ds_2_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/late_sizechange_sp02_2_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/late_sizechange_sp39_2_dmg08_out0_cgb04c_out3.gbc` | ❌ Fail |
@@ -3764,6 +3758,12 @@ Combined exit code: 101
 | `same_suite__sgb__command_mlt_req_1_incrementing_gb` | ❌ Fail |
 | `same_suite__sgb__command_mlt_req_gb` | ❌ Fail |
 
+#### strikethrough (1/1 passing, 100.0%)
+
+| Test | Result |
+| --- | --- |
+| `strikethrough_hacktix_png` | ✅ Pass |
+
 
 ### Integration Tests
 
@@ -4006,11 +4006,11 @@ Combined exit code: 101
 | `cartridge::tests::rtc_seconds_write_resets_phase` | ✅ Pass |
 | `cartridge::tests::rtc_ticks_through_invalid_values` | ✅ Pass |
 
-#### ppu (0/1 passing, 0.0%)
+#### ppu (1/1 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
-| `ppu::tests::debug_temp_ppu_scanline_bgp_event_x` | ❌ Fail |
+| `ppu::tests::debug_temp_ppu_scanline_bgp_event_x` | ✅ Pass |
 
 #### ppu::mode3_timing_tests::dmg_mode3_cycles_mooneye_intr2_patterns (1/1 passing, 100.0%)
 

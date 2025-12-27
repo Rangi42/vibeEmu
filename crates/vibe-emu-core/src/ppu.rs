@@ -156,6 +156,20 @@ pub struct Ppu {
     /// Latched sprites for the current scanline
     line_sprites: [Sprite; MAX_SPRITES_PER_LINE],
     sprite_count: usize,
+    oam_scan_index: usize,
+    oam_scan_dot: u16,
+    oam_scan_phase: u8,
+    oam_scan_entry_y: i16,
+    oam_scan_entry_visible: bool,
+    mode3_sprite_latch_index: usize,
+    mode3_position_in_line: i16,
+    mode3_lcd_x: u16,
+    mode3_bg_fifo: u8,
+    mode3_fetcher_state: u8,
+    mode3_render_delay: u16,
+    mode3_last_match_x: u8,
+    mode3_same_x_toggle: bool,
+    pub(crate) oam_dma_write: Option<(u8, u8)>,
     /// Indicates a completed frame is available in `framebuffer`
     frame_ready: bool,
     stat_irq_line: bool,
@@ -260,6 +274,20 @@ impl Ppu {
             cgb_line_obj_enabled: [true; SCREEN_WIDTH],
             line_sprites: [Sprite::default(); MAX_SPRITES_PER_LINE],
             sprite_count: 0,
+            oam_scan_index: 0,
+            oam_scan_dot: 0,
+            oam_scan_phase: 0,
+            oam_scan_entry_y: 0,
+            oam_scan_entry_visible: false,
+            mode3_sprite_latch_index: 0,
+            mode3_position_in_line: -16,
+            mode3_lcd_x: 0,
+            mode3_bg_fifo: 8,
+            mode3_fetcher_state: 0,
+            mode3_render_delay: 0,
+            mode3_last_match_x: 0,
+            mode3_same_x_toggle: false,
+            oam_dma_write: None,
             frame_ready: false,
             stat_irq_line: false,
             dmg_mode2_vblank_irq_pending: false,
@@ -286,6 +314,19 @@ impl Ppu {
     fn set_mode(&mut self, new_mode: u8) {
         let old_mode = self.mode;
         self.mode = new_mode;
+
+        if new_mode == MODE_OAM {
+            self.sprite_count = 0;
+            self.oam_scan_index = 0;
+            self.oam_scan_dot = 0;
+            self.oam_scan_phase = 0;
+            self.oam_scan_entry_y = 0;
+            self.oam_scan_entry_visible = false;
+        }
+
+        if new_mode == MODE_TRANSFER {
+            self.mode3_sprite_latch_index = 0;
+        }
 
         // In CGB mode, the STAT mode bits can lag very slightly behind the
         // internal mode transition at the end of HBlank. Daid's
@@ -338,6 +379,17 @@ impl Ppu {
     fn begin_mode3_line(&mut self) {
         self.mode3_lcdc_base = self.lcdc;
         self.mode3_lcdc_event_count = 0;
+
+        // Mirror the simplified DMG fetcher/FIFO timing model used by
+        // `dmg_compute_mode3_cycles_for_line` so Mode 3 sprite attribute reads
+        // (tile/flags) occur at realistic times relative to DMA.
+        self.mode3_position_in_line = -16;
+        self.mode3_lcd_x = 0;
+        self.mode3_bg_fifo = 8;
+        self.mode3_fetcher_state = 0;
+        self.mode3_render_delay = 0;
+        self.mode3_last_match_x = 0;
+        self.mode3_same_x_toggle = false;
     }
 
     fn record_mode3_lcdc_event(&mut self, mode3_t: u16, val: u8) {
@@ -399,32 +451,221 @@ impl Ppu {
         self.dmg_palette = pal;
     }
 
-    /// Collect up to 10 sprites visible on the current scanline.
-    fn oam_scan(&mut self) {
-        let sprite_height: i16 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
-        self.sprite_count = 0;
-        for i in 0..TOTAL_SPRITES {
-            if self.sprite_count >= MAX_SPRITES_PER_LINE {
-                break;
+    fn mode3_latch_sprite_attributes(&mut self) {
+        // Use the same simplified DMG pipeline model as
+        // `dmg_compute_mode3_cycles_for_line` to decide *when* an object match
+        // occurs and when the background fetcher can be stalled for sprite fetch.
+        // This keeps OAM tile/flags reads close to hardware timing so DMA overlap
+        // hits the intended bytes.
+
+        if (self.cgb && !self.dmg_compat) || (self.lcdc & 0x02) == 0 {
+            // CGB mode has different timing/behavior expectations (and this
+            // scanline renderer doesn't model the FIFO). Keep sprite attribute
+            // latching simple here to avoid DMG-specific DMA corruption quirks.
+            let match_raw_x: u8 = if self.mode_clock < 8 {
+                0
+            } else {
+                (self.mode_clock - 8) as u8
+            };
+
+            while self.mode3_sprite_latch_index < self.sprite_count {
+                let idx = self.mode3_sprite_latch_index;
+                let sprite = self.line_sprites[idx];
+                let raw_x = (sprite.x + 8).clamp(0, 255) as u8;
+                if raw_x > match_raw_x {
+                    break;
+                }
+
+                let base = sprite.oam_index * 4;
+                self.line_sprites[idx].tile = self.oam[base + 2];
+                self.line_sprites[idx].flags = self.oam[base + 3];
+                self.mode3_sprite_latch_index += 1;
             }
-            let base = i * 4;
-            let y = self.oam[base] as i16 - 16;
-            if self.ly as i16 >= y && (self.ly as i16) < y + sprite_height {
-                self.line_sprites[self.sprite_count] = Sprite {
-                    x: self.oam[base + 1] as i16 - 8,
-                    y,
-                    tile: self.oam[base + 2],
-                    flags: self.oam[base + 3],
-                    oam_index: i,
+        } else {
+            const DMG_MODE3_OBJECT_MATCH_BIAS: i16 = -8;
+
+            let advance_fetcher = |bg_fifo: &mut u8, fetcher_state: &mut u8| {
+                if *fetcher_state == 6 {
+                    if *bg_fifo == 0 {
+                        *bg_fifo = 8;
+                        *fetcher_state = 0;
+                    }
+                    return;
+                }
+                *fetcher_state += 1;
+                if *fetcher_state > 6 {
+                    *fetcher_state = 0;
+                }
+            };
+
+            let tick_no_render =
+                |render_delay: &mut u16, bg_fifo: &mut u8, fetcher_state: &mut u8| {
+                    if *render_delay > 0 {
+                        *render_delay -= 1;
+                    }
+                    advance_fetcher(bg_fifo, fetcher_state);
                 };
-                self.sprite_count += 1;
+
+            let tick_no_render_stall_fetcher = |render_delay: &mut u16| {
+                if *render_delay > 0 {
+                    *render_delay -= 1;
+                }
+            };
+
+            let tick_render = |position_in_line: &mut i16,
+                               lcd_x: &mut u16,
+                               bg_fifo: &mut u8,
+                               fetcher_state: &mut u8| {
+                *bg_fifo = bg_fifo.saturating_sub(1);
+                *position_in_line += 1;
+                if *position_in_line >= 0 {
+                    *lcd_x = lcd_x.saturating_add(1);
+                }
+                advance_fetcher(bg_fifo, fetcher_state);
+            };
+
+            // One "dot" of simplified mode 3 progression.
+            let match_x = if self.mode3_position_in_line < -7 {
+                0u8
+            } else {
+                let x = self.mode3_position_in_line + 8 + DMG_MODE3_OBJECT_MATCH_BIAS;
+                (x.clamp(0, 255) as u16).min(255) as u8
+            };
+
+            if match_x != self.mode3_last_match_x {
+                self.mode3_last_match_x = match_x;
+                self.mode3_same_x_toggle = (match_x & 0x02) != 0 && (match_x & 0x04) == 0;
+            }
+
+            let x0_pending = self.mode3_sprite_latch_index < self.sprite_count
+                && (self.line_sprites[self.mode3_sprite_latch_index].x + 8) as i16 == 0;
+
+            // Attempt at most one sprite attribute fetch per dot.
+            //
+            // Important: object matching/fetch happens *before* a pixel is
+            // rendered. If the fetcher isn't ready, the pipeline stalls here.
+            if self.mode3_sprite_latch_index < self.sprite_count {
+                let idx = self.mode3_sprite_latch_index;
+                let sprite = self.line_sprites[idx];
+                let raw_x = (sprite.x + 8).clamp(0, 255) as u8;
+
+                if raw_x == match_x {
+                    if self.mode3_fetcher_state < 5 || self.mode3_bg_fifo == 0 {
+                        tick_no_render(
+                            &mut self.mode3_render_delay,
+                            &mut self.mode3_bg_fifo,
+                            &mut self.mode3_fetcher_state,
+                        );
+                        return;
+                    }
+
+                    let base = sprite.oam_index * 4;
+                    let dma_val = self.oam_dma_write.map(|(_, val)| val);
+
+                    let tile = dma_val.unwrap_or(self.oam[base + 2]);
+                    let flags = dma_val.unwrap_or(self.oam[base + 3]);
+
+                    self.line_sprites[idx].tile = tile;
+                    self.line_sprites[idx].flags = flags;
+                    self.mode3_sprite_latch_index += 1;
+
+                    // Back-to-back sprites at the same X incur additional delay.
+                    if self.mode3_sprite_latch_index < self.sprite_count {
+                        let next = self.line_sprites[self.mode3_sprite_latch_index];
+                        let next_raw_x = (next.x + 8).clamp(0, 255) as u8;
+                        if next_raw_x == match_x {
+                            if !self.mode3_same_x_toggle {
+                                self.mode3_fetcher_state = 4;
+                                self.mode3_bg_fifo = 0;
+                            } else {
+                                self.mode3_fetcher_state = 1;
+                            }
+                            self.mode3_same_x_toggle = !self.mode3_same_x_toggle;
+                        }
+                    }
+                }
+            }
+
+            // If we've already produced the full visible line, keep advancing the
+            // internal fetcher timing so late sprite fetches can still occur.
+            if self.mode3_lcd_x >= SCREEN_WIDTH as u16 {
+                tick_no_render(
+                    &mut self.mode3_render_delay,
+                    &mut self.mode3_bg_fifo,
+                    &mut self.mode3_fetcher_state,
+                );
+            } else if x0_pending || self.mode3_render_delay > 0 || self.mode3_bg_fifo == 0 {
+                if x0_pending {
+                    tick_no_render_stall_fetcher(&mut self.mode3_render_delay);
+                } else {
+                    tick_no_render(
+                        &mut self.mode3_render_delay,
+                        &mut self.mode3_bg_fifo,
+                        &mut self.mode3_fetcher_state,
+                    );
+                }
+            } else {
+                tick_render(
+                    &mut self.mode3_position_in_line,
+                    &mut self.mode3_lcd_x,
+                    &mut self.mode3_bg_fifo,
+                    &mut self.mode3_fetcher_state,
+                );
             }
         }
+
+        // Before we render the scanline at the end of MODE3, ensure we've latched
+        // all remaining sprite attributes from OAM. This avoids rendering any
+        // sprite entries with their default (tile=0) placeholder values.
+        if self.mode_clock + 1 >= self.mode3_target_cycles {
+            while self.mode3_sprite_latch_index < self.sprite_count {
+                let sprite = self.line_sprites[self.mode3_sprite_latch_index];
+                let base = sprite.oam_index * 4;
+                self.line_sprites[self.mode3_sprite_latch_index].tile = self.oam[base + 2];
+                self.line_sprites[self.mode3_sprite_latch_index].flags = self.oam[base + 3];
+                self.mode3_sprite_latch_index += 1;
+            }
+        }
+    }
+
+    fn oam_scan_advance(&mut self) {
+        let limit = self.mode_clock.min(MODE2_CYCLES);
+        let sprite_height: i16 = if self.lcdc & 0x04 != 0 { 16 } else { 8 };
+
+        while self.oam_scan_dot < limit && self.oam_scan_index < TOTAL_SPRITES {
+            let base = self.oam_scan_index * 4;
+            match self.oam_scan_phase {
+                0 => {
+                    let y = self.oam[base] as i16 - 16;
+                    let visible = self.ly as i16 >= y && (self.ly as i16) < y + sprite_height;
+                    self.oam_scan_entry_y = y;
+                    self.oam_scan_entry_visible = visible;
+                    self.oam_scan_phase = 1;
+                }
+                _ => {
+                    let x = self.oam[base + 1] as i16 - 8;
+                    if self.oam_scan_entry_visible && self.sprite_count < MAX_SPRITES_PER_LINE {
+                        self.line_sprites[self.sprite_count] = Sprite {
+                            x,
+                            y: self.oam_scan_entry_y,
+                            tile: 0,
+                            flags: 0,
+                            oam_index: self.oam_scan_index,
+                        };
+                        self.sprite_count += 1;
+                    }
+                    self.oam_scan_index += 1;
+                    self.oam_scan_phase = 0;
+                }
+            }
+            self.oam_scan_dot += 1;
+        }
+    }
+
+    fn oam_scan_finalize(&mut self) {
         if self.cgb && !self.dmg_compat && self.opri & 0x01 == 0 {
-            // CGB-style priority: use OAM order only
             self.line_sprites[..self.sprite_count].sort_by_key(|s| s.oam_index);
         } else {
-            // DMG-style priority: sort by X position then OAM index
             self.line_sprites[..self.sprite_count].sort_by_key(|s| (s.x, s.oam_index));
         }
     }
@@ -2107,9 +2348,10 @@ impl Ppu {
                     }
                 }
                 MODE_OAM => {
+                    self.oam_scan_advance();
                     if self.mode_clock >= MODE2_CYCLES {
                         self.mode_clock -= MODE2_CYCLES;
-                        self.oam_scan();
+                        self.oam_scan_finalize();
                         self.set_mode(MODE_TRANSFER);
                         self.begin_mode3_line();
                         self.mode3_target_cycles = self.compute_mode3_cycles_for_line();
@@ -2135,6 +2377,7 @@ impl Ppu {
                     }
                 }
                 MODE_TRANSFER => {
+                    self.mode3_latch_sprite_attributes();
                     let target = self.mode3_target_cycles;
                     if self.mode_clock >= target {
                         self.mode_clock -= target;

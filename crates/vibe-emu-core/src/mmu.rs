@@ -950,6 +950,10 @@ impl Mmu {
     /// Advance the ongoing OAM DMA transfer if active.
     pub fn dma_step(&mut self, cycles: u16) {
         for _ in 0..cycles {
+            // Only expose a bus value to the PPU on the specific dot where the
+            // DMA engine is transferring a byte. On other dots, treat it as not
+            // observable.
+            self.ppu.oam_dma_write = None;
             if self.pending_delay > 0 {
                 self.pending_delay -= 1;
                 if self.pending_delay == 0
@@ -1007,6 +1011,7 @@ impl Mmu {
                         self.last_cpu_pc = None;
                     }
                     let byte = self.dma_read_byte(self.dma_source.wrapping_add(idx));
+                    self.ppu.oam_dma_write = Some((idx as u8, byte));
                     self.ppu.oam[idx as usize] = byte;
                 }
             }
