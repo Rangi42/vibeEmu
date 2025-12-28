@@ -22,11 +22,13 @@ Commands executed:
 - `cargo test --release --test halt_bug_rom -- --include-ignored`
 - `cargo test --release --test instr_timing_rom -- --include-ignored`
 - `cargo test --release --test interrupt_time_rom -- --include-ignored`
+- `cargo test --release --test latch_rtc_test -- --include-ignored`
 - `cargo test --release --test mem_timing_rom -- --include-ignored`
 - `cargo test --release --test mmu -- --include-ignored`
 - `cargo test --release --test mooneye_acceptance -- --include-ignored`
 - `cargo test --release --test oam_bug_rom_singles -- --include-ignored`
 - `cargo test --release --test ppu -- --include-ignored`
+- `cargo test --release --test rtc_invalid_banks_test -- --include-ignored`
 - `cargo test --release --test same_suite -- --include-ignored`
 - `cargo test --release --test strikethrough -- --include-ignored`
 - `cargo test --release --test timer -- --include-ignored`
@@ -39,10 +41,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1684 | 1947 | 0 | 0 | 3631 | 46.4% |
+| ROM Test Suites | 1689 | 1951 | 0 | 0 | 3640 | 46.4% |
 | Integration Tests | 130 | 52 | 0 | 0 | 182 | 71.4% |
-| Unit Tests | 40 | 0 | 0 | 0 | 40 | 100.0% |
-| **Overall** | 1854 | 1999 | 0 | 0 | 3853 | 48.1% |
+| Unit Tests | 43 | 0 | 0 | 0 | 43 | 100.0% |
+| **Overall** | 1862 | 2003 | 0 | 0 | 3865 | 48.2% |
 
 ## Detailed Results
 
@@ -125,7 +127,7 @@ Combined exit code: 101
 | `dmg_sound_10_wave_trigger_while_on` | ❌ Fail |
 | `dmg_sound_12_wave_write_while_on` | ❌ Fail |
 
-#### gambatte (1499/3422 passing, 43.8%)
+#### gambatte (1502/3429 passing, 43.8%)
 
 | Test | Result |
 | --- | --- |
@@ -1027,6 +1029,7 @@ Combined exit code: 101
 | `sound/ch1_duty0_pattern_pos4_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pattern_pos5_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pattern_pos6_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
+| `sound/ch1_duty0_pattern_pos8_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pos6_to_pos7_timing_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_1_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch1_duty0_pos6_to_pos7_timing_ds_3_cgb04c_outaudio0.gbc` | ✅ Pass |
@@ -1063,10 +1066,12 @@ Combined exit code: 101
 | `sound/ch2_div_write_reset_length_counter_timing_nr52_1_dmg08_cgb04c_outF2.gbc` | ✅ Pass |
 | `sound/ch2_div_write_reset_length_counter_timing_nr52_2_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch2_init_env_counter_timing_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
+| `sound/ch2_init_pos_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_pos_2_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_env_counter_timing_13_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_env_counter_timing_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_env_counter_timing_3_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
+| `sound/ch2_init_reset_env_counter_timing_9_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_length_counter_timing_4_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_length_counter_timing_8_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_length_counter_timing_nr52_3_dmg08_cgb04c_out2.gbc` | ✅ Pass |
@@ -2911,6 +2916,7 @@ Combined exit code: 101
 | `sound/ch1_duty3_pattern_pos3_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_duty3_pattern_pos4_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_duty3_pattern_pos5_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
+| `sound/ch1_duty3_pattern_pos6_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_init_pos_1_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_init_pos_2_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch1_init_pos_3_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
@@ -2933,6 +2939,8 @@ Combined exit code: 101
 | `sound/ch2_init_reset_env_counter_timing_10_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_11_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_12_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
+| `sound/ch2_init_reset_env_counter_timing_14_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
+| `sound/ch2_init_reset_env_counter_timing_15_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_16_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_2_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_4_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
@@ -2944,6 +2952,7 @@ Combined exit code: 101
 | `sound/ch2_init_reset_length_counter_timing_2_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_3_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_5_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
+| `sound/ch2_init_reset_length_counter_timing_6_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_7_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_nr52_1_dmg08_out2_cgb04c_out0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_nr52_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
@@ -3571,6 +3580,12 @@ Combined exit code: 101
 | `interrupt_time_cgb_png` | ✅ Pass |
 | `interrupt_time_dmg_png` | ✅ Pass |
 
+#### latch_rtc_test (1/1 passing, 100.0%)
+
+| Test | Result |
+| --- | --- |
+| `latch_rtc_png` | ✅ Pass |
+
 #### mem_timing_rom (3/3 passing, 100.0%)
 
 | Test | Result |
@@ -3674,6 +3689,12 @@ Combined exit code: 101
 | Test | Result |
 | --- | --- |
 | `blargg_oam_bug_rom_singles_dmg` | ✅ Pass |
+
+#### rtc_invalid_banks_test (1/1 passing, 100.0%)
+
+| Test | Result |
+| --- | --- |
+| `rtc_invalid_banks_png` | ✅ Pass |
 
 #### same_suite (64/78 passing, 82.1%)
 
@@ -3997,10 +4018,13 @@ Combined exit code: 101
 | `apu::tests::dc_filter_reduces_constant_input` | ✅ Pass |
 | `apu::tests::dc_filter_reset_when_all_dacs_off` | ✅ Pass |
 
-#### cartridge (4/4 passing, 100.0%)
+#### cartridge (7/7 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
+| `cartridge::tests::cart_ram_initializes_to_ff` | ✅ Pass |
+| `cartridge::tests::mbc3_rom_bank_wraps` | ✅ Pass |
+| `cartridge::tests::no_mbc_small_ram_mirrors` | ✅ Pass |
 | `cartridge::tests::rtc_day_overflow_sets_carry` | ✅ Pass |
 | `cartridge::tests::rtc_halt_preserves_subseconds` | ✅ Pass |
 | `cartridge::tests::rtc_seconds_write_resets_phase` | ✅ Pass |
