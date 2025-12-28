@@ -48,6 +48,22 @@ fn ensure_gb_emulator_shootout_cpp_test_roms(dir: &Path) {
             &png_path,
         );
     }
+
+    let latch_rom_path = base.join("latch-rtc-test.gb");
+    let latch_png_path = base.join("latch-rtc-test.png");
+
+    if !latch_rom_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/vulcandth/GBEmulatorShootout/main/testroms/cpp/latch-rtc-test.gb",
+            &latch_rom_path,
+        );
+    }
+    if !latch_png_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/vulcandth/GBEmulatorShootout/main/testroms/cpp/latch-rtc-test.png",
+            &latch_png_path,
+        );
+    }
 }
 
 fn ensure_hacktix_test_roms(dir: &Path) {

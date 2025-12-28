@@ -78,6 +78,7 @@ struct RtcRegisters {
 struct Mbc3Rtc {
     regs: RtcRegisters,
     latched: RtcRegisters,
+    latched_active: bool,
     last_update: SystemTime,
     subsecond_cycles: u32,
 }
@@ -106,28 +107,36 @@ impl Mbc3Rtc {
         Self {
             regs,
             latched: regs,
+            latched_active: false,
             last_update: now,
             subsecond_cycles: 0,
         }
     }
 
     fn latch(&mut self) {
-        self.refresh_latch();
+        self.latched = self.regs;
+        self.latched_active = true;
     }
 
-    fn refresh_latch(&mut self) {
-        self.latched = self.regs;
+    fn read_register(&self, reg: u8) -> u8 {
+        let regs = if self.latched_active {
+            &self.latched
+        } else {
+            &self.regs
+        };
+
+        match reg {
+            0x08 => regs.seconds & 0x3F,
+            0x09 => regs.minutes & 0x3F,
+            0x0A => regs.hours & 0x1F,
+            0x0B => (regs.days & 0x00FF) as u8,
+            0x0C => regs.control_byte(),
+            _ => 0xFF,
+        }
     }
 
     fn read_latched(&self, reg: u8) -> u8 {
-        match reg {
-            0x08 => self.latched.seconds & 0x3F,
-            0x09 => self.latched.minutes & 0x3F,
-            0x0A => self.latched.hours & 0x1F,
-            0x0B => (self.latched.days & 0x00FF) as u8,
-            0x0C => self.latched.control_byte(),
-            _ => 0xFF,
-        }
+        self.read_register(reg)
     }
 
     fn write_register(&mut self, reg: u8, value: u8) {
@@ -152,7 +161,6 @@ impl Mbc3Rtc {
             }
             _ => {}
         }
-        self.refresh_latch();
     }
 
     fn step(&mut self, cpu_cycles: u64) {
@@ -304,7 +312,8 @@ impl Mbc3Rtc {
         let flags = data[22];
         self.regs.halt = flags & 0x01 != 0;
         self.regs.carry = flags & 0x02 != 0;
-        self.refresh_latch();
+        self.latched = self.regs;
+        self.latched_active = false;
         true
     }
 }
