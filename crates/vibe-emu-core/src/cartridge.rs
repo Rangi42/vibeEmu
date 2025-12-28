@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -26,6 +27,7 @@ pub struct Cartridge {
     save_path: Option<PathBuf>,
     rtc_path: Option<PathBuf>,
     mbc_state: MbcState,
+    cart_bus: Cell<u8>,
 }
 
 #[derive(Debug)]
@@ -47,14 +49,12 @@ enum MbcState {
         ram_bank: u8,
         ram_enable: bool,
         rtc: Option<Mbc3Rtc>,
-        latch_pending: bool,
     },
     Mbc30 {
         rom_bank: u8,
         ram_bank: u8,
         ram_enable: bool,
         rtc: Option<Mbc3Rtc>,
-        latch_pending: bool,
     },
     Mbc5 {
         rom_bank: u16,
@@ -310,6 +310,19 @@ impl Mbc3Rtc {
 }
 
 impl Cartridge {
+    fn bus_read(cart_bus: &Cell<u8>, value: u8) -> u8 {
+        cart_bus.set(value);
+        value
+    }
+
+    fn bus_write(cart_bus: &Cell<u8>, value: u8) {
+        cart_bus.set(value);
+    }
+
+    fn open_bus(cart_bus: &Cell<u8>) -> u8 {
+        cart_bus.get()
+    }
+
     /// Returns the currently selected ROM bank for the $4000-$7FFF window.
     ///
     /// This is intended for UI/debugger tooling; core emulation should not rely
@@ -442,26 +455,27 @@ impl Cartridge {
                 ram_bank: 0,
                 ram_enable: false,
                 rtc: has_rtc.then(|| Mbc3Rtc::new(now)),
-                latch_pending: false,
             },
             MbcType::Mbc30 => MbcState::Mbc30 {
                 rom_bank: 1,
                 ram_bank: 0,
                 ram_enable: false,
                 rtc: has_rtc.then(|| Mbc3Rtc::new(now)),
-                latch_pending: false,
             },
             MbcType::Mbc5 => MbcState::Mbc5 {
                 rom_bank: 1,
                 ram_bank: 0,
                 ram_enable: false,
             },
-            MbcType::Unknown(_) => MbcState::Unknown,
+            // Fallback: treat unsupported mappers as ROM-only so homebrew/test
+            // harnesses (and some misheadered dumps) still run.
+            MbcType::Unknown(_) => MbcState::NoMbc,
         };
 
         Self {
             rom: data,
-            ram: vec![0; ram_size],
+            // Many titles assume powered-on cart RAM reads as $FF.
+            ram: vec![0xFF; ram_size],
             mbc,
             cgb,
             title,
@@ -469,18 +483,27 @@ impl Cartridge {
             save_path: None,
             rtc_path: None,
             mbc_state,
+            cart_bus: Cell::new(0xFF),
         }
     }
 
     pub fn read(&mut self, addr: u16) -> u8 {
+        let open_bus = Self::open_bus(&self.cart_bus);
+        self.read_with_open_bus(addr, open_bus)
+    }
+
+    pub fn read_with_open_bus(&mut self, addr: u16, open_bus: u8) -> u8 {
         let rom_bank_count = (self.rom.len() / 0x4000).max(1);
+        let cart_bus = &self.cart_bus;
         match (&mut self.mbc_state, addr) {
-            (MbcState::NoMbc, 0x0000..=0x7FFF) => {
-                self.rom.get(addr as usize).copied().unwrap_or(0xFF)
-            }
-            (MbcState::Mbc2 { .. }, 0x0000..=0x3FFF) => {
-                self.rom.get(addr as usize).copied().unwrap_or(0xFF)
-            }
+            (MbcState::NoMbc, 0x0000..=0x7FFF) => Self::bus_read(
+                cart_bus,
+                self.rom.get(addr as usize).copied().unwrap_or(0xFF),
+            ),
+            (MbcState::Mbc2 { .. }, 0x0000..=0x3FFF) => Self::bus_read(
+                cart_bus,
+                self.rom.get(addr as usize).copied().unwrap_or(0xFF),
+            ),
             (MbcState::Mbc2 { rom_bank, .. }, 0x4000..=0x7FFF) => {
                 let mut bank = (*rom_bank & 0x0F) as usize;
                 if bank == 0 {
@@ -488,7 +511,7 @@ impl Cartridge {
                 }
                 bank %= rom_bank_count;
                 let offset = bank * 0x4000 + (addr as usize - 0x4000);
-                self.rom.get(offset).copied().unwrap_or(0xFF)
+                Self::bus_read(cart_bus, self.rom.get(offset).copied().unwrap_or(0xFF))
             }
             (
                 MbcState::Mbc1 {
@@ -507,7 +530,7 @@ impl Cartridge {
                     (((*ram_bank as usize) & 0x03) << 5) % rom_bank_count
                 };
                 let offset = bank * 0x4000 + addr as usize;
-                self.rom.get(offset).copied().unwrap_or(0xFF)
+                Self::bus_read(cart_bus, self.rom.get(offset).copied().unwrap_or(0xFF))
             }
             (
                 MbcState::Mbc1 {
@@ -535,29 +558,34 @@ impl Cartridge {
                     bank % rom_bank_count
                 };
                 let offset = bank * 0x4000 + (addr as usize - 0x4000);
-                self.rom.get(offset).copied().unwrap_or(0xFF)
+                Self::bus_read(cart_bus, self.rom.get(offset).copied().unwrap_or(0xFF))
             }
             (MbcState::Mbc3 { .. }, 0x0000..=0x3FFF)
-            | (MbcState::Mbc30 { .. }, 0x0000..=0x3FFF) => {
-                self.rom.get(addr as usize).copied().unwrap_or(0xFF)
-            }
+            | (MbcState::Mbc30 { .. }, 0x0000..=0x3FFF) => Self::bus_read(
+                cart_bus,
+                self.rom.get(addr as usize).copied().unwrap_or(0xFF),
+            ),
             (MbcState::Mbc3 { rom_bank, .. }, 0x4000..=0x7FFF)
             | (MbcState::Mbc30 { rom_bank, .. }, 0x4000..=0x7FFF) => {
-                let bank = if *rom_bank == 0 { 1 } else { *rom_bank } as usize;
+                let mut bank = (*rom_bank as usize) % rom_bank_count;
+                if bank == 0 && rom_bank_count > 1 {
+                    bank = 1;
+                }
                 let offset = bank * 0x4000 + (addr as usize - 0x4000);
-                self.rom.get(offset).copied().unwrap_or(0xFF)
+                Self::bus_read(cart_bus, self.rom.get(offset).copied().unwrap_or(0xFF))
             }
-            (MbcState::Mbc5 { .. }, 0x0000..=0x3FFF) => {
-                self.rom.get(addr as usize).copied().unwrap_or(0xFF)
-            }
+            (MbcState::Mbc5 { .. }, 0x0000..=0x3FFF) => Self::bus_read(
+                cart_bus,
+                self.rom.get(addr as usize).copied().unwrap_or(0xFF),
+            ),
             (MbcState::Mbc5 { rom_bank, .. }, 0x4000..=0x7FFF) => {
                 let bank = (*rom_bank as usize) % rom_bank_count;
                 let offset = bank * 0x4000 + (addr as usize - 0x4000);
-                self.rom.get(offset).copied().unwrap_or(0xFF)
+                Self::bus_read(cart_bus, self.rom.get(offset).copied().unwrap_or(0xFF))
             }
             (MbcState::NoMbc, 0xA000..=0xBFFF) => {
                 let idx = self.ram_index(addr);
-                self.ram.get(idx).copied().unwrap_or(0xFF)
+                Self::bus_read(cart_bus, self.ram.get(idx).copied().unwrap_or(0xFF))
             }
             (MbcState::Mbc2 { ram_enable, .. }, 0xA000..=0xBFFF) => {
                 if !*ram_enable {
@@ -566,7 +594,7 @@ impl Cartridge {
                     // MBC2 has 512x4-bit internal RAM, mirrored across 0xA000-0xBFFF.
                     let idx = (addr as usize - 0xA000) & 0x01FF;
                     let nibble = self.ram.get(idx).copied().unwrap_or(0x0F) & 0x0F;
-                    0xF0 | nibble
+                    Self::bus_read(cart_bus, 0xF0 | nibble)
                 }
             }
             (MbcState::Mbc1 { ram_enable, .. }, 0xA000..=0xBFFF) => {
@@ -574,7 +602,7 @@ impl Cartridge {
                     0xFF
                 } else {
                     let idx = self.ram_index(addr);
-                    self.ram.get(idx).copied().unwrap_or(0xFF)
+                    Self::bus_read(cart_bus, self.ram.get(idx).copied().unwrap_or(0xFF))
                 }
             }
             (
@@ -587,19 +615,27 @@ impl Cartridge {
                 0xA000..=0xBFFF,
             ) => {
                 if !*ram_enable {
-                    0xFF
-                } else {
-                    match *ram_bank {
-                        0x00..=0x03 => {
+                    return Self::bus_read(cart_bus, 0xFF);
+                }
+
+                match *ram_bank {
+                    0x00..=0x03 => {
+                        if self.ram.is_empty() {
+                            Self::bus_read(cart_bus, open_bus)
+                        } else {
                             let idx = (*ram_bank as usize) * 0x2000 + addr as usize - 0xA000;
-                            self.ram.get(idx).copied().unwrap_or(0xFF)
+                            Self::bus_read(cart_bus, self.read_ram_wrapped(idx))
                         }
-                        0x08..=0x0C => rtc
-                            .as_ref()
-                            .map(|r| r.read_latched(*ram_bank))
-                            .unwrap_or(0xFF),
-                        _ => 0xFF,
                     }
+                    0x04..=0x07 => Self::bus_read(cart_bus, 0xFF),
+                    0x08..=0x0C => {
+                        if let Some(rtc) = rtc.as_ref() {
+                            Self::bus_read(cart_bus, rtc.read_latched(*ram_bank))
+                        } else {
+                            Self::bus_read(cart_bus, 0xFF)
+                        }
+                    }
+                    _ => Self::bus_read(cart_bus, 0xFF),
                 }
             }
             (
@@ -612,19 +648,26 @@ impl Cartridge {
                 0xA000..=0xBFFF,
             ) => {
                 if !*ram_enable {
-                    0xFF
-                } else {
-                    match *ram_bank {
-                        0x00..=0x07 => {
+                    return Self::bus_read(cart_bus, 0xFF);
+                }
+
+                match *ram_bank {
+                    0x00..=0x07 => {
+                        if self.ram.is_empty() {
+                            Self::bus_read(cart_bus, open_bus)
+                        } else {
                             let idx = (*ram_bank as usize) * 0x2000 + addr as usize - 0xA000;
-                            self.ram.get(idx).copied().unwrap_or(0xFF)
+                            Self::bus_read(cart_bus, self.read_ram_wrapped(idx))
                         }
-                        0x08..=0x0C => rtc
-                            .as_ref()
-                            .map(|r| r.read_latched(*ram_bank))
-                            .unwrap_or(0xFF),
-                        _ => 0xFF,
                     }
+                    0x08..=0x0C => {
+                        if let Some(rtc) = rtc.as_ref() {
+                            Self::bus_read(cart_bus, rtc.read_latched(*ram_bank))
+                        } else {
+                            Self::bus_read(cart_bus, 0xFF)
+                        }
+                    }
+                    _ => Self::bus_read(cart_bus, 0xFF),
                 }
             }
             (MbcState::Mbc5 { ram_enable, .. }, 0xA000..=0xBFFF) => {
@@ -632,7 +675,7 @@ impl Cartridge {
                     0xFF
                 } else {
                     let idx = self.ram_index(addr);
-                    self.ram.get(idx).copied().unwrap_or(0xFF)
+                    Self::bus_read(cart_bus, self.ram.get(idx).copied().unwrap_or(0xFF))
                 }
             }
             _ => 0xFF,
@@ -640,9 +683,14 @@ impl Cartridge {
     }
 
     pub fn write(&mut self, addr: u16, val: u8) {
+        let cart_bus = &self.cart_bus;
+        // CPU drives the cart data bus on writes too.
+        if matches!(addr, 0x0000..=0x7FFF | 0xA000..=0xBFFF) {
+            Self::bus_write(cart_bus, val);
+        }
         match (&mut self.mbc_state, addr) {
             (MbcState::NoMbc, 0xA000..=0xBFFF) => {
-                let idx = addr as usize - 0xA000;
+                let idx = self.ram_index(addr);
                 if let Some(b) = self.ram.get_mut(idx) {
                     *b = val;
                 }
@@ -726,45 +774,16 @@ impl Cartridge {
                 }
             }
             (MbcState::Mbc3 { ram_bank, .. }, 0x4000..=0x5FFF) => {
-                *ram_bank = val;
+                *ram_bank = val & 0x0F;
             }
             (MbcState::Mbc30 { ram_bank, .. }, 0x4000..=0x5FFF) => {
                 *ram_bank = val & 0x0F;
             }
-            (
-                MbcState::Mbc3 {
-                    latch_pending, rtc, ..
-                },
-                0x6000..=0x7FFF,
-            ) => {
-                if val == 0 {
-                    *latch_pending = true;
-                } else if val == 1 && *latch_pending {
-                    if let Some(rtc) = rtc {
-                        rtc.latch();
-                    }
-                    *latch_pending = false;
-                } else {
-                    *latch_pending = false;
-                }
-            }
-            (
-                MbcState::Mbc30 {
-                    latch_pending, rtc, ..
-                },
-                0x6000..=0x7FFF,
-            ) => {
-                if val == 0 {
-                    *latch_pending = true;
-                } else if val == 1 && *latch_pending {
-                    if let Some(rtc) = rtc {
-                        rtc.latch();
-                    }
-                    *latch_pending = false;
-                } else {
-                    *latch_pending = false;
-                }
-            }
+            // Latch on any write to $6000-$7FFF.
+            (MbcState::Mbc3 { rtc: Some(rtc), .. }, 0x6000..=0x7FFF) => rtc.latch(),
+            (MbcState::Mbc3 { rtc: None, .. }, 0x6000..=0x7FFF) => {}
+            (MbcState::Mbc30 { rtc: Some(rtc), .. }, 0x6000..=0x7FFF) => rtc.latch(),
+            (MbcState::Mbc30 { rtc: None, .. }, 0x6000..=0x7FFF) => {}
             (
                 MbcState::Mbc3 {
                     ram_enable,
@@ -778,8 +797,9 @@ impl Cartridge {
                     match *ram_bank {
                         0x00..=0x03 => {
                             let idx = (*ram_bank as usize) * 0x2000 + addr as usize - 0xA000;
-                            if let Some(b) = self.ram.get_mut(idx) {
-                                *b = val;
+                            if !self.ram.is_empty() {
+                                let wrapped = idx % self.ram.len();
+                                self.ram[wrapped] = val;
                             }
                         }
                         0x08..=0x0C => {
@@ -804,8 +824,9 @@ impl Cartridge {
                     match *ram_bank {
                         0x00..=0x07 => {
                             let idx = (*ram_bank as usize) * 0x2000 + addr as usize - 0xA000;
-                            if let Some(b) = self.ram.get_mut(idx) {
-                                *b = val;
+                            if !self.ram.is_empty() {
+                                let wrapped = idx % self.ram.len();
+                                self.ram[wrapped] = val;
                             }
                         }
                         0x08..=0x0C => {
@@ -818,7 +839,8 @@ impl Cartridge {
                 }
             }
             (MbcState::Mbc5 { ram_enable, .. }, 0x0000..=0x1FFF) => {
-                *ram_enable = val & 0x0F == 0x0A;
+                // This mapper expects the enable value to be exactly $0A.
+                *ram_enable = val == 0x0A;
             }
             (MbcState::Mbc5 { rom_bank, .. }, 0x2000..=0x2FFF) => {
                 *rom_bank = (*rom_bank & 0x100) | val as u16;
@@ -839,12 +861,29 @@ impl Cartridge {
             ) => {
                 if *ram_enable {
                     let idx = (*ram_bank as usize) * 0x2000 + addr as usize - 0xA000;
-                    if let Some(b) = self.ram.get_mut(idx) {
-                        *b = val;
+                    if !self.ram.is_empty() {
+                        let wrapped = idx % self.ram.len();
+                        self.ram[wrapped] = val;
                     }
                 }
             }
             _ => {}
+        }
+    }
+
+    fn wrap_ram_index(&self, idx: usize) -> usize {
+        if self.ram.is_empty() {
+            0
+        } else {
+            idx % self.ram.len()
+        }
+    }
+
+    fn read_ram_wrapped(&self, idx: usize) -> u8 {
+        if self.ram.is_empty() {
+            0xFF
+        } else {
+            self.ram[self.wrap_ram_index(idx)]
         }
     }
 
@@ -854,7 +893,7 @@ impl Cartridge {
         } else {
             (self.ram.len().saturating_add(0x1FFF)) / 0x2000
         };
-        match &self.mbc_state {
+        let idx = match &self.mbc_state {
             MbcState::NoMbc => addr as usize - 0xA000,
             MbcState::Mbc2 { .. } => (addr as usize - 0xA000) & 0x01FF,
             MbcState::Mbc1 { ram_bank, mode, .. } => {
@@ -879,7 +918,8 @@ impl Cartridge {
                 (*ram_bank as usize) * 0x2000 + addr as usize - 0xA000
             }
             MbcState::Unknown => addr as usize - 0xA000,
-        }
+        };
+        self.wrap_ram_index(idx)
     }
 
     fn has_battery(&self) -> bool {
@@ -972,20 +1012,20 @@ impl<'a> Header<'a> {
             return MbcType::NoMbc;
         }
         let cart = self.data.get(0x0147).copied().unwrap_or(0);
-        let ram_code = self.data.get(0x0149).copied().unwrap_or(0);
         match cart {
             0x00 => MbcType::NoMbc,
             0x01..=0x03 => MbcType::Mbc1,
             0x05 | 0x06 => MbcType::Mbc2,
             0x0F..=0x13 => {
-                if ram_code == 0x05 {
+                // Treat large MBC3 carts (ROM > 2MB or RAM > 32KB) as MBC30.
+                if self.data.len() > 0x200000 || self.ram_size() > 0x8000 {
                     MbcType::Mbc30
                 } else {
                     MbcType::Mbc3
                 }
             }
             0x19..=0x1E => MbcType::Mbc5,
-            _ => MbcType::NoMbc,
+            other => MbcType::Unknown(other),
         }
     }
 
@@ -1099,5 +1139,44 @@ mod tests {
         rtc.advance_seconds(1);
         assert_eq!(rtc.regs.days, 0);
         assert!(rtc.regs.carry);
+    }
+
+    #[test]
+    fn cart_ram_initializes_to_ff() {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0147] = 0x03; // MBC1 + RAM + BAT
+        rom[0x0149] = 0x02; // 8KB RAM
+
+        let cart = Cartridge::load(rom);
+        assert!(!cart.ram.is_empty());
+        assert!(cart.ram.iter().all(|&b| b == 0xFF));
+    }
+
+    #[test]
+    fn no_mbc_small_ram_mirrors() {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0147] = 0x00; // No MBC
+        rom[0x0149] = 0x01; // 2KB RAM
+
+        let mut cart = Cartridge::load(rom);
+        // Writes to $A800 should mirror to $A000 for 2KB RAM.
+        cart.write(0xA800, 0x12);
+        assert_eq!(cart.read(0xA000), 0x12);
+    }
+
+    #[test]
+    fn mbc3_rom_bank_wraps() {
+        // 2 ROM banks: bank0 is 0x00 bytes, bank1 is 0x11 bytes.
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0147] = 0x11; // MBC3
+        rom[0x0149] = 0x00;
+        for b in &mut rom[0x4000..0x8000] {
+            *b = 0x11;
+        }
+
+        let mut cart = Cartridge::load(rom);
+        // Select an out-of-range bank; should wrap to bank 1.
+        cart.write(0x2000, 5);
+        assert_eq!(cart.read(0x4000), 0x11);
     }
 }

@@ -25,7 +25,29 @@ fn ensure_test_roms() {
         ensure_daid_test_roms(&dir);
         ensure_bullygb_test_roms(&dir);
         ensure_hacktix_test_roms(&dir);
+        ensure_gb_emulator_shootout_cpp_test_roms(&dir);
     });
+}
+
+fn ensure_gb_emulator_shootout_cpp_test_roms(dir: &Path) {
+    // Keep these under test_roms/gbeshootout/ to avoid collisions with the c-sp bundle.
+    let base = dir.join("gbeshootout").join("cpp");
+
+    let rom_path = base.join("rtc-invalid-banks-test.gb");
+    let png_path = base.join("rtc-invalid-banks-test.png");
+
+    if !rom_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/vulcandth/GBEmulatorShootout/main/testroms/cpp/rtc-invalid-banks-test.gb",
+            &rom_path,
+        );
+    }
+    if !png_path.exists() {
+        download_file(
+            "https://raw.githubusercontent.com/vulcandth/GBEmulatorShootout/main/testroms/cpp/rtc-invalid-banks-test.png",
+            &png_path,
+        );
+    }
 }
 
 fn ensure_hacktix_test_roms(dir: &Path) {

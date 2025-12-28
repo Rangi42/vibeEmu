@@ -131,6 +131,18 @@ pub struct Mmu {
     /// MMU so logs can attribute blocked accesses to the originating PC.
     pub last_cpu_pc: Option<u16>,
 
+    /// Last value driven on the CPU data bus by a CPU-visible read/write.
+    /// Used to model open-bus behaviour for certain invalid/unused accesses.
+    data_bus: u8,
+
+    /// Last value observed on the "main" bus (everything except VRAM) for
+    /// addresses below $FF00.
+    ///
+    /// Some open-bus scenarios on cartridge space depend on the previous value
+    /// from this bus specifically rather than the most recent internal I/O/HRAM
+    /// access.
+    main_bus: u8,
+
     /// One-shot override for the next OAM access' corruption classification.
     ///
     /// Used for instructions like `LD A,[HL+]` / `LD A,[HL-]` that have a
@@ -224,6 +236,8 @@ impl Mmu {
             dmg_revision,
             oam_bug_next_access: None,
             last_cpu_pc: None,
+            data_bus: 0xFF,
+            main_bus: 0xFF,
         }
     }
 
@@ -293,7 +307,13 @@ impl Mmu {
             dmg_revision,
             oam_bug_next_access: None,
             last_cpu_pc: None,
+            data_bus: 0xFF,
+            main_bus: 0xFF,
         }
+    }
+
+    fn updates_main_bus(addr: u16) -> bool {
+        addr < 0xFF00 && !(0x8000..=0x9FFF).contains(&addr)
     }
 
     pub fn new() -> Self {
@@ -354,7 +374,11 @@ impl Mmu {
                 .as_ref()
                 .and_then(|b| b.get(addr as usize).copied())
                 .unwrap_or(0xFF),
-            0x0000..=0x7FFF => self.cart.as_mut().map(|c| c.read(addr)).unwrap_or(0xFF),
+            0x0000..=0x7FFF => self
+                .cart
+                .as_mut()
+                .map(|c| c.read_with_open_bus(addr, self.main_bus))
+                .unwrap_or(0xFF),
             0x8000..=0x9FFF => {
                 let accessible = self.ppu.vram_read_accessible();
                 if accessible {
@@ -403,7 +427,11 @@ impl Mmu {
                     0xFF
                 }
             }
-            0xA000..=0xBFFF => self.cart.as_mut().map(|c| c.read(addr)).unwrap_or(0xFF),
+            0xA000..=0xBFFF => self
+                .cart
+                .as_mut()
+                .map(|c| c.read_with_open_bus(addr, self.main_bus))
+                .unwrap_or(0xFF),
             0xC000..=0xCFFF => self.wram[0][(addr - 0xC000) as usize],
             0xD000..=0xDFFF => self.wram[self.wram_bank][(addr - 0xD000) as usize],
             0xE000..=0xEFFF => self.wram[0][(addr - 0xE000) as usize],
@@ -604,7 +632,12 @@ impl Mmu {
     }
 
     pub fn read_byte(&mut self, addr: u16) -> u8 {
-        self.read_byte_inner(addr, false)
+        let value = self.read_byte_inner(addr, false);
+        self.data_bus = value;
+        if Self::updates_main_bus(addr) {
+            self.main_bus = value;
+        }
+        value
     }
 
     fn dma_read_byte(&mut self, addr: u16) -> u8 {
@@ -645,6 +678,10 @@ impl Mmu {
     }
 
     pub fn write_byte(&mut self, addr: u16, val: u8) {
+        self.data_bus = val;
+        if Self::updates_main_bus(addr) {
+            self.main_bus = val;
+        }
         if self.dma_cycles > 0 {
             match addr {
                 0x0000..=0x7FFF | 0xC000..=0xFDFF | 0xFF00..=0xFFFF => {}
