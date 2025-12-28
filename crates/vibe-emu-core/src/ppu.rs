@@ -538,7 +538,7 @@ impl Ppu {
             }
 
             let x0_pending = self.mode3_sprite_latch_index < self.sprite_count
-                && (self.line_sprites[self.mode3_sprite_latch_index].x + 8) as i16 == 0;
+                && (self.line_sprites[self.mode3_sprite_latch_index].x + 8) == 0;
 
             // Attempt at most one sprite attribute fetch per dot.
             //
