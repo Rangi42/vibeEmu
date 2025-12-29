@@ -316,6 +316,7 @@ struct EmuThreadChannels {
     frame_pool_tx: cb::Sender<Vec<u32>>,
     frame_pool_rx: cb::Receiver<Vec<u32>>,
     wake_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+    exec_trace: Arc<Mutex<Vec<ui::code_data::ExecutedInstruction>>>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -792,7 +793,71 @@ fn run_emulator_thread(
         frame_pool_tx,
         frame_pool_rx,
         wake_proxy,
+        exec_trace,
     } = channels;
+
+    let mut exec_seen_rom0 = vec![false; 0x4000];
+    let mut exec_seen_romx: Vec<Option<Vec<bool>>> = vec![None; 256];
+    let mut pending_exec_trace: Vec<ui::code_data::ExecutedInstruction> = Vec::new();
+
+    let flush_exec_trace = |pending: &mut Vec<ui::code_data::ExecutedInstruction>| {
+        if pending.is_empty() {
+            return;
+        }
+
+        if let Ok(mut buf) = exec_trace.lock() {
+            buf.extend(pending.drain(..));
+        }
+    };
+
+    let note_execute_pc =
+        |pc: u16,
+         bank: u8,
+         mmu: &mut Mmu,
+         seen_rom0: &mut [bool],
+         seen_romx: &mut [Option<Vec<bool>>],
+         pending: &mut Vec<ui::code_data::ExecutedInstruction>| {
+            if pc >= 0x8000 {
+                return;
+            }
+
+            let (bank, idx) = if pc < 0x4000 {
+                (0u8, pc as usize)
+            } else {
+                (bank, (pc - 0x4000) as usize)
+            };
+
+            if pc < 0x4000 {
+                if seen_rom0.get(idx).copied().unwrap_or(false) {
+                    return;
+                }
+                if let Some(slot) = seen_rom0.get_mut(idx) {
+                    *slot = true;
+                }
+            } else {
+                let bank_slot = seen_romx
+                    .get_mut(bank as usize)
+                    .expect("ROMX bank index out of range");
+                if bank_slot.is_none() {
+                    *bank_slot = Some(vec![false; 0x4000]);
+                }
+                let bank_map = bank_slot.as_mut().expect("ROMX bank map missing");
+                if bank_map.get(idx).copied().unwrap_or(false) {
+                    return;
+                }
+                if let Some(slot) = bank_map.get_mut(idx) {
+                    *slot = true;
+                }
+            }
+
+            let opcode = mmu.read_byte(pc);
+            let len = ui::code_data::sm83_instr_len(opcode);
+            pending.push(ui::code_data::ExecutedInstruction {
+                bank,
+                addr: pc,
+                len,
+            });
+        };
 
     fn exec_break_key_for_pc(pc: u16, mmu: &Mmu) -> ui::debugger::BreakpointSpec {
         let active_rom_bank = mmu.cart.as_ref().map(|c| c.current_rom_bank()).unwrap_or(1);
@@ -1115,6 +1180,17 @@ fn run_emulator_thread(
                     let GameBoy { cpu, mmu, .. } = &mut *gb;
                     (cpu, mmu)
                 };
+
+                let romx_bank = mmu.cart.as_ref().map(|c| c.current_rom_bank()).unwrap_or(1);
+                let bank = romx_bank.min(0xFF) as u8;
+                note_execute_pc(
+                    cpu.pc,
+                    bank,
+                    mmu,
+                    &mut exec_seen_rom0,
+                    &mut exec_seen_romx,
+                    &mut pending_exec_trace,
+                );
                 cpu.step(mmu);
 
                 if want_guaranteed {
@@ -1127,6 +1203,8 @@ fn run_emulator_thread(
             }
 
             step_budget = step_budget.saturating_sub(1);
+
+            flush_exec_trace(&mut pending_exec_trace);
 
             if want_guaranteed && let Some(cmd_id) = pending_debug_ack.take() {
                 let _ = wake_proxy.send_event(UserEvent::DebuggerAck { cmd_id });
@@ -1193,6 +1271,17 @@ fn run_emulator_thread(
                             break;
                         }
                     }
+
+                    let romx_bank = mmu.cart.as_ref().map(|c| c.current_rom_bank()).unwrap_or(1);
+                    let bank = romx_bank.min(0xFF) as u8;
+                    note_execute_pc(
+                        cpu.pc,
+                        bank,
+                        mmu,
+                        &mut exec_seen_rom0,
+                        &mut exec_seen_romx,
+                        &mut pending_exec_trace,
+                    );
 
                     cpu.step(mmu);
 
@@ -1483,6 +1572,8 @@ fn run_emulator_thread(
             if let Ok(mut snap) = ui_snapshot.try_write() {
                 *snap = UiSnapshot::from_gb(&mut gb, paused);
             }
+
+            flush_exec_trace(&mut pending_exec_trace);
 
             if !speed.fast {
                 let elapsed = frame_start.elapsed();
@@ -2375,6 +2466,8 @@ fn main() {
         for _ in 0..2 {
             let _ = frame_pool_tx.send(vec![0u32; 160 * 144]);
         }
+
+        let exec_trace = Arc::new(Mutex::new(Vec::<ui::code_data::ExecutedInstruction>::new()));
         let emu_gb = Arc::clone(&gb);
         let emu_snapshot = Arc::clone(&ui_snapshot);
         let emu_mobile = mobile.clone();
@@ -2382,6 +2475,7 @@ fn main() {
         let emu_mobile_diag = args.mobile_diag;
         let emu_load_config = load_config.clone();
         let emu_frame_pool_tx = frame_pool_tx.clone();
+        let emu_exec_trace = Arc::clone(&exec_trace);
         let emu_handle = thread::spawn(move || {
             run_emulator_thread(
                 emu_gb,
@@ -2400,6 +2494,7 @@ fn main() {
                     frame_pool_tx: emu_frame_pool_tx,
                     frame_pool_rx,
                     wake_proxy,
+                    exec_trace: emu_exec_trace,
                 },
             );
         });
@@ -2471,6 +2566,15 @@ fn main() {
             });
             match &event {
                 Event::UserEvent(UserEvent::EmuWake) => {
+                    if let Ok(mut trace) = exec_trace.lock()
+                        && !trace.is_empty()
+                    {
+                        let drained = std::mem::take(&mut *trace);
+                        ui_state
+                            .debugger
+                            .note_executed_instructions(drained.as_slice());
+                    }
+
                     let mut got_frame = false;
 
                     while let Ok(evt) = from_emu_frame_rx.try_recv() {
@@ -2505,6 +2609,14 @@ fn main() {
                     }
                 }
                 Event::UserEvent(UserEvent::DebuggerWake) => {
+                    if let Ok(mut trace) = exec_trace.lock()
+                        && !trace.is_empty()
+                    {
+                        let drained = std::mem::take(&mut *trace);
+                        ui_state
+                            .debugger
+                            .note_executed_instructions(drained.as_slice());
+                    }
                     for win in windows.values() {
                         win.win.request_redraw();
                     }
@@ -3438,6 +3550,8 @@ mod run_to_regression_tests {
         };
         let wake_proxy = event_loop.create_proxy();
 
+        let exec_trace = Arc::new(Mutex::new(Vec::<ui::code_data::ExecutedInstruction>::new()));
+
         let channels = EmuThreadChannels {
             rx: to_emu_rx,
             frame_tx,
@@ -3445,6 +3559,7 @@ mod run_to_regression_tests {
             frame_pool_tx,
             frame_pool_rx,
             wake_proxy,
+            exec_trace,
         };
 
         let speed = Speed {

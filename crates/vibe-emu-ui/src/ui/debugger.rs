@@ -1,4 +1,7 @@
-use crate::ui::snapshot::UiSnapshot;
+use crate::ui::{
+    code_data::{CellKind, CodeDataTracker, ExecutedInstruction},
+    snapshot::UiSnapshot,
+};
 use imgui::ListClipper;
 use imgui::Ui;
 use std::{
@@ -37,6 +40,7 @@ struct DisasmCacheKey {
     sram_bank: u8,
     sram_enabled: bool,
     sym_revision: u64,
+    analysis_revision: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +69,7 @@ pub struct DebuggerState {
     last_pc: Option<u16>,
     pause_reason: Option<DebuggerPauseReason>,
     cached_disassembly: Option<CachedDisassembly>,
+    code_data: CodeDataTracker,
     sym_revision: u64,
     pending_focus_main: bool,
     pending_breakpoints_sync: bool,
@@ -116,6 +121,10 @@ pub enum DebuggerPauseReason {
 }
 
 impl DebuggerState {
+    pub fn note_executed_instructions(&mut self, events: &[ExecutedInstruction]) {
+        self.code_data.note_executed(events.iter().copied());
+    }
+
     pub fn set_pause_reason(&mut self, reason: DebuggerPauseReason) {
         self.pause_reason = Some(reason);
     }
@@ -853,6 +862,9 @@ impl DebuggerState {
             return;
         };
 
+        self.code_data.ensure_up_to_date(snapshot);
+        let active_bank = snapshot.debugger.active_rom_bank.min(0xFF) as u8;
+
         let key = DisasmCacheKey {
             active_rom_bank: snapshot.debugger.active_rom_bank,
             cgb_mode: snapshot.debugger.cgb_mode,
@@ -861,6 +873,7 @@ impl DebuggerState {
             sram_bank: snapshot.debugger.sram_bank,
             sram_enabled: snapshot.debugger.sram_enabled,
             sym_revision: self.sym_revision,
+            analysis_revision: self.code_data.revision(),
         };
 
         if let Some(cache) = self.cached_disassembly.as_ref()
@@ -874,14 +887,12 @@ impl DebuggerState {
         {
             return;
         }
-
         let mut rows = Vec::with_capacity(0x10000 / 2);
         let mut addr_to_row = vec![u32::MAX; 0x10000];
 
         let mut a: u32 = 0;
         while a < 0x10000 {
             let addr = a as u16;
-            addr_to_row[addr as usize] = rows.len() as u32;
 
             let bp_bank = breakpoint_bank_for_addr(addr, snapshot);
             let display_bank = display_bank_for_addr(addr, snapshot);
@@ -898,15 +909,34 @@ impl DebuggerState {
                 })
                 .map(|s| s.to_string());
 
-            let (mut text, mut len) = decode_sm83_at(mem, 0, addr);
-            if len == 0 {
-                len = 1;
-            }
+            let (mut text, len) = match self.code_data.kind_at(addr, active_bank) {
+                CellKind::CodeStart { len } => {
+                    let (text, decoded_len) = decode_sm83_at(mem, 0, addr);
+                    let effective_len = if decoded_len == 0 {
+                        u16::from(len.max(1))
+                    } else {
+                        decoded_len
+                    };
+                    (text, effective_len)
+                }
+                _ => {
+                    let b = mem.get(addr as usize).copied().unwrap_or(0);
+                    (format!("DB ${:02X}", b), 1)
+                }
+            };
 
             let bytes = format_disasm_bytes(mem, addr, len);
 
-            let instr_bank = effective_bank_for_addr(addr, snapshot.debugger.active_rom_bank);
-            text = substitute_immediate_labels(&text, snapshot, self.sym.as_ref(), instr_bank);
+            if matches!(
+                self.code_data.kind_at(addr, active_bank),
+                CellKind::CodeStart { .. }
+            ) {
+                let instr_bank = effective_bank_for_addr(addr, snapshot.debugger.active_rom_bank);
+                text = substitute_immediate_labels(&text, snapshot, self.sym.as_ref(), instr_bank);
+            }
+
+            let row_index = rows.len() as u32;
+            addr_to_row[addr as usize] = row_index;
 
             rows.push(DisasmRow {
                 addr,
