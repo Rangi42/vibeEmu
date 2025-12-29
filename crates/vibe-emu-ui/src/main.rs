@@ -199,6 +199,7 @@ struct UiState {
     paused: bool,
     spawn_debugger: bool,
     spawn_vram: bool,
+    spawn_watchpoints: bool,
     spawn_options: bool,
     pending_exit: bool,
     pending_action: Option<UiAction>,
@@ -218,6 +219,7 @@ struct UiState {
     last_main_inner_size: Option<(u32, u32)>,
 
     debugger: ui::debugger::DebuggerState,
+    watchpoints: ui::watchpoints::WatchpointsState,
     debugger_focus_pause_active: bool,
     debugger_focus_resume_armed: bool,
     debugger_pending_focus: bool,
@@ -289,6 +291,7 @@ enum EmuCommand {
     },
     JumpSp,
     SetBreakpoints(Vec<ui::debugger::BreakpointSpec>),
+    SetWatchpoints(Vec<vibe_emu_core::watchpoints::Watchpoint>),
     SetSpeed(Speed),
     UpdateInput(u8),
     SetSerialPeripheral(SerialPeripheral),
@@ -301,12 +304,20 @@ enum UiToEmu {
     Action(UiAction),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum UserEvent {
     EmuWake,
     DebuggerWake,
-    DebuggerBreak { bank: u8, addr: u16 },
-    DebuggerAck { cmd_id: u64 },
+    DebuggerBreak {
+        bank: u8,
+        addr: u16,
+    },
+    DebuggerWatchpoint {
+        hit: vibe_emu_core::watchpoints::WatchpointHit,
+    },
+    DebuggerAck {
+        cmd_id: u64,
+    },
 }
 
 struct EmuThreadChannels {
@@ -773,6 +784,47 @@ fn spawn_options_window(
     }
 }
 
+fn spawn_watchpoints_window(
+    event_loop: &ActiveEventLoop,
+    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
+) {
+    use winit::dpi::LogicalSize;
+    let attrs = enforce_square_corners(
+        Window::default_attributes()
+            .with_title("vibeEmu \u{2013} Watchpoints")
+            .with_window_icon(load_window_icon())
+            .with_inner_size(LogicalSize::new(520.0, 520.0)),
+    );
+    let w = match event_loop.create_window(attrs) {
+        Ok(w) => w,
+        Err(e) => {
+            error!("Failed to create Watchpoints window: {e}");
+            return;
+        }
+    };
+
+    let size = w.inner_size();
+    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
+    // Tool windows don't render a dedicated pixel framebuffer; Pixels is used as the wgpu surface
+    // carrier for ImGui rendering, so a 1×1 buffer is sufficient.
+    const IMGUI_CARRIER_BUFFER: (u32, u32) = (1, 1);
+    let pixels = match pixels::Pixels::new(IMGUI_CARRIER_BUFFER.0, IMGUI_CARRIER_BUFFER.1, surface)
+    {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Pixels init failed (Watchpoints window): {e}");
+            return;
+        }
+    };
+
+    let ui_win = UiWindow::new(WindowKind::Watchpoints, w, pixels, IMGUI_CARRIER_BUFFER);
+    let id = ui_win.win.id();
+    windows.insert(id, ui_win);
+    if let Some(win) = windows.get_mut(&id) {
+        win.resize(win.win.inner_size());
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_emulator_thread(
     gb: Arc<Mutex<GameBoy>>,
@@ -946,9 +998,11 @@ fn run_emulator_thread(
     let mut pending_debug_ack: Option<u64> = None;
     let mut breakpoints: std::collections::HashSet<ui::debugger::BreakpointSpec> =
         std::collections::HashSet::new();
+    let mut watchpoints: Vec<vibe_emu_core::watchpoints::Watchpoint> = Vec::new();
     let mut temp_exec_break: Option<ui::debugger::BreakpointSpec> = None;
     let mut ignore_breakpoints = false;
     let mut ignore_once_breakpoint: Option<ui::debugger::BreakpointSpec> = None;
+    let mut watchpoints_suspended = false;
     let mut animate = false;
     let mut frame_count = 0u64;
     let mut next_frame = Instant::now() + FRAME_TIME;
@@ -966,6 +1020,8 @@ fn run_emulator_thread(
             &mut mobile_active,
             &mut mobile_time_accum_ns,
         );
+        gb.mmu.watchpoints.set_watchpoints(watchpoints.clone());
+        gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
         if !cfg!(test) && gb.mmu.cart.is_some() {
             rebuild_audio_stream(&mut gb, speed, &mut audio_stream);
         }
@@ -981,7 +1037,12 @@ fn run_emulator_thread(
 
                         ignore_breakpoints = false;
                         ignore_once_breakpoint = None;
+                        watchpoints_suspended = false;
                         animate = false;
+
+                        if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
+                        }
 
                         if paused {
                             temp_exec_break = None;
@@ -1001,14 +1062,24 @@ fn run_emulator_thread(
                     } => {
                         paused = false;
                         ignore_breakpoints = ignore;
+                        watchpoints_suspended = ignore;
                         next_frame = Instant::now() + FRAME_TIME;
                         ignore_once_breakpoint = None;
+
+                        if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
+                        }
                     }
                     EmuCommand::ResumeIgnoreOnce { breakpoint } => {
                         paused = false;
                         ignore_breakpoints = false;
                         ignore_once_breakpoint = Some(breakpoint);
+                        watchpoints_suspended = false;
                         next_frame = Instant::now() + FRAME_TIME;
+
+                        if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
+                        }
                     }
                     EmuCommand::SetAnimate(value) => {
                         animate = value;
@@ -1021,10 +1092,15 @@ fn run_emulator_thread(
                         step_budget = step_budget.saturating_add(count);
                         paused = true;
                         ignore_breakpoints = false;
+                        watchpoints_suspended = false;
                         next_frame = Instant::now() + FRAME_TIME;
                         ignore_once_breakpoint = None;
                         animate = false;
                         temp_exec_break = None;
+
+                        if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
+                        }
 
                         if guarantee_snapshot {
                             pending_debug_ack = cmd_id;
@@ -1037,17 +1113,24 @@ fn run_emulator_thread(
                         temp_exec_break = Some(target);
                         paused = false;
                         ignore_breakpoints = ignore;
+                        watchpoints_suspended = ignore;
                         ignore_once_breakpoint = None;
                         next_frame = Instant::now() + FRAME_TIME;
+
+                        if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
+                        }
                     }
                     EmuCommand::JumpTo { addr } => {
                         paused = true;
                         ignore_breakpoints = false;
                         ignore_once_breakpoint = None;
+                        watchpoints_suspended = false;
                         animate = false;
                         next_frame = Instant::now() + FRAME_TIME;
                         temp_exec_break = None;
                         if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
                             gb.cpu.pc = addr;
                             gb.cpu.halted = false;
                             if let Ok(mut snap) = ui_snapshot.write() {
@@ -1060,10 +1143,12 @@ fn run_emulator_thread(
                         paused = true;
                         ignore_breakpoints = false;
                         ignore_once_breakpoint = None;
+                        watchpoints_suspended = false;
                         animate = false;
                         next_frame = Instant::now() + FRAME_TIME;
                         temp_exec_break = None;
                         if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
                             let ret = gb.cpu.pc;
                             let sp_hi = gb.cpu.sp.wrapping_sub(1);
                             let sp_lo = gb.cpu.sp.wrapping_sub(2);
@@ -1082,10 +1167,12 @@ fn run_emulator_thread(
                         paused = true;
                         ignore_breakpoints = false;
                         ignore_once_breakpoint = None;
+                        watchpoints_suspended = false;
                         animate = false;
                         next_frame = Instant::now() + FRAME_TIME;
                         temp_exec_break = None;
                         if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
                             let sp = gb.cpu.sp;
                             let lo = gb.mmu.read_byte(sp);
                             let hi = gb.mmu.read_byte(sp.wrapping_add(1));
@@ -1102,6 +1189,13 @@ fn run_emulator_thread(
                     EmuCommand::SetBreakpoints(list) => {
                         breakpoints.clear();
                         breakpoints.extend(list);
+                    }
+                    EmuCommand::SetWatchpoints(list) => {
+                        watchpoints = list;
+                        if let Ok(mut gb) = gb.lock() {
+                            gb.mmu.watchpoints.set_watchpoints(watchpoints.clone());
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
+                        }
                     }
                     EmuCommand::SetSpeed(new_speed) => {
                         speed = new_speed;
@@ -1159,6 +1253,8 @@ fn run_emulator_thread(
                             &mut mobile_active,
                             &mut mobile_time_accum_ns,
                         );
+                        gb.mmu.watchpoints.set_watchpoints(watchpoints.clone());
+                        gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
                         gb.mmu.ppu.clear_frame_flag();
                         frame_count = 0;
                         next_frame = Instant::now() + FRAME_TIME;
@@ -1175,23 +1271,82 @@ fn run_emulator_thread(
 
             let want_guaranteed = pending_debug_ack.is_some() && step_budget == 1;
 
+            let mut step_watch_hit: Option<vibe_emu_core::watchpoints::WatchpointHit> = None;
+
             if let Ok(mut gb) = gb.lock() {
                 let (cpu, mmu) = {
                     let GameBoy { cpu, mmu, .. } = &mut *gb;
                     (cpu, mmu)
                 };
 
+                let pre_pc = cpu.pc;
+                let pre_exec_hit = if !watchpoints_suspended {
+                    watchpoints.iter().find(|wp| {
+                        wp.enabled
+                            && wp.on_execute
+                            && wp.matches_addr(pre_pc)
+                            && wp.matches_value(None)
+                    })
+                } else {
+                    None
+                };
+
+                let pre_fallthrough = {
+                    let was = mmu.watchpoints.suspended();
+                    if !was {
+                        mmu.watchpoints.set_suspended(true);
+                    }
+                    let opcode = mmu.read_byte(pre_pc);
+                    if !was {
+                        mmu.watchpoints.set_suspended(false);
+                    }
+                    let len = ui::code_data::sm83_instr_len(opcode) as u16;
+                    pre_pc.wrapping_add(len)
+                };
+
                 let romx_bank = mmu.cart.as_ref().map(|c| c.current_rom_bank()).unwrap_or(1);
                 let bank = romx_bank.min(0xFF) as u8;
+                let was = mmu.watchpoints.suspended();
+                if !was {
+                    mmu.watchpoints.set_suspended(true);
+                }
                 note_execute_pc(
-                    cpu.pc,
+                    pre_pc,
                     bank,
                     mmu,
                     &mut exec_seen_rom0,
                     &mut exec_seen_romx,
                     &mut pending_exec_trace,
                 );
+                if !was {
+                    mmu.watchpoints.set_suspended(false);
+                }
                 cpu.step(mmu);
+
+                if let Some(hit) = mmu.watchpoints.take_hit() {
+                    step_watch_hit = Some(hit);
+                } else if !watchpoints_suspended && cpu.pc != pre_fallthrough {
+                    let dest = cpu.pc;
+                    if let Some(wp) = watchpoints.iter().find(|wp| {
+                        wp.enabled && wp.on_jump && wp.matches_addr(dest) && wp.matches_value(None)
+                    }) {
+                        step_watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
+                            id: wp.id,
+                            trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Jump,
+                            addr: dest,
+                            value: None,
+                            pc: Some(pre_pc),
+                        });
+                    }
+                } else if let Some(wp) = pre_exec_hit {
+                    step_watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
+                        id: wp.id,
+                        trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Execute,
+                        addr: pre_pc,
+                        value: None,
+                        pc: Some(pre_pc),
+                    });
+                }
 
                 if want_guaranteed {
                     if let Ok(mut snap) = ui_snapshot.write() {
@@ -1209,6 +1364,9 @@ fn run_emulator_thread(
             if want_guaranteed && let Some(cmd_id) = pending_debug_ack.take() {
                 let _ = wake_proxy.send_event(UserEvent::DebuggerAck { cmd_id });
             }
+            if let Some(hit) = step_watch_hit {
+                let _ = wake_proxy.send_event(UserEvent::DebuggerWatchpoint { hit });
+            }
             let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
             continue;
         }
@@ -1221,6 +1379,7 @@ fn run_emulator_thread(
             gb.mmu.apu.set_speed(speed.factor);
 
             let mut break_hit: Option<(u8, u16)> = None;
+            let mut watch_hit: Option<vibe_emu_core::watchpoints::WatchpointHit> = None;
             let mut yield_for_messages = false;
             let mut pause_wake_needed = false;
             let mut debugger_wake_needed = false;
@@ -1248,9 +1407,28 @@ fn run_emulator_thread(
                     }
                 }
 
+                if !watchpoints_suspended {
+                    for wp in &watchpoints {
+                        if !wp.enabled || !wp.on_execute || !wp.matches_addr(cpu.pc) {
+                            continue;
+                        }
+                        if !wp.matches_value(None) {
+                            continue;
+                        }
+                        watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
+                            id: wp.id,
+                            trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Execute,
+                            addr: cpu.pc,
+                            value: None,
+                            pc: Some(cpu.pc),
+                        });
+                        break;
+                    }
+                }
+
                 let mut instrs_since_poll: u32 = 0;
                 while !mmu.ppu.frame_ready() {
-                    if yield_for_messages || break_hit.is_some() {
+                    if yield_for_messages || break_hit.is_some() || watch_hit.is_some() {
                         break;
                     }
 
@@ -1272,18 +1450,89 @@ fn run_emulator_thread(
                         }
                     }
 
+                    if !watchpoints_suspended {
+                        for wp in &watchpoints {
+                            if !wp.enabled || !wp.on_execute || !wp.matches_addr(cpu.pc) {
+                                continue;
+                            }
+                            if !wp.matches_value(None) {
+                                continue;
+                            }
+                            watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
+                                id: wp.id,
+                                trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Execute,
+                                addr: cpu.pc,
+                                value: None,
+                                pc: Some(cpu.pc),
+                            });
+                            break;
+                        }
+                        if watch_hit.is_some() {
+                            break;
+                        }
+                    }
+
+                    let pre_pc = cpu.pc;
+                    let pre_fallthrough = {
+                        let was = mmu.watchpoints.suspended();
+                        if !was {
+                            mmu.watchpoints.set_suspended(true);
+                        }
+                        let opcode = mmu.read_byte(pre_pc);
+                        if !was {
+                            mmu.watchpoints.set_suspended(false);
+                        }
+                        let len = ui::code_data::sm83_instr_len(opcode) as u16;
+                        pre_pc.wrapping_add(len)
+                    };
+
                     let romx_bank = mmu.cart.as_ref().map(|c| c.current_rom_bank()).unwrap_or(1);
                     let bank = romx_bank.min(0xFF) as u8;
+                    let was = mmu.watchpoints.suspended();
+                    if !was {
+                        mmu.watchpoints.set_suspended(true);
+                    }
                     note_execute_pc(
-                        cpu.pc,
+                        pre_pc,
                         bank,
                         mmu,
                         &mut exec_seen_rom0,
                         &mut exec_seen_romx,
                         &mut pending_exec_trace,
                     );
+                    if !was {
+                        mmu.watchpoints.set_suspended(false);
+                    }
 
                     cpu.step(mmu);
+
+                    if let Some(hit) = mmu.watchpoints.take_hit() {
+                        watch_hit = Some(hit);
+                        break;
+                    }
+
+                    if !watchpoints_suspended && cpu.pc != pre_fallthrough {
+                        let dest = cpu.pc;
+                        for wp in &watchpoints {
+                            if !wp.enabled || !wp.on_jump || !wp.matches_addr(dest) {
+                                continue;
+                            }
+                            if !wp.matches_value(None) {
+                                continue;
+                            }
+                            watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
+                                id: wp.id,
+                                trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Jump,
+                                addr: dest,
+                                value: None,
+                                pc: Some(pre_pc),
+                            });
+                            break;
+                        }
+                        if watch_hit.is_some() {
+                            break;
+                        }
+                    }
 
                     instrs_since_poll = instrs_since_poll.wrapping_add(1);
                     if instrs_since_poll >= 256 {
@@ -1297,6 +1546,8 @@ fn run_emulator_thread(
                                         next_frame = Instant::now() + FRAME_TIME;
                                         ignore_breakpoints = false;
                                         ignore_once_breakpoint = None;
+                                        watchpoints_suspended = false;
+                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
                                         animate = false;
                                         if paused {
                                             temp_exec_break = None;
@@ -1310,6 +1561,8 @@ fn run_emulator_thread(
                                     } => {
                                         paused = false;
                                         ignore_breakpoints = ignore;
+                                        watchpoints_suspended = ignore;
+                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
                                         next_frame = Instant::now() + FRAME_TIME;
                                         ignore_once_breakpoint = None;
                                     }
@@ -1317,6 +1570,8 @@ fn run_emulator_thread(
                                         paused = false;
                                         ignore_breakpoints = false;
                                         ignore_once_breakpoint = Some(breakpoint);
+                                        watchpoints_suspended = false;
+                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
                                         next_frame = Instant::now() + FRAME_TIME;
                                     }
                                     EmuCommand::SetAnimate(value) => {
@@ -1330,6 +1585,8 @@ fn run_emulator_thread(
                                         step_budget = step_budget.saturating_add(count);
                                         paused = true;
                                         ignore_breakpoints = false;
+                                        watchpoints_suspended = false;
+                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
                                         next_frame = Instant::now() + FRAME_TIME;
                                         ignore_once_breakpoint = None;
                                         animate = false;
@@ -1348,6 +1605,8 @@ fn run_emulator_thread(
                                         temp_exec_break = Some(target);
                                         paused = false;
                                         ignore_breakpoints = ignore;
+                                        watchpoints_suspended = ignore;
+                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
                                         ignore_once_breakpoint = None;
                                         next_frame = Instant::now() + FRAME_TIME;
                                     }
@@ -1362,6 +1621,11 @@ fn run_emulator_thread(
                                     EmuCommand::SetBreakpoints(list) => {
                                         breakpoints.clear();
                                         breakpoints.extend(list);
+                                    }
+                                    EmuCommand::SetWatchpoints(list) => {
+                                        watchpoints = list;
+                                        mmu.watchpoints.set_watchpoints(watchpoints.clone());
+                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
                                     }
                                     EmuCommand::SetSpeed(new_speed) => {
                                         speed = new_speed;
@@ -1406,6 +1670,7 @@ fn run_emulator_thread(
 
                 if !yield_for_messages
                     && break_hit.is_none()
+                    && watch_hit.is_none()
                     && (temp_exec_break.is_some()
                         || (!ignore_breakpoints && !breakpoints.is_empty()))
                 {
@@ -1423,7 +1688,30 @@ fn run_emulator_thread(
                     }
                 }
 
-                if break_hit.is_some() {
+                if !yield_for_messages
+                    && break_hit.is_none()
+                    && watch_hit.is_none()
+                    && !watchpoints_suspended
+                {
+                    for wp in &watchpoints {
+                        if !wp.enabled || !wp.on_execute || !wp.matches_addr(cpu.pc) {
+                            continue;
+                        }
+                        if !wp.matches_value(None) {
+                            continue;
+                        }
+                        watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
+                            id: wp.id,
+                            trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Execute,
+                            addr: cpu.pc,
+                            value: None,
+                            pc: Some(cpu.pc),
+                        });
+                        break;
+                    }
+                }
+
+                if break_hit.is_some() || watch_hit.is_some() {
                     // Breakpoint hit; do not attempt to complete or present a video frame.
                     // We'll publish a snapshot after we drop the CPU/MMU borrows.
                 } else if yield_for_messages {
@@ -1488,6 +1776,8 @@ fn run_emulator_thread(
                                 &mut mobile_active,
                                 &mut mobile_time_accum_ns,
                             );
+                            gb.mmu.watchpoints.set_watchpoints(watchpoints.clone());
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
                             gb.mmu.ppu.clear_frame_flag();
                             frame_count = 0;
                             next_frame = Instant::now() + FRAME_TIME;
@@ -1496,6 +1786,8 @@ fn run_emulator_thread(
                             paused = true;
                             ignore_breakpoints = false;
                             ignore_once_breakpoint = None;
+                            watchpoints_suspended = false;
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
                             animate = false;
                             next_frame = Instant::now() + FRAME_TIME;
                             temp_exec_break = None;
@@ -1506,6 +1798,8 @@ fn run_emulator_thread(
                             paused = true;
                             ignore_breakpoints = false;
                             ignore_once_breakpoint = None;
+                            watchpoints_suspended = false;
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
                             animate = false;
                             next_frame = Instant::now() + FRAME_TIME;
                             temp_exec_break = None;
@@ -1523,6 +1817,8 @@ fn run_emulator_thread(
                             paused = true;
                             ignore_breakpoints = false;
                             ignore_once_breakpoint = None;
+                            watchpoints_suspended = false;
+                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
                             animate = false;
                             next_frame = Instant::now() + FRAME_TIME;
                             temp_exec_break = None;
@@ -1558,12 +1854,29 @@ fn run_emulator_thread(
                 paused = true;
                 ignore_breakpoints = false;
                 ignore_once_breakpoint = None;
+                watchpoints_suspended = false;
+                gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
                 animate = false;
                 temp_exec_break = None;
                 if let Ok(mut snap) = ui_snapshot.write() {
                     *snap = UiSnapshot::from_gb(&mut gb, true);
                 }
                 let _ = wake_proxy.send_event(UserEvent::DebuggerBreak { bank, addr: pc });
+                continue;
+            }
+
+            if let Some(hit) = watch_hit {
+                paused = true;
+                ignore_breakpoints = false;
+                ignore_once_breakpoint = None;
+                watchpoints_suspended = false;
+                gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
+                animate = false;
+                temp_exec_break = None;
+                if let Ok(mut snap) = ui_snapshot.write() {
+                    *snap = UiSnapshot::from_gb(&mut gb, true);
+                }
+                let _ = wake_proxy.send_event(UserEvent::DebuggerWatchpoint { hit });
                 continue;
             }
 
@@ -1804,6 +2117,12 @@ fn build_ui(state: &mut UiState, cfg: &mut UiConfig, ui: &imgui::Ui, mobile_avai
             }
             if ui.menu_item("VRAM Viewer") {
                 state.spawn_vram = true;
+                state.paused = true;
+                state.pending_pause = Some(true);
+                state.menu_resume_armed = false;
+            }
+            if ui.menu_item("Watchpoints") {
+                state.spawn_watchpoints = true;
                 state.paused = true;
                 state.pending_pause = Some(true);
                 state.menu_resume_armed = false;
@@ -2639,6 +2958,19 @@ fn main() {
                         win.win.request_redraw();
                     }
                 }
+                Event::UserEvent(UserEvent::DebuggerWatchpoint { hit }) => {
+                    ui_state.paused = true;
+                    ui_state.pending_pause = Some(true);
+                    ui_state.menu_resume_armed = false;
+                    ui_state.debugger_animate_active = false;
+                    ui_state.spawn_debugger = true;
+                    ui_state.debugger_pending_focus = true;
+                    ui_state.debugger.note_watchpoint_hit(hit);
+                    ui_state.watchpoints.note_watchpoint_hit(hit);
+                    for win in windows.values() {
+                        win.win.request_redraw();
+                    }
+                }
                 Event::WindowEvent {
                     window_id,
                     event: win_event,
@@ -3019,6 +3351,10 @@ fn main() {
                                             ui_snapshot.read().unwrap_or_else(|e| e.into_inner());
                                         draw_vram(vram_viewer.as_mut(), renderer, pixels, &snap, ui)
                                     }
+                                    WindowKind::Watchpoints => {
+                                        let _ = pixels.frame_mut();
+                                        ui_state.watchpoints.ui(ui);
+                                    }
                                     WindowKind::Options => {
                                         draw_options_window(
                                             &mut ui_state,
@@ -3201,6 +3537,17 @@ fn main() {
                         ui_state.spawn_options = false;
                     }
 
+                    if ui_state.spawn_watchpoints
+                        && !windows
+                            .values()
+                            .any(|w| matches!(w.kind, WindowKind::Watchpoints))
+                    {
+                        spawn_watchpoints_window(target, &mut windows);
+                        ui_state.paused = true;
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
+                        ui_state.spawn_watchpoints = false;
+                    }
+
                     if ui_state.pending_exit {
                         ui_state.pending_exit = false;
                         ui_state.pending_save_ui_config = true;
@@ -3223,6 +3570,13 @@ fn main() {
                     if dbg_actions.breakpoints_updated {
                         let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetBreakpoints(
                             dbg_actions.breakpoints,
+                        )));
+                    }
+
+                    let wp_actions = ui_state.watchpoints.take_actions();
+                    if wp_actions.watchpoints_updated {
+                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetWatchpoints(
+                            wp_actions.watchpoints,
                         )));
                     }
 

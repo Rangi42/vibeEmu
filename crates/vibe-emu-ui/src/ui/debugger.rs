@@ -9,6 +9,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use vibe_emu_core::watchpoints::{WatchpointHit, WatchpointTrigger};
 
 const NO_BANK: u8 = 0xFF;
 
@@ -117,7 +118,16 @@ pub enum DebuggerPauseReason {
     Manual,
     Step,
     DebuggerFocus,
-    Breakpoint { bank: u8, addr: u16 },
+    Breakpoint {
+        bank: u8,
+        addr: u16,
+    },
+    Watchpoint {
+        trigger: WatchpointTrigger,
+        addr: u16,
+        value: Option<u8>,
+        pc: Option<u16>,
+    },
 }
 
 impl DebuggerState {
@@ -132,6 +142,17 @@ impl DebuggerState {
     pub fn note_breakpoint_hit(&mut self, bank: u8, addr: u16) {
         self.pause_reason = Some(DebuggerPauseReason::Breakpoint { bank, addr });
         self.pending_scroll_to_addr = Some(addr);
+        self.pending_scroll_to_pc = false;
+    }
+
+    pub fn note_watchpoint_hit(&mut self, hit: &WatchpointHit) {
+        self.pause_reason = Some(DebuggerPauseReason::Watchpoint {
+            trigger: hit.trigger,
+            addr: hit.addr,
+            value: hit.value,
+            pc: hit.pc,
+        });
+        self.pending_scroll_to_addr = Some(hit.addr);
         self.pending_scroll_to_pc = false;
     }
 
@@ -510,6 +531,22 @@ impl DebuggerState {
                 DebuggerPauseReason::DebuggerFocus => "Paused (debugger focus)".to_string(),
                 DebuggerPauseReason::Breakpoint { bank, addr } => {
                     format!("Paused (breakpoint {:02X}:{:04X})", bank, addr)
+                }
+                DebuggerPauseReason::Watchpoint {
+                    trigger,
+                    addr,
+                    value,
+                    pc,
+                } => {
+                    let label = match trigger {
+                        WatchpointTrigger::Read => "read",
+                        WatchpointTrigger::Write => "write",
+                        WatchpointTrigger::Execute => "execute",
+                        WatchpointTrigger::Jump => "jump",
+                    };
+                    let value = value.map(|v| format!("=${v:02X} ")).unwrap_or_default();
+                    let pc = pc.map(|pc| format!("pc={pc:04X} ")).unwrap_or_default();
+                    format!("Paused (watchpoint {label} {pc}{value}@ {addr:04X})")
                 }
             });
             ui.same_line();
