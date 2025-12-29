@@ -2104,15 +2104,17 @@ impl Ppu {
                 // window
                 let mut window_drawn = false;
                 if self.lcdc & 0x20 != 0 && self.ly >= self.wy && self.wx <= WINDOW_X_MAX {
-                    let wx = self.wx.wrapping_sub(7) as u16;
+                    let wx_reg = self.wx;
+                    let window_origin_x = wx_reg as i16 - 7;
+                    let start_x = wx_reg.saturating_sub(7) as u16;
                     let window_map_base = if self.lcdc & 0x40 != 0 {
                         BG_MAP_1_BASE
                     } else {
                         BG_MAP_0_BASE
                     };
                     let window_y = self.win_line_counter as usize;
-                    for x in wx..SCREEN_WIDTH as u16 {
-                        let window_x = (x - wx) as usize;
+                    for x in start_x..SCREEN_WIDTH as u16 {
+                        let window_x = (x as i16 - window_origin_x) as usize;
                         let tile_col = window_x / 8;
                         let tile_row = window_y / 8;
                         let tile_y = window_y % 8;
@@ -2522,6 +2524,11 @@ impl Ppu {
             {
                 window_active = true;
                 window_drawn = true;
+                // The window layer is not affected by SCX fine-scroll.
+                // If the window starts at or before X=0 (WX<=7), applying the
+                // background discard here causes the window to appear to lag and
+                // "catch up" when SCX changes.
+                discard = 0;
                 fifo.clear();
                 fetcher_step = 0;
                 fetcher_subdot = 0;
