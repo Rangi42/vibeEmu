@@ -54,18 +54,32 @@ fn run_same_suite<P: AsRef<std::path::Path>>(rom_path: P, max_cycles: u64) -> bo
     }
     let out = gb.mmu.serial.take_output();
     let ok = out.len() >= 6 && out[0..6] == FIB_SEQ;
-    if !ok && std::env::var_os("VIBEEMU_LOG_SERIAL").is_some() {
+    if !ok {
         eprintln!("same suite output: {:02X?}", out);
 
         // SameSuite stores results at $C000 and sets RESULT_CODE at $CFFE.
         // Dump a fixed window for quick diagnosis.
         let result_code = gb.mmu.read_byte(0xCFFE);
-        let mut results = [0u8; 64];
+        let mut results = [0u8; 144];
         for (i, b) in results.iter_mut().enumerate() {
             *b = gb.mmu.read_byte(0xC000 + i as u16);
         }
         eprintln!("same suite RESULT_CODE: 0x{result_code:02X}");
-        eprintln!("same suite results[0xC000..0xC040]: {:02X?}", results);
+        for row in 0..18 {
+            let base = row * 8;
+            eprintln!(
+                "Row {:2}: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+                row,
+                results[base],
+                results[base + 1],
+                results[base + 2],
+                results[base + 3],
+                results[base + 4],
+                results[base + 5],
+                results[base + 6],
+                results[base + 7]
+            );
+        }
     }
     ok
 }
@@ -369,7 +383,6 @@ fn same_suite__apu__channel_1__channel_1_stop_restart_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_sweep_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_sweep.gb"),

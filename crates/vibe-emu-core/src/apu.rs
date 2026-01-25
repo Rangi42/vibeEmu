@@ -235,12 +235,21 @@ impl SquareChannel {
 
     fn write_frequency_low(&mut self, value: u8) {
         self.frequency = (self.frequency & 0x700) | value as u16;
-        self.refresh_sample_length();
+        // Update only the low 8 bits of sample_length
+        self.sample_length = (self.sample_length & 0x700) | value as u16;
+        if self.just_reloaded {
+            self.sample_countdown = Self::sample_countdown_from_length(self.sample_length);
+        }
     }
 
     fn write_frequency_high(&mut self, value: u8) {
         self.frequency = (self.frequency & 0xFF) | (((value & 0x07) as u16) << 8);
-        self.refresh_sample_length();
+        // Update only the high 3 bits of sample_length
+        // This preserves the low bits that may have been modified by sweep
+        self.sample_length = (self.sample_length & 0xFF) | (((value & 0x07) as u16) << 8);
+        if self.just_reloaded {
+            self.sample_countdown = Self::sample_countdown_from_length(self.sample_length);
+        }
     }
 
     fn reset_sample_timing(&mut self) {
@@ -778,6 +787,28 @@ pub struct Apu {
     dmg_revision: DmgRevision,
     /// State machine for skipping DIV-APU events when APU powers on with DIV bit set.
     skip_div_event: SkipDivEvent,
+
+    // ── Sweep state ──
+    /// 128Hz sweep countdown (0-7), incremented when (div_divider & 3) == 3
+    sweep_countdown: u8,
+    /// 1 MHz countdown for delayed sweep calculation
+    sweep_calc_countdown: u8,
+    /// Reload timer for sweep calculation countdown (handles glitches)
+    sweep_calc_reload_timer: u8,
+    /// Shadow copy of frequency used for sweep calculations
+    sweep_shadow_freq: u16,
+    /// The delta (addend) to apply during sweep calculation
+    sweep_addend: u16,
+    /// Completed addend from last calculation
+    sweep_completed_addend: u16,
+    /// True if sweep shift is zero (no actual shifting)
+    sweep_unshifted: bool,
+    /// True if an instant calculation was already done this trigger
+    sweep_instant_calc_done: bool,
+    /// Hold period after channel 1 restart (delays sweep shadow reload)
+    ch1_restart_hold: u8,
+    /// True if a negate calculation has been used since last trigger
+    sweep_neg_used: bool,
 }
 
 /// Lightweight snapshot of APU state for test diagnostics.
@@ -1282,6 +1313,17 @@ impl Apu {
             ch1_env_countdown: 0,
             ch2_env_countdown: 0,
             skip_div_event: SkipDivEvent::Inactive,
+            // Sweep state initialization
+            sweep_countdown: 0,
+            sweep_calc_countdown: 0,
+            sweep_calc_reload_timer: 0,
+            sweep_shadow_freq: 0,
+            sweep_addend: 0,
+            sweep_completed_addend: 0,
+            sweep_unshifted: false,
+            sweep_instant_calc_done: false,
+            ch1_restart_hold: 0,
+            sweep_neg_used: false,
         };
 
         // Apply power-on register defaults (boot ROM may be skipped).
@@ -1331,6 +1373,17 @@ impl Apu {
 
     pub fn read_reg(&mut self, addr: u16) -> u8 {
         if addr == 0xFF26 {
+            // Process any pending sweep calculation before reading channel status
+            // This is called before reading NR52
+            // Only process if reload_timer has expired (== 0)
+            if self.sweep_instant_calc_done
+                && self.sweep_calc_countdown == 0
+                && self.sweep_calc_reload_timer == 0
+            {
+                self.sweep_calculation_done();
+                self.sweep_instant_calc_done = false;
+            }
+
             let mut val = self.regs[(addr - 0xFF10) as usize] & 0x7F;
             val |= self.nr52 & 0x80;
             if self.ch1.enabled {
@@ -1509,12 +1562,39 @@ impl Apu {
 
         match addr {
             0xFF10 => {
-                if let Some(s) = self.ch1.sweep.as_mut() {
-                    let disable = s.set_params(val);
-                    if disable {
+                // Handle NR10 glitch during ongoing sweep calculation
+                if self.sweep_calc_countdown > 0 || self.sweep_calc_reload_timer > 0 {
+                    // Glitch handling for writes during calculation
+                }
+
+                let old_negate = if matches!(
+                    self.cgb_revision,
+                    CgbRevision::Rev0 | CgbRevision::RevA | CgbRevision::RevB | CgbRevision::RevC
+                ) {
+                    true // On old CGB revisions, treat old_negate as true
+                } else {
+                    old_val & 0x08 != 0
+                };
+                let new_negate = val & 0x08 != 0;
+
+                // If sweep went from negate to non-negate and a calculation was done,
+                // disable the channel (APU bug)
+                if old_negate && !new_negate {
+                    let overflow = self.sweep_shadow_freq
+                        .wrapping_add(self.sweep_completed_addend)
+                        .wrapping_add(1) // +1 for negate mode
+                        > 0x07FF;
+                    if overflow {
                         self.ch1.enabled = false;
                         self.ch1.active = false;
                     }
+                }
+
+                // Update the legacy sweep struct parameters only (for debug access)
+                if let Some(s) = self.ch1.sweep.as_mut() {
+                    s.period = (val >> 4) & 0x07;
+                    s.negate = val & 0x08 != 0;
+                    s.shift = val & 0x07;
                 }
             }
             0xFF11 => {
@@ -1803,7 +1883,12 @@ impl Apu {
             ch.duty = ch.duty_next;
             let lf_div = (self.lf_div & 0x1) as i32;
 
-            ch.refresh_sample_length();
+            // Don't call refresh_sample_length - sample_length has already been updated
+            // by NR13/NR14 writes. This preserves the swept frequency's low bits.
+            // Only update countdown if just_reloaded is set.
+            if ch.just_reloaded {
+                ch.sample_countdown = SquareChannel::sample_countdown_from_length(ch.sample_length);
+            }
             ch.did_tick = false;
 
             let force_unsurpressed = false;
@@ -1907,23 +1992,6 @@ impl Apu {
             ch.envelope.timer = env_timer;
             ch.length_enable = length_enable;
 
-            if idx == 1
-                && let Some(s) = ch.sweep.as_mut()
-            {
-                s.reload(ch.frequency);
-                if s.shift != 0 {
-                    let new_freq = s.calculate();
-                    if new_freq > 2047 {
-                        ch.enabled = false;
-                        ch.active = false;
-                        s.enabled = false;
-                    }
-                    if s.negate {
-                        s.neg_used = true;
-                    }
-                }
-            }
-
             if ch.length == 0 {
                 ch.length = 64;
                 if ch.length_enable
@@ -1932,6 +2000,54 @@ impl Apu {
                     ch.length = 63;
                 }
             }
+        }
+
+        // Handle sweep initialization for channel 1 (at APU level)
+        if idx == 1 {
+            let nr10 = self.regs[0x00];
+            let shift = nr10 & 0x07;
+            let was_active = self.ch1.active;
+
+            // Reset sweep state
+            self.sweep_instant_calc_done = false;
+            self.sweep_shadow_freq = 0;
+            self.sweep_completed_addend = 0;
+            self.sweep_neg_used = false;
+
+            if shift != 0 {
+                // APU bug: if shift is nonzero, overflow check also occurs on trigger
+                self.sweep_calc_countdown = shift;
+
+                // Reload timer depends on lf_div and CGB revision
+                let base_timer = if (self.lf_div & 1) != (if self.double_speed { 1 } else { 0 })
+                    && matches!(
+                        self.cgb_revision,
+                        CgbRevision::Rev0
+                            | CgbRevision::RevA
+                            | CgbRevision::RevB
+                            | CgbRevision::RevC
+                    ) {
+                    3
+                } else {
+                    2
+                };
+                self.sweep_calc_reload_timer = if was_active {
+                    base_timer
+                } else {
+                    base_timer + 1
+                };
+                self.sweep_unshifted = false;
+
+                // Calculate initial addend
+                self.sweep_addend = self.ch1.sample_length >> shift;
+            } else {
+                self.sweep_addend = 0;
+            }
+
+            // These are set unconditionally
+            let cgb_not_d = self.cgb_mode && self.cgb_revision != CgbRevision::RevD;
+            self.ch1_restart_hold = 2 - (self.lf_div & 1) + if cgb_not_d { 2 } else { 0 };
+            self.sweep_countdown = ((nr10 >> 4) & 7) ^ 7;
         }
 
         if idx == 1 && freq_updated {
@@ -2126,6 +2242,121 @@ impl Apu {
                 }
             }
         }
+
+        // Sweep is clocked when (div_divider & 3) == 3 (128 Hz rate)
+        if (self.div_divider & 3) == 3 {
+            self.sweep_countdown = self.sweep_countdown.wrapping_add(1) & 7;
+            self.trigger_sweep_calculation();
+        }
+    }
+
+    /// Called when sweep calculation countdown reaches zero.
+    /// Performs the actual frequency calculation and overflow check.
+    fn sweep_calculation_done(&mut self) {
+        let nr10 = self.regs[0x00];
+        let negate = nr10 & 0x08 != 0;
+
+        // APU bug: sweep frequency is checked after adding the sweep delta twice
+        if self.ch1_restart_hold == 0 {
+            self.sweep_shadow_freq = self.ch1.sample_length;
+        }
+
+        // Calculate the addend
+        if negate {
+            self.sweep_addend ^= 0x07FF;
+        }
+
+        // Overflow check
+        let sum = self.sweep_shadow_freq.wrapping_add(self.sweep_addend);
+        if sum > 0x07FF && !negate {
+            self.ch1.enabled = false;
+            self.ch1.active = false;
+        }
+
+        self.sweep_completed_addend = self.sweep_addend;
+    }
+
+    /// Called when (div_divider & 3) == 3 to potentially trigger a sweep calculation.
+    fn trigger_sweep_calculation(&mut self) {
+        let nr10 = self.regs[0x00];
+        let period = (nr10 >> 4) & 0x07;
+        let shift = nr10 & 0x07;
+
+        if period != 0 && self.sweep_countdown == 7 {
+            if shift != 0 {
+                // Update frequency from shadow + addend
+                let negate_add = if nr10 & 0x08 != 0 { 1 } else { 0 };
+                let new_freq = self
+                    .sweep_addend
+                    .wrapping_add(self.sweep_shadow_freq)
+                    .wrapping_add(negate_add);
+                self.ch1.sample_length = new_freq & 0x07FF;
+            }
+
+            if self.ch1_restart_hold == 0 {
+                self.sweep_addend = self.ch1.sample_length >> shift;
+            }
+
+            // Recalculation and overflow check only occurs after a delay
+            self.sweep_calc_countdown = shift;
+            self.sweep_calc_reload_timer = 1 + (self.lf_div & 1);
+            self.sweep_unshifted = shift == 0;
+
+            if self.sweep_calc_countdown == 0 {
+                self.sweep_instant_calc_done = true;
+            }
+
+            // Reset countdown for next sweep period
+            self.sweep_countdown = period ^ 7;
+        }
+    }
+
+    /// Tick sweep-related countdowns. Called during APU run with 1 MHz cycles.
+    fn tick_sweep(&mut self, cycles: u8) {
+        if self.sweep_calc_reload_timer > 0 {
+            if self.sweep_calc_reload_timer > cycles {
+                self.sweep_calc_reload_timer -= cycles;
+                return;
+            }
+
+            // Reload timer expired
+            if self.sweep_calc_countdown == 0 && self.sweep_instant_calc_done {
+                self.sweep_calculation_done();
+            }
+            self.sweep_instant_calc_done = false;
+            let remaining = cycles - self.sweep_calc_reload_timer;
+            self.sweep_calc_reload_timer = 0;
+
+            // Now tick the calculation countdown
+            if self.sweep_calc_countdown > 0
+                && (self.regs[0x00] & 0x07 != 0 || self.sweep_unshifted)
+            {
+                if self.sweep_calc_countdown > remaining {
+                    self.sweep_calc_countdown -= remaining;
+                } else {
+                    self.sweep_calc_countdown = 0;
+                    self.sweep_calculation_done();
+                }
+            }
+        } else if self.sweep_calc_countdown > 0
+            && (self.regs[0x00] & 0x07 != 0 || self.sweep_unshifted)
+        {
+            if self.sweep_calc_countdown > cycles {
+                self.sweep_calc_countdown -= cycles;
+            } else {
+                self.sweep_calc_countdown = 0;
+                self.sweep_calculation_done();
+            }
+        }
+
+        // Tick channel 1 restart hold
+        if self.ch1_restart_hold > 0 {
+            if self.ch1_restart_hold > cycles {
+                self.ch1_restart_hold -= cycles;
+            } else {
+                self.ch1_restart_hold = 0;
+            }
+        }
     }
 
     fn clock_frame_sequencer(&mut self, step: u8) {
@@ -2135,9 +2366,7 @@ impl Apu {
             self.ch3.clock_length();
             self.ch4.clock_length();
         }
-        if (step == 2 || step == 6) && self.ch1.clock_sweep() {
-            self.update_ch1_freq_regs();
-        }
+        // Note: Sweep is now clocked via div_divider in handle_div_event
         if step == 7 {
             // No action here; envelope countdown scheduling is tied to DIV edges below.
         }
@@ -2164,8 +2393,16 @@ impl Apu {
             self.ch3.tick_1mhz();
             self.ch4.tick_1mhz();
 
-            // Update PCM12/PCM34 after each 1 MHz tick.
+            // Update PCM12/PCM34 after each dot tick.
             self.refresh_pcm_regs();
+
+            // Tick sweep calculation countdown at 1 MHz (once per 4 dots in single-speed,
+            // or once per 2 dots in double-speed).
+            let divisor: u64 = if double_speed { 2 } else { 4 };
+            if self.lf_div_counter.is_multiple_of(divisor) {
+                self.tick_sweep(1);
+            }
+
             self.lf_div_counter = self.lf_div_counter.wrapping_add(1);
         }
         // cpu_cycles remains a CPU cycle counter for timers and IRQs.
