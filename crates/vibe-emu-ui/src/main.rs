@@ -3885,22 +3885,36 @@ mod run_to_regression_tests {
         let _ = frame_pool_tx.send(vec![0u32; 160 * 144]);
 
         let event_loop = {
+            let mut builder = EventLoop::<UserEvent>::with_user_event();
+
             #[cfg(target_os = "windows")]
             {
                 use winit::platform::windows::EventLoopBuilderExtWindows;
-
-                EventLoop::<UserEvent>::with_user_event()
-                    .with_any_thread(true)
-                    .build()
-                    .expect("failed to build winit event loop for tests")
+                builder.with_any_thread(true);
             }
 
-            #[cfg(not(target_os = "windows"))]
+            // winit enforces main-thread event loop creation on some Linux backends.
+            // Tests run on worker threads, so opt into the platform escape hatch.
+            #[cfg(target_os = "linux")]
             {
-                EventLoop::<UserEvent>::with_user_event()
-                    .build()
-                    .expect("failed to build winit event loop for tests")
+                #[allow(unused_imports)]
+                use winit::platform::wayland::EventLoopBuilderExtWayland;
+                #[allow(unused_imports)]
+                use winit::platform::x11::EventLoopBuilderExtX11;
+
+                let _ = winit::platform::wayland::EventLoopBuilderExtWayland::with_any_thread(
+                    &mut builder,
+                    true,
+                );
+                let _ = winit::platform::x11::EventLoopBuilderExtX11::with_any_thread(
+                    &mut builder,
+                    true,
+                );
             }
+
+            builder
+                .build()
+                .expect("failed to build winit event loop for tests")
         };
         let wake_proxy = event_loop.create_proxy();
 
