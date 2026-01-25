@@ -202,3 +202,21 @@ fn daid_ppu_scanline_bgp_gbc() {
     run_for_frames(&mut gb, 60);
     assert_framebuffer_matches_png(&gb, "daid/ppu_scanline_bgp.gbc.png");
 }
+
+#[test]
+fn daid_ppu_scanline_bgp_dmg() {
+    // Mid-scanline BGP changes on DMG. The ROM writes different BGP values
+    // during mode 3 to create colored bands.
+    let rom = std::fs::read(common::rom_path("daid/ppu_scanline_bgp.gb")).expect("rom not found");
+
+    let mut gb = GameBoy::new_with_mode(false);
+    gb.mmu.load_cart(Cartridge::load(rom));
+
+    // Use grayscale palette to match the reference screenshots
+    gb.mmu
+        .ppu
+        .set_dmg_palette([0xFFFFFF, 0xAAAAAA, 0x555555, 0x000000]);
+
+    run_for_frames(&mut gb, 60);
+    assert_framebuffer_matches_png(&gb, "daid/ppu_scanline_bgp_0.dmg.png");
+}

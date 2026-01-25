@@ -422,7 +422,9 @@ impl Ppu {
             // Net effect: -3 cycles (or equivalently, +1 to x after -4 to t).
             mode3_t.saturating_sub(3)
         } else {
-            mode3_t
+            // Pure DMG has a pipeline delay (~6 cycles) between when the CPU
+            // writes BGP and when the PPU applies it to subsequent pixels.
+            mode3_t.saturating_sub(6)
         };
         let x = adjusted_t.min((SCREEN_WIDTH - 1) as u16) as u8;
         if self.dmg_bgp_event_count >= DMG_BGP_EVENTS_MAX {
@@ -437,25 +439,15 @@ impl Ppu {
     #[inline]
     fn dmg_bgp_for_pixel(&self, x: usize) -> u8 {
         let mut current = self.dmg_line_bgp_base;
-        let mut glitch_or: Option<u8> = None;
         let x = x as u8;
         for ev in self.dmg_bgp_events[..self.dmg_bgp_event_count].iter() {
-            if ev.x < x {
+            if ev.x <= x {
                 current = ev.val;
-            } else if ev.x == x {
-                if self.dmg_compat {
-                    // CGB DMG-compat mode is deterministic.
-                    current = ev.val;
-                } else {
-                    // DMG same-dot ambiguity: old/new/or transient OR.
-                    let acc = glitch_or.get_or_insert(current);
-                    *acc |= ev.val;
-                }
             } else {
                 break;
             }
         }
-        glitch_or.unwrap_or(current)
+        current
     }
 
     /// Set a runtime DMG palette. Colors are in 0x00RRGGBB order.
@@ -2375,23 +2367,28 @@ impl Ppu {
                     }
                 }
                 MODE_VBLANK => {
-                    // CGB line 153 quirk: LY register becomes 0 immediately when
-                    // line 153 starts. This causes LYC=0 STAT interrupts to fire
-                    // during VBlank rather than at the start of line 0.
-                    if self.cgb && self.ly == 153 && !self.cgb_line153_ly0_triggered {
+                    // Line 153 quirk: Both CGB and DMG set ly_for_comparison
+                    // to 0 during line 153, causing LYC=0 STAT interrupts to
+                    // fire during VBlank rather than at the start of line 0.
+                    // On CGB, this happens immediately when line 153 starts.
+                    // On DMG, this also happens at the start of line 153.
+                    if self.ly == 153 && !self.cgb_line153_ly0_triggered {
                         self.cgb_line153_ly0_triggered = true;
                         self.ly_for_comparison = 0;
-                        self.ly = 0;
+                        if self.cgb {
+                            self.ly = 0;
+                        }
                         self.update_lyc_compare();
                     }
 
                     if self.mode_clock >= MODE1_CYCLES {
                         self.mode_clock -= MODE1_CYCLES;
                         // Handle the transition from line 153's truncated timing
-                        if self.cgb && self.cgb_line153_ly0_triggered {
-                            // We already set ly=0 during the line 153 quirk,
-                            // so just transition to Mode 2
+                        if self.cgb_line153_ly0_triggered {
+                            // We already set ly_for_comparison=0 during the
+                            // line 153 quirk; now transition to Mode 2
                             self.cgb_line153_ly0_triggered = false;
+                            self.ly = 0;
                             self.frame_ready = false;
                             self.win_line_counter = 0;
                             self.frame_counter = self.frame_counter.wrapping_add(1);
