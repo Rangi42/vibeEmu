@@ -3867,6 +3867,16 @@ mod run_to_regression_tests {
 
     #[test]
     fn run_to_cursor_does_not_take_a_frame_of_cycles() {
+        #[cfg(target_os = "linux")]
+        {
+            let has_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+                || std::env::var_os("WAYLAND_SOCKET").is_some();
+            let has_x11 = std::env::var_os("DISPLAY").is_some();
+            if !(has_wayland || has_x11) {
+                return;
+            }
+        }
+
         let rom = build_vblank_run_to_rom();
         let cart = Cartridge::load(rom);
 
