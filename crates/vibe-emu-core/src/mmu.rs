@@ -831,7 +831,12 @@ impl Mmu {
             0xFF05..=0xFF07 => self.timer.write(addr, val, &mut self.if_reg),
             // IF: only bits 0-4 are writable; bits 5-7 remain set.
             0xFF0F => self.if_reg = (val & 0x1F) | 0xE0,
-            0xFF10..=0xFF3F => self.apu.write_reg(addr, val),
+            0xFF10..=0xFF25 | 0xFF27..=0xFF3F => self.apu.write_reg(addr, val),
+            0xFF26 => {
+                let double_speed = self.key1 & 0x80 != 0;
+                self.apu
+                    .write_reg_with_div(addr, val, self.timer.div, double_speed);
+            }
             0xFF40 => {
                 let lcd_was_on = self.ppu.lcd_enabled();
                 if env_flag_enabled("VIBEEMU_TRACE_LCDC") {

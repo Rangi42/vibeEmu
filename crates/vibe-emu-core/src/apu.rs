@@ -4,6 +4,20 @@ use crate::audio_queue::{AudioConsumer, AudioProducer, audio_queue};
 
 use crate::hardware::{CgbRevision, DmgRevision};
 
+/// State machine for skipping DIV-APU events when APU powers on with DIV bit already set.
+///
+/// When the APU is enabled while the DIV APU bit (bit 12 in normal speed, bit 13 in
+/// double speed) is already set, the first falling-edge event is skipped. Additionally,
+/// the second event (first "real" event) does not increment the frame sequencer divider,
+/// effectively delaying all frame sequencer-based effects by one event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SkipDivEvent {
+    #[default]
+    Inactive,
+    Skip,
+    Skipped,
+}
+
 #[cfg(feature = "apu-trace")]
 #[allow(unused_macros)]
 macro_rules! apu_trace {
@@ -762,6 +776,8 @@ pub struct Apu {
     cgb_mode: bool,
     cgb_revision: CgbRevision,
     dmg_revision: DmgRevision,
+    /// State machine for skipping DIV-APU events when APU powers on with DIV bit set.
+    skip_div_event: SkipDivEvent,
 }
 
 /// Lightweight snapshot of APU state for test diagnostics.
@@ -1087,6 +1103,7 @@ impl Apu {
         self.ch1_env_countdown = 0;
         self.ch2_env_countdown = 0;
         self.div_divider = 0;
+        self.skip_div_event = SkipDivEvent::Inactive;
     }
 
     #[inline]
@@ -1264,6 +1281,7 @@ impl Apu {
             div_divider: 0,
             ch1_env_countdown: 0,
             ch2_env_countdown: 0,
+            skip_div_event: SkipDivEvent::Inactive,
         };
 
         // Apply power-on register defaults (boot ROM may be skipped).
@@ -1444,6 +1462,29 @@ impl Apu {
                 self.handle_div_rising_edge();
             }
         }
+    }
+
+    /// Write an APU register with knowledge of the current DIV state.
+    /// The `div` parameter should be the 16-bit internal divider value (timer.div).
+    /// This is needed for NR52 writes where the APU needs to know if the DIV
+    /// APU bit is already set when powering on.
+    pub fn write_reg_with_div(&mut self, addr: u16, val: u8, div: u16, double_speed: bool) {
+        if addr == 0xFF26 && val & 0x80 != 0 && self.nr52 & 0x80 == 0 {
+            // APU is being powered on - check if the DIV APU bit is already set.
+            // In normal speed, bit 12 drives the frame sequencer.
+            // In double speed, bit 13 drives the frame sequencer.
+            let bit = if double_speed { 13 } else { 12 };
+            if (div >> bit) & 1 == 1 {
+                // The DIV APU bit is already set, so we should skip the first
+                // falling edge event that would otherwise occur.
+                self.skip_div_event = SkipDivEvent::Skip;
+                // When skip mechanism is active, div_divider starts at 1
+                // so that after the Skipped event (which doesn't increment),
+                // the length counter check (div_divider & 1) == 1 fails.
+                self.div_divider = 1;
+            }
+        }
+        self.write_reg(addr, val);
     }
 
     pub fn write_reg(&mut self, addr: u16, val: u8) {
@@ -2005,10 +2046,31 @@ impl Apu {
     }
 
     fn handle_div_event(&mut self) {
+        // Skip mechanism for when APU was powered on while the DIV APU bit was already set.
+        // Uses a 3-state machine:
+        // - Skip: First event is completely skipped, transitions to Skipped
+        // - Skipped: Frame sequencer advances but length/sweep/envelope are NOT clocked,
+        //            div_divider is NOT incremented, transitions to Inactive
+        // - Inactive: Normal operation
+        if self.skip_div_event == SkipDivEvent::Skip {
+            self.skip_div_event = SkipDivEvent::Skipped;
+            return;
+        }
+
+        // In Skipped state, transition to Inactive but
+        // still process the frame sequencer. Just don't increment div_divider.
+        let was_skipped = self.skip_div_event == SkipDivEvent::Skipped;
+        if was_skipped {
+            self.skip_div_event = SkipDivEvent::Inactive;
+        }
+
         let step = self.sequencer.advance();
         self.clock_frame_sequencer(step);
 
-        self.div_divider = self.div_divider.wrapping_add(1);
+        if !was_skipped {
+            self.div_divider = self.div_divider.wrapping_add(1);
+        }
+
         if (self.div_divider & 7) == 7 {
             if !self.ch1_env_clock.clock {
                 self.ch1_env_countdown = self.ch1_env_countdown.wrapping_sub(1) & 7;
