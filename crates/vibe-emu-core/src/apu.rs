@@ -41,7 +41,7 @@ enum SkipDivEvent {
 #[allow(unused_macros)]
 macro_rules! apu_trace {
     ($($arg:tt)*) => {
-        log::trace!(target: "vibe_emu_core::apu", "{}", format_args!($($arg)*));
+        core_trace!(target: "vibe_emu_core::apu", "{}", format_args!($($arg)*));
     };
 }
 

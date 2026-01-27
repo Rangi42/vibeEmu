@@ -103,6 +103,31 @@ fn init_logging(args: &Args) {
     logger.filter_module("wgpu_hal", log::LevelFilter::Warn);
     logger.filter_module("naga", log::LevelFilter::Warn);
     logger.format_timestamp_millis().init();
+
+    struct CoreLogForwarder;
+
+    impl vibe_emu_core::diagnostics::LogSink for CoreLogForwarder {
+        fn log(
+            &self,
+            level: vibe_emu_core::diagnostics::Level,
+            target: &'static str,
+            args: std::fmt::Arguments,
+        ) {
+            match level {
+                vibe_emu_core::diagnostics::Level::Trace => {
+                    log::trace!(target: target, "{}", args);
+                }
+                vibe_emu_core::diagnostics::Level::Info => {
+                    log::info!(target: target, "{}", args);
+                }
+                vibe_emu_core::diagnostics::Level::Warn => {
+                    log::warn!(target: target, "{}", args);
+                }
+            }
+        }
+    }
+
+    let _ = vibe_emu_core::diagnostics::try_set_log_sink(Box::new(CoreLogForwarder));
 }
 
 fn format_serial_bytes(data: &[u8]) -> String {

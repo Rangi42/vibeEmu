@@ -7,6 +7,35 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
+pub mod diagnostics;
+
+#[allow(unused_macros)]
+macro_rules! core_trace {
+	(target: $target:expr, $($arg:tt)*) => {{
+		if crate::diagnostics::has_log_sink() {
+			crate::diagnostics::emit(crate::diagnostics::Level::Trace, $target, format_args!($($arg)*));
+		}
+	}};
+}
+
+#[allow(unused_macros)]
+macro_rules! core_info {
+	(target: $target:expr, $($arg:tt)*) => {{
+		if crate::diagnostics::has_log_sink() {
+			crate::diagnostics::emit(crate::diagnostics::Level::Info, $target, format_args!($($arg)*));
+		}
+	}};
+}
+
+#[allow(unused_macros)]
+macro_rules! core_warn {
+	(target: $target:expr, $($arg:tt)*) => {{
+		if crate::diagnostics::has_log_sink() {
+			crate::diagnostics::emit(crate::diagnostics::Level::Warn, $target, format_args!($($arg)*));
+		}
+	}};
+}
+
 /// Audio Processing Unit (APU) emulation.
 pub mod apu;
 

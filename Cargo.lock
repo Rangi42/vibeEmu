@@ -3622,7 +3622,6 @@ name = "vibe-emu-core"
 version = "0.1.0"
 dependencies = [
  "libtest-mimic",
- "log",
  "once_cell",
  "png",
  "reqwest",

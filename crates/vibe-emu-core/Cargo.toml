@@ -6,7 +6,7 @@ authors = ["vulcandth <vulcandth@gmail.com>"]
 license = "MIT"
 
 [dependencies]
-log = "0.4"
+
 
 [features]
 default = []

@@ -620,7 +620,8 @@ impl Cpu {
             {
                 if queue != pending || (queue != 0 && Self::next_interrupt(queue).0 != initial_bit)
                 {
-                    log::trace!(
+                    core_trace!(
+                        target: "vibe_emu_core::cpu",
                         "irq-entry change: pc={:04X} sp={:04X} pending={:02X} queue={:02X} if={:02X} ie={:02X}",
                         self.pc,
                         self.sp,
@@ -660,7 +661,8 @@ impl Cpu {
             #[cfg(feature = "cpu-trace")]
             {
                 if bit != 0 && bit != initial_bit {
-                    log::trace!(
+                    core_trace!(
+                        target: "vibe_emu_core::cpu",
                         "irq hijack: initial={:02X} chosen={:02X} vector={:04X} if={:02X} ie={:02X}",
                         initial_bit,
                         bit,

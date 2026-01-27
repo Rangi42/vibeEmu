@@ -29,6 +29,66 @@ mod std_host;
 
 pub use std_host::StdMobileHost;
 
+#[cfg(target_os = "android")]
+pub fn install_android_log_sink() {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_int};
+
+    const TAG: &str = "vibeEmu";
+
+    extern "C" {
+        fn __android_log_write(prio: c_int, tag: *const c_char, text: *const c_char) -> c_int;
+    }
+
+    struct AndroidLogSink;
+
+    impl vibe_emu_core::diagnostics::LogSink for AndroidLogSink {
+        fn log(
+            &self,
+            level: vibe_emu_core::diagnostics::Level,
+            target: &'static str,
+            args: std::fmt::Arguments,
+        ) {
+            // Android priorities: VERBOSE=2, DEBUG=3, INFO=4, WARN=5.
+            let prio = match level {
+                vibe_emu_core::diagnostics::Level::Trace => 3,
+                vibe_emu_core::diagnostics::Level::Info => 4,
+                vibe_emu_core::diagnostics::Level::Warn => 5,
+            };
+
+            let tag = CString::new(TAG).ok();
+            let mut message = String::new();
+            let _ = std::fmt::write(&mut message, args);
+
+            if message.contains('\0') {
+                message = message.replace('\0', "?");
+            }
+
+            let message = if target.is_empty() {
+                message
+            } else {
+                format!("[{target}] {message}")
+            };
+
+            let Some(tag) = tag else {
+                return;
+            };
+            let Ok(message) = CString::new(message) else {
+                return;
+            };
+
+            unsafe {
+                let _ = __android_log_write(prio, tag.as_ptr(), message.as_ptr());
+            }
+        }
+    }
+
+    let _ = vibe_emu_core::diagnostics::try_set_log_sink(Box::new(AndroidLogSink));
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn install_android_log_sink() {}
+
 /// Maximum number of concurrent libmobile connections.
 pub const MOBILE_MAX_CONNECTIONS: usize = 2;
 /// Maximum number of independent libmobile timers.
