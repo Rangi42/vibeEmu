@@ -1,4 +1,5 @@
 /target
+**/target/
 *.gbc
 *.sav
 *.rtc
