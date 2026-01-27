@@ -16,6 +16,6 @@ default = []
 [dependencies]
 vibe-emu-core = { path = "../vibe-emu-core" }
 vibe-emu-mobile-sys = { path = "../vibe-emu-mobile-sys", optional = true }
-thiserror = "2"
+thiserror = "2.0.18"
 socket2 = "0.6"
 
