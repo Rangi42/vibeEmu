@@ -298,6 +298,22 @@ enum VramTab {
     Palettes,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum BgMapSelect {
+    #[default]
+    Auto,
+    Map9800,
+    Map9C00,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TileDataSelect {
+    #[default]
+    Auto,
+    Addr8800,
+    Addr8000,
+}
+
 struct VramViewerState {
     bg_map_tex: Option<egui::TextureHandle>,
     bg_map_buf: Vec<u8>,
@@ -312,6 +328,15 @@ struct VramViewerState {
     palette_sel_pal: u8,
     palette_sel_col: u8,
     last_frame: u64,
+
+    // BG Map tab options
+    bg_show_grid: bool,
+    bg_show_viewport: bool,
+    bg_map_select: BgMapSelect,
+    bg_tile_data_select: TileDataSelect,
+    bg_selected_tile: Option<(u8, u8)>,
+    bg_tile_preview_tex: Option<egui::TextureHandle>,
+    bg_tile_preview_buf: Vec<u8>,
 }
 
 impl Default for VramViewerState {
@@ -330,6 +355,13 @@ impl Default for VramViewerState {
             palette_sel_pal: 0,
             palette_sel_col: 0,
             last_frame: 0,
+            bg_show_grid: true,
+            bg_show_viewport: true,
+            bg_map_select: BgMapSelect::Auto,
+            bg_tile_data_select: TileDataSelect::Auto,
+            bg_selected_tile: None,
+            bg_tile_preview_tex: None,
+            bg_tile_preview_buf: vec![0; 8 * 8 * 4],
         }
     }
 }
@@ -1731,7 +1763,7 @@ impl VibeEmuApp {
             *VIEWPORT_VRAM_VIEWER,
             egui::ViewportBuilder::default()
                 .with_title("VRAM Viewer")
-                .with_inner_size([520.0, 450.0]),
+                .with_inner_size([700.0, 500.0]),
             |ctx, class| {
                 if ctx.input(|i| i.viewport().close_requested()) {
                     self.show_vram_viewer = false;
@@ -1813,17 +1845,37 @@ impl VibeEmuApp {
         const IMG_W: usize = MAP_W * TILE;
         const IMG_H: usize = MAP_H * TILE;
 
+        let lcdc = ppu.lcdc;
+        let cgb = ppu.cgb;
+
+        let map_base = match self.vram_viewer.bg_map_select {
+            BgMapSelect::Auto => {
+                if lcdc & 0x08 != 0 {
+                    0x1C00
+                } else {
+                    0x1800
+                }
+            }
+            BgMapSelect::Map9800 => 0x1800,
+            BgMapSelect::Map9C00 => 0x1C00,
+        };
+
+        let signed_mode = match self.vram_viewer.bg_tile_data_select {
+            TileDataSelect::Auto => lcdc & 0x10 == 0,
+            TileDataSelect::Addr8800 => true,
+            TileDataSelect::Addr8000 => false,
+        };
+
         let frame = ppu.frame_counter;
+        let map_select = self.vram_viewer.bg_map_select;
+        let tile_select = self.vram_viewer.bg_tile_data_select;
+
         if frame != self.vram_viewer.last_frame || self.vram_viewer.bg_map_tex.is_none() {
             self.vram_viewer.last_frame = frame;
             let rgba = &mut self.vram_viewer.bg_map_buf;
             rgba.fill(0);
 
-            let lcdc = ppu.lcdc;
-            let map_base = if lcdc & 0x08 != 0 { 0x1C00 } else { 0x1800 };
-            let signed_mode = lcdc & 0x10 == 0;
             let bgp = ppu.bgp;
-            let cgb = ppu.cgb;
 
             for tile_y in 0..MAP_H {
                 for tile_x in 0..MAP_W {
@@ -1896,100 +1948,411 @@ impl VibeEmuApp {
             }
         }
 
-        if let Some(tex) = &self.vram_viewer.bg_map_tex {
-            let avail = ui.available_size();
-            let scale = (avail.x / 256.0).min(avail.y / 256.0).clamp(1.0, 2.0);
-            let draw_size = egui::vec2(256.0 * scale, 256.0 * scale);
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                if let Some(tex) = &self.vram_viewer.bg_map_tex {
+                    let scale = 1.5_f32;
+                    let draw_size = egui::vec2(256.0 * scale, 256.0 * scale);
 
-            let (response, painter) = ui.allocate_painter(draw_size, egui::Sense::hover());
-            let rect = response.rect;
+                    let (response, painter) = ui.allocate_painter(draw_size, egui::Sense::click());
+                    let rect = response.rect;
 
-            painter.image(
-                tex.id(),
-                rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
+                    painter.image(
+                        tex.id(),
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
 
-            // Draw viewport rectangle(s) with wrapping support
-            let scx = ppu.scx as f32;
-            let scy = ppu.scy as f32;
-            let vp_w = 160.0;
-            let vp_h = 144.0;
-            let map_size = 256.0;
+                    if self.vram_viewer.bg_show_grid {
+                        let grid_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(80));
+                        for i in 1..MAP_W {
+                            let x = rect.min.x + (i as f32) * 8.0 * scale;
+                            painter.line_segment(
+                                [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+                                grid_stroke,
+                            );
+                        }
+                        for i in 1..MAP_H {
+                            let y = rect.min.y + (i as f32) * 8.0 * scale;
+                            painter.line_segment(
+                                [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
+                                grid_stroke,
+                            );
+                        }
+                    }
 
-            let stroke = egui::Stroke::new(1.0, egui::Color32::RED);
+                    if self.vram_viewer.bg_show_viewport {
+                        let scx = ppu.scx as f32;
+                        let scy = ppu.scy as f32;
+                        let vp_w = 160.0;
+                        let vp_h = 144.0;
+                        let map_size = 256.0;
+                        let stroke = egui::Stroke::new(1.5, egui::Color32::RED);
 
-            // Calculate wrapped regions
-            let x_wraps = scx + vp_w > map_size;
-            let y_wraps = scy + vp_h > map_size;
+                        let x_wraps = scx + vp_w > map_size;
+                        let y_wraps = scy + vp_h > map_size;
 
-            if !x_wraps && !y_wraps {
-                // Simple case: no wrapping
-                let viewport_rect = egui::Rect::from_min_size(
-                    rect.min + egui::vec2(scx * scale, scy * scale),
-                    egui::vec2(vp_w * scale, vp_h * scale),
-                );
-                painter.rect_stroke(viewport_rect, 0.0, stroke);
-            } else {
-                // Draw up to 4 rectangles for wrapped viewport
-                let x1_start = scx;
-                let x1_end = if x_wraps { map_size } else { scx + vp_w };
-                let x1_w = x1_end - x1_start;
+                        if !x_wraps && !y_wraps {
+                            let viewport_rect = egui::Rect::from_min_size(
+                                rect.min + egui::vec2(scx * scale, scy * scale),
+                                egui::vec2(vp_w * scale, vp_h * scale),
+                            );
+                            painter.rect_stroke(viewport_rect, 0.0, stroke);
+                        } else {
+                            let x1_start = scx;
+                            let x1_end = if x_wraps { map_size } else { scx + vp_w };
+                            let x1_w = x1_end - x1_start;
+                            let x2_start = 0.0;
+                            let x2_w = if x_wraps {
+                                (scx + vp_w) - map_size
+                            } else {
+                                0.0
+                            };
+                            let y1_start = scy;
+                            let y1_end = if y_wraps { map_size } else { scy + vp_h };
+                            let y1_h = y1_end - y1_start;
+                            let y2_start = 0.0;
+                            let y2_h = if y_wraps {
+                                (scy + vp_h) - map_size
+                            } else {
+                                0.0
+                            };
 
-                let x2_start = 0.0;
-                let x2_w = if x_wraps {
-                    (scx + vp_w) - map_size
+                            let r1 = egui::Rect::from_min_size(
+                                rect.min + egui::vec2(x1_start * scale, y1_start * scale),
+                                egui::vec2(x1_w * scale, y1_h * scale),
+                            );
+                            painter.rect_stroke(r1, 0.0, stroke);
+
+                            if x_wraps {
+                                let r2 = egui::Rect::from_min_size(
+                                    rect.min + egui::vec2(x2_start * scale, y1_start * scale),
+                                    egui::vec2(x2_w * scale, y1_h * scale),
+                                );
+                                painter.rect_stroke(r2, 0.0, stroke);
+                            }
+                            if y_wraps {
+                                let r3 = egui::Rect::from_min_size(
+                                    rect.min + egui::vec2(x1_start * scale, y2_start * scale),
+                                    egui::vec2(x1_w * scale, y2_h * scale),
+                                );
+                                painter.rect_stroke(r3, 0.0, stroke);
+                            }
+                            if x_wraps && y_wraps {
+                                let r4 = egui::Rect::from_min_size(
+                                    rect.min + egui::vec2(x2_start * scale, y2_start * scale),
+                                    egui::vec2(x2_w * scale, y2_h * scale),
+                                );
+                                painter.rect_stroke(r4, 0.0, stroke);
+                            }
+                        }
+                    }
+
+                    if let Some((sel_x, sel_y)) = self.vram_viewer.bg_selected_tile {
+                        let sel_rect = egui::Rect::from_min_size(
+                            rect.min
+                                + egui::vec2(
+                                    sel_x as f32 * 8.0 * scale,
+                                    sel_y as f32 * 8.0 * scale,
+                                ),
+                            egui::vec2(8.0 * scale, 8.0 * scale),
+                        );
+                        painter.rect_stroke(
+                            sel_rect,
+                            0.0,
+                            egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                        );
+                    }
+
+                    if response.clicked()
+                        && let Some(pos) = response.interact_pointer_pos()
+                    {
+                        let rel = pos - rect.min;
+                        let tile_x = ((rel.x / scale) / 8.0) as u8;
+                        let tile_y = ((rel.y / scale) / 8.0) as u8;
+                        if tile_x < 32 && tile_y < 32 {
+                            self.vram_viewer.bg_selected_tile = Some((tile_x, tile_y));
+                        }
+                    }
+
+                    if response.hovered()
+                        && let Some(pos) = ui.ctx().pointer_hover_pos()
+                        && rect.contains(pos)
+                    {
+                        let rel = pos - rect.min;
+                        let tile_x = ((rel.x / scale) / 8.0) as u8;
+                        let tile_y = ((rel.y / scale) / 8.0) as u8;
+                        if tile_x < 32 && tile_y < 32 {
+                            response.on_hover_text(format!("Tile ({tile_x}, {tile_y})"));
+                        }
+                    }
+                }
+            });
+
+            ui.add_space(8.0);
+
+            ui.vertical(|ui| {
+                let (
+                    sel_x,
+                    sel_y,
+                    tile_idx,
+                    attr,
+                    bank,
+                    x_flip,
+                    y_flip,
+                    priority,
+                    pal_num,
+                    tile_addr,
+                ) = if let Some((sel_x, sel_y)) = self.vram_viewer.bg_selected_tile {
+                    let tile_idx = ppu.vram0[map_base + (sel_y as usize) * MAP_W + sel_x as usize];
+                    let attr = if cgb {
+                        ppu.vram1[map_base + (sel_y as usize) * MAP_W + sel_x as usize]
+                    } else {
+                        0
+                    };
+
+                    let tile_num = if signed_mode {
+                        tile_idx as i8 as i16
+                    } else {
+                        tile_idx as i16
+                    };
+                    let tile_addr = if signed_mode {
+                        (0x1000i32 + (tile_num as i32) * 16) as usize
+                    } else {
+                        (tile_num as usize) * 16
+                    };
+
+                    let bank = if cgb && attr & 0x08 != 0 { 1 } else { 0 };
+                    let x_flip = cgb && attr & 0x20 != 0;
+                    let y_flip = cgb && attr & 0x40 != 0;
+                    let priority = cgb && attr & 0x80 != 0;
+                    let pal_num = attr & 0x07;
+
+                    (
+                        Some(sel_x),
+                        Some(sel_y),
+                        Some(tile_idx),
+                        Some(attr),
+                        bank,
+                        x_flip,
+                        y_flip,
+                        priority,
+                        pal_num,
+                        Some(tile_addr),
+                    )
                 } else {
-                    0.0
+                    (None, None, None, None, 0, false, false, false, 0, None)
                 };
 
-                let y1_start = scy;
-                let y1_end = if y_wraps { map_size } else { scy + vp_h };
-                let y1_h = y1_end - y1_start;
+                if let Some(tile_addr) = tile_addr {
+                    let preview_buf = &mut self.vram_viewer.bg_tile_preview_buf;
+                    let vram = ppu.vram_bank(bank);
+                    if tile_addr + 16 <= vram.len() {
+                        for row in 0..8 {
+                            let actual_row = if y_flip { 7 - row } else { row };
+                            let lo = vram[tile_addr + actual_row * 2];
+                            let hi = vram[tile_addr + actual_row * 2 + 1];
+                            for col in 0..8 {
+                                let actual_col = if x_flip { col } else { 7 - col };
+                                let bit = actual_col;
+                                let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+                                let color = if cgb {
+                                    ppu.cgb_bg_colors[pal_num as usize][idx as usize]
+                                } else {
+                                    let shade = (ppu.bgp >> (idx * 2)) & 0x03;
+                                    DMG_COLORS[shade as usize]
+                                };
+                                let off = (row * 8 + col) * 4;
+                                preview_buf[off] = ((color >> 16) & 0xFF) as u8;
+                                preview_buf[off + 1] = ((color >> 8) & 0xFF) as u8;
+                                preview_buf[off + 2] = (color & 0xFF) as u8;
+                                preview_buf[off + 3] = 0xFF;
+                            }
+                        }
+                    }
 
-                let y2_start = 0.0;
-                let y2_h = if y_wraps {
-                    (scy + vp_h) - map_size
+                    let pixels: Vec<egui::Color32> = preview_buf
+                        .chunks_exact(4)
+                        .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]))
+                        .collect();
+                    let image = egui::ColorImage {
+                        size: [8, 8],
+                        pixels,
+                    };
+                    match &mut self.vram_viewer.bg_tile_preview_tex {
+                        Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+                        None => {
+                            self.vram_viewer.bg_tile_preview_tex = Some(ctx.load_texture(
+                                "bg_tile_preview",
+                                image,
+                                egui::TextureOptions::NEAREST,
+                            ));
+                        }
+                    }
+
+                    ui.horizontal(|ui| {
+                        if let Some(tex) = &self.vram_viewer.bg_tile_preview_tex {
+                            ui.image((tex.id(), egui::vec2(64.0, 64.0)));
+                        }
+                    });
                 } else {
-                    0.0
+                    ui.allocate_space(egui::vec2(64.0, 64.0));
+                }
+
+                ui.add_space(8.0);
+                ui.heading("Details");
+
+                egui::Grid::new("bg_map_details")
+                    .num_columns(2)
+                    .spacing([12.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("X");
+                        ui.label(sel_x.map_or("--".to_string(), |x| format!("{:02X}", x)));
+                        ui.end_row();
+
+                        ui.label("Y");
+                        ui.label(sel_y.map_or("--".to_string(), |y| format!("{:02X}", y)));
+                        ui.end_row();
+
+                        ui.label("Tile No.");
+                        ui.label(tile_idx.map_or("--".to_string(), |t| format!("{:02X}", t)));
+                        ui.end_row();
+
+                        if cgb {
+                            ui.label("Attribute");
+                            ui.label(attr.map_or("--".to_string(), |a| format!("{:02X}", a)));
+                            ui.end_row();
+                        }
+
+                        ui.label("Map address");
+                        if let (Some(sel_x), Some(sel_y)) = (sel_x, sel_y) {
+                            let map_addr =
+                                0x8000 + map_base + (sel_y as usize) * MAP_W + sel_x as usize;
+                            ui.label(format!("{:04X}", map_addr));
+                        } else {
+                            ui.label("----");
+                        }
+                        ui.end_row();
+
+                        ui.label("Tile address");
+                        if let Some(tile_addr) = tile_addr {
+                            let vram_tile_addr = 0x8000 + tile_addr;
+                            ui.label(format!("{}:{:04X}", bank, vram_tile_addr));
+                        } else {
+                            ui.label("-:----");
+                        }
+                        ui.end_row();
+
+                        if cgb {
+                            ui.label("X-flip");
+                            ui.label(if sel_x.is_some() {
+                                if x_flip { "Yes" } else { "No" }
+                            } else {
+                                "--"
+                            });
+                            ui.end_row();
+
+                            ui.label("Y-flip");
+                            ui.label(if sel_y.is_some() {
+                                if y_flip { "Yes" } else { "No" }
+                            } else {
+                                "--"
+                            });
+                            ui.end_row();
+
+                            ui.label("BG palette");
+                            ui.label(if sel_x.is_some() {
+                                format!("{}", pal_num)
+                            } else {
+                                "--".to_string()
+                            });
+                            ui.end_row();
+
+                            ui.label("Priority");
+                            ui.label(if sel_x.is_some() {
+                                if priority { "Yes" } else { "No" }
+                            } else {
+                                "--"
+                            });
+                            ui.end_row();
+                        }
+                    });
+            });
+
+            ui.add_space(8.0);
+
+            ui.vertical(|ui| {
+                ui.checkbox(&mut self.vram_viewer.bg_show_grid, "Grid");
+                ui.checkbox(&mut self.vram_viewer.bg_show_viewport, "SCX/SCY viewport");
+
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Map:");
+                    ui.selectable_value(
+                        &mut self.vram_viewer.bg_map_select,
+                        BgMapSelect::Auto,
+                        "Auto",
+                    );
+                    ui.selectable_value(
+                        &mut self.vram_viewer.bg_map_select,
+                        BgMapSelect::Map9800,
+                        "9800",
+                    );
+                    ui.selectable_value(
+                        &mut self.vram_viewer.bg_map_select,
+                        BgMapSelect::Map9C00,
+                        "9C00",
+                    );
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Tiles:");
+                    ui.selectable_value(
+                        &mut self.vram_viewer.bg_tile_data_select,
+                        TileDataSelect::Auto,
+                        "Auto",
+                    );
+                    ui.selectable_value(
+                        &mut self.vram_viewer.bg_tile_data_select,
+                        TileDataSelect::Addr8800,
+                        "8800",
+                    );
+                    ui.selectable_value(
+                        &mut self.vram_viewer.bg_tile_data_select,
+                        TileDataSelect::Addr8000,
+                        "8000",
+                    );
+                });
+
+                ui.add_space(8.0);
+                let active_map = match map_select {
+                    BgMapSelect::Auto => {
+                        if lcdc & 0x08 != 0 {
+                            "9C00"
+                        } else {
+                            "9800"
+                        }
+                    }
+                    BgMapSelect::Map9800 => "9800",
+                    BgMapSelect::Map9C00 => "9C00",
                 };
-
-                // Top-left region (always present)
-                let r1 = egui::Rect::from_min_size(
-                    rect.min + egui::vec2(x1_start * scale, y1_start * scale),
-                    egui::vec2(x1_w * scale, y1_h * scale),
-                );
-                painter.rect_stroke(r1, 0.0, stroke);
-
-                // Top-right region (if x wraps)
-                if x_wraps {
-                    let r2 = egui::Rect::from_min_size(
-                        rect.min + egui::vec2(x2_start * scale, y1_start * scale),
-                        egui::vec2(x2_w * scale, y1_h * scale),
-                    );
-                    painter.rect_stroke(r2, 0.0, stroke);
-                }
-
-                // Bottom-left region (if y wraps)
-                if y_wraps {
-                    let r3 = egui::Rect::from_min_size(
-                        rect.min + egui::vec2(x1_start * scale, y2_start * scale),
-                        egui::vec2(x1_w * scale, y2_h * scale),
-                    );
-                    painter.rect_stroke(r3, 0.0, stroke);
-                }
-
-                // Bottom-right region (if both wrap)
-                if x_wraps && y_wraps {
-                    let r4 = egui::Rect::from_min_size(
-                        rect.min + egui::vec2(x2_start * scale, y2_start * scale),
-                        egui::vec2(x2_w * scale, y2_h * scale),
-                    );
-                    painter.rect_stroke(r4, 0.0, stroke);
-                }
-            }
-        }
+                let active_tiles = match tile_select {
+                    TileDataSelect::Auto => {
+                        if lcdc & 0x10 != 0 {
+                            "8000"
+                        } else {
+                            "8800"
+                        }
+                    }
+                    TileDataSelect::Addr8800 => "8800",
+                    TileDataSelect::Addr8000 => "8000",
+                };
+                ui.label(format!("Active: Map ${active_map}, Tiles ${active_tiles}"));
+                ui.label(format!("SCX: {}, SCY: {}", ppu.scx, ppu.scy));
+            });
+        });
     }
 
     fn draw_tiles_tab(
