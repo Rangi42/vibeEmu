@@ -333,9 +333,9 @@ struct VramViewerState {
     palette_sel_is_bg: bool,
     palette_sel_pal: u8,
     palette_sel_col: u8,
-    last_frame: u64,
 
     // BG Map tab options
+    bg_last_frame: u64,
     bg_show_grid: bool,
     bg_show_viewport: bool,
     bg_map_select: BgMapSelect,
@@ -345,6 +345,7 @@ struct VramViewerState {
     bg_tile_preview_buf: Vec<u8>,
 
     // Tiles tab options
+    tiles_last_frame: u64,
     tiles_show_grid: bool,
     tiles_show_paletted: bool,
     tiles_selected: Option<(u8, u16)>,
@@ -352,6 +353,7 @@ struct VramViewerState {
     tiles_preview_buf: Vec<u8>,
 
     // OAM tab options
+    oam_last_frame: u64,
     oam_screen_tex: Option<egui::TextureHandle>,
     oam_screen_buf: Vec<u8>,
 }
@@ -371,7 +373,7 @@ impl Default for VramViewerState {
             palette_sel_is_bg: true,
             palette_sel_pal: 0,
             palette_sel_col: 0,
-            last_frame: 0,
+            bg_last_frame: 0,
             bg_show_grid: true,
             bg_show_viewport: true,
             bg_map_select: BgMapSelect::Auto,
@@ -379,11 +381,13 @@ impl Default for VramViewerState {
             bg_selected_tile: None,
             bg_tile_preview_tex: None,
             bg_tile_preview_buf: vec![0; 8 * 8 * 4],
+            tiles_last_frame: 0,
             tiles_show_grid: true,
             tiles_show_paletted: true,
             tiles_selected: None,
             tiles_preview_tex: None,
             tiles_preview_buf: vec![0; 8 * 8 * 4],
+            oam_last_frame: 0,
             oam_screen_tex: None,
             oam_screen_buf: vec![0; 160 * 144 * 4],
         }
@@ -1775,8 +1779,13 @@ impl VibeEmuApp {
     }
 
     fn draw_vram_viewer_window(&mut self, ctx: &egui::Context) {
-        // Use try_lock to avoid blocking the emulator thread during fast forward
-        if let Ok(mut gb) = self.gb.try_lock() {
+        // During fast forward, use try_lock to avoid slowing down emulation.
+        // During normal play, use blocking lock to ensure fresh data every frame.
+        if self.fast_forward {
+            if let Ok(mut gb) = self.gb.try_lock() {
+                self.cached_ppu_snapshot = Some(UiSnapshot::from_gb(&mut gb, self.paused).ppu);
+            }
+        } else if let Ok(mut gb) = self.gb.lock() {
             self.cached_ppu_snapshot = Some(UiSnapshot::from_gb(&mut gb, self.paused).ppu);
         }
 
@@ -1894,8 +1903,8 @@ impl VibeEmuApp {
         let map_select = self.vram_viewer.bg_map_select;
         let tile_select = self.vram_viewer.bg_tile_data_select;
 
-        if frame != self.vram_viewer.last_frame || self.vram_viewer.bg_map_tex.is_none() {
-            self.vram_viewer.last_frame = frame;
+        if frame != self.vram_viewer.bg_last_frame || self.vram_viewer.bg_map_tex.is_none() {
+            self.vram_viewer.bg_last_frame = frame;
             let rgba = &mut self.vram_viewer.bg_map_buf;
             rgba.fill(0);
 
@@ -2403,7 +2412,8 @@ impl VibeEmuApp {
         let frame = ppu.frame_counter;
         let show_paletted = self.vram_viewer.tiles_show_paletted;
 
-        if frame != self.vram_viewer.last_frame || self.vram_viewer.tiles_tex.is_none() {
+        if frame != self.vram_viewer.tiles_last_frame || self.vram_viewer.tiles_tex.is_none() {
+            self.vram_viewer.tiles_last_frame = frame;
             let buf = &mut self.vram_viewer.tiles_buf[..img_w * img_h * 4];
             buf.fill(0);
 
@@ -2829,9 +2839,29 @@ impl VibeEmuApp {
                 }
             };
 
-        for i in 0..40 {
-            render_sprite_to_buf(&mut self.vram_viewer.oam_sprite_bufs[i], i, ppu);
+        let frame = ppu.frame_counter;
+        let needs_update =
+            frame != self.vram_viewer.oam_last_frame || self.vram_viewer.oam_screen_tex.is_none();
 
+        if needs_update {
+            self.vram_viewer.oam_last_frame = frame;
+
+            for i in 0..40 {
+                render_sprite_to_buf(&mut self.vram_viewer.oam_sprite_bufs[i], i, ppu);
+            }
+
+            for (px_idx, &px) in ppu.framebuffer.iter().enumerate() {
+                let r = ((px >> 16) & 0xFF) as u8;
+                let g = ((px >> 8) & 0xFF) as u8;
+                let b = (px & 0xFF) as u8;
+                self.vram_viewer.oam_screen_buf[px_idx * 4] = r;
+                self.vram_viewer.oam_screen_buf[px_idx * 4 + 1] = g;
+                self.vram_viewer.oam_screen_buf[px_idx * 4 + 2] = b;
+                self.vram_viewer.oam_screen_buf[px_idx * 4 + 3] = 255;
+            }
+        }
+
+        for i in 0..40 {
             let buf_len = 8 * sprite_h as usize * 4;
             let tex = self.vram_viewer.oam_sprite_textures[i].get_or_insert_with(|| {
                 ctx.load_texture(
@@ -2843,24 +2873,17 @@ impl VibeEmuApp {
                     egui::TextureOptions::NEAREST,
                 )
             });
-            tex.set(
-                egui::ColorImage::from_rgba_unmultiplied(
-                    [8, sprite_h as usize],
-                    &self.vram_viewer.oam_sprite_bufs[i][..buf_len],
-                ),
-                egui::TextureOptions::NEAREST,
-            );
+            if needs_update {
+                tex.set(
+                    egui::ColorImage::from_rgba_unmultiplied(
+                        [8, sprite_h as usize],
+                        &self.vram_viewer.oam_sprite_bufs[i][..buf_len],
+                    ),
+                    egui::TextureOptions::NEAREST,
+                );
+            }
         }
 
-        for (px_idx, &px) in ppu.framebuffer.iter().enumerate() {
-            let r = ((px >> 16) & 0xFF) as u8;
-            let g = ((px >> 8) & 0xFF) as u8;
-            let b = (px & 0xFF) as u8;
-            self.vram_viewer.oam_screen_buf[px_idx * 4] = r;
-            self.vram_viewer.oam_screen_buf[px_idx * 4 + 1] = g;
-            self.vram_viewer.oam_screen_buf[px_idx * 4 + 2] = b;
-            self.vram_viewer.oam_screen_buf[px_idx * 4 + 3] = 255;
-        }
         let screen_tex = self.vram_viewer.oam_screen_tex.get_or_insert_with(|| {
             ctx.load_texture(
                 "oam_screen",
@@ -2871,10 +2894,15 @@ impl VibeEmuApp {
                 egui::TextureOptions::NEAREST,
             )
         });
-        screen_tex.set(
-            egui::ColorImage::from_rgba_unmultiplied([160, 144], &self.vram_viewer.oam_screen_buf),
-            egui::TextureOptions::NEAREST,
-        );
+        if needs_update {
+            screen_tex.set(
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [160, 144],
+                    &self.vram_viewer.oam_screen_buf,
+                ),
+                egui::TextureOptions::NEAREST,
+            );
+        }
 
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
