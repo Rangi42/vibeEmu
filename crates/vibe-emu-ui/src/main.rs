@@ -946,7 +946,7 @@ impl VibeEmuApp {
             *VIEWPORT_OPTIONS,
             egui::ViewportBuilder::default()
                 .with_title("Options")
-                .with_inner_size([400.0, 300.0]),
+                .with_inner_size([400.0, 380.0]),
             |ctx, class| {
                 if ctx.input(|i| i.viewport().close_requested()) {
                     self.show_options = false;
