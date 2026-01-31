@@ -33,6 +33,7 @@ pub struct PpuSnapshot {
     pub vram0: Vec<u8>,
     pub vram1: Vec<u8>,
     pub oam: Vec<u8>,
+    pub framebuffer: Vec<u32>,
 
     /// CGB BG palette colors as 0x00RRGGBB.
     pub cgb_bg_colors: [[u32; 4]; 8],
@@ -148,6 +149,7 @@ impl UiSnapshot {
             vram0: ppu.vram[0].to_vec(),
             vram1: ppu.vram[1].to_vec(),
             oam: ppu.oam.to_vec(),
+            framebuffer: ppu.framebuffer().to_vec(),
             cgb_bg_colors,
             cgb_ob_colors,
         };

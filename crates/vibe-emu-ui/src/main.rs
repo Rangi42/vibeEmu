@@ -350,6 +350,10 @@ struct VramViewerState {
     tiles_selected: Option<(u8, u16)>,
     tiles_preview_tex: Option<egui::TextureHandle>,
     tiles_preview_buf: Vec<u8>,
+
+    // OAM tab options
+    oam_screen_tex: Option<egui::TextureHandle>,
+    oam_screen_buf: Vec<u8>,
 }
 
 impl Default for VramViewerState {
@@ -380,6 +384,8 @@ impl Default for VramViewerState {
             tiles_selected: None,
             tiles_preview_tex: None,
             tiles_preview_buf: vec![0; 8 * 8 * 4],
+            oam_screen_tex: None,
+            oam_screen_buf: vec![0; 160 * 144 * 4],
         }
     }
 }
@@ -2748,87 +2754,360 @@ impl VibeEmuApp {
     fn draw_oam_tab(
         &mut self,
         ui: &mut egui::Ui,
-        _ctx: &egui::Context,
+        ctx: &egui::Context,
         ppu: &ui::snapshot::PpuSnapshot,
     ) {
         let sprite_h: u8 = if ppu.lcdc & 0x04 != 0 { 16 } else { 8 };
+        let is_8x16 = sprite_h == 16;
 
         if sprite_h != self.vram_viewer.oam_sprite_h {
             self.vram_viewer.oam_sprite_h = sprite_h;
         }
 
-        ui.columns(2, |columns| {
-            columns[0].heading("OAM Entries");
-            egui::ScrollArea::vertical()
-                .max_height(300.0)
-                .show(&mut columns[0], |ui| {
-                    egui::Grid::new("oam_grid")
-                        .num_columns(6)
-                        .spacing([8.0, 4.0])
-                        .striped(true)
-                        .show(ui, |ui| {
-                            ui.strong("#");
-                            ui.strong("Y");
-                            ui.strong("X");
-                            ui.strong("Tile");
-                            ui.strong("Attr");
-                            ui.strong("");
-                            ui.end_row();
+        const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
 
-                            for i in 0..40 {
-                                let base = i * 4;
-                                let y_pos = ppu.oam[base];
-                                let x_pos = ppu.oam[base + 1];
-                                let tile_num = ppu.oam[base + 2];
-                                let attr = ppu.oam[base + 3];
-
-                                let selected = self.vram_viewer.oam_selected == i;
-                                if ui.selectable_label(selected, format!("{:02}", i)).clicked() {
-                                    self.vram_viewer.oam_selected = i;
-                                }
-                                ui.monospace(format!("{:02X}", y_pos));
-                                ui.monospace(format!("{:02X}", x_pos));
-                                ui.monospace(format!("{:02X}", tile_num));
-                                ui.monospace(format!("{:02X}", attr));
-                                ui.label("");
-                                ui.end_row();
-                            }
-                        });
-                });
-
-            columns[1].heading("Details");
-            columns[1].separator();
-
-            let i = self.vram_viewer.oam_selected;
-            if i < 40 {
-                let base = i * 4;
-                let y_pos = ppu.oam[base];
-                let x_pos = ppu.oam[base + 1];
+        let render_sprite_to_buf =
+            |buf: &mut [u8], sprite_idx: usize, ppu: &ui::snapshot::PpuSnapshot| {
+                let base = sprite_idx * 4;
                 let tile_num = ppu.oam[base + 2];
                 let attr = ppu.oam[base + 3];
-
                 let x_flip = attr & 0x20 != 0;
                 let y_flip = attr & 0x40 != 0;
-                let priority = attr & 0x80 != 0;
+                let bank = if ppu.cgb && (attr & 0x08 != 0) { 1 } else { 0 };
 
-                columns[1].monospace(format!("Sprite #{}", i));
-                columns[1].monospace(format!("Position: ({}, {})", x_pos, y_pos));
-                columns[1].monospace(format!("Tile: ${:02X}", tile_num));
-                columns[1].monospace(format!("Attr: ${:02X}", attr));
-                columns[1].add_space(4.0);
-                columns[1].monospace(format!("X-flip: {}", x_flip));
-                columns[1].monospace(format!("Y-flip: {}", y_flip));
-                columns[1].monospace(format!("Priority: {}", priority));
-                if ppu.cgb {
-                    columns[1].monospace(format!("Palette: OBJ{}", attr & 0x07));
-                    columns[1].monospace(format!("Bank: {}", if attr & 0x08 != 0 { 1 } else { 0 }));
-                } else {
-                    columns[1].monospace(format!(
-                        "Palette: OBP{}",
-                        if attr & 0x10 != 0 { 1 } else { 0 }
-                    ));
+                let tile_num_base = if is_8x16 { tile_num & 0xFE } else { tile_num };
+
+                for ty in 0..sprite_h as usize {
+                    let actual_ty = if y_flip {
+                        sprite_h as usize - 1 - ty
+                    } else {
+                        ty
+                    };
+                    let tile_offset = if is_8x16 && actual_ty >= 8 { 1 } else { 0 };
+                    let current_tile = tile_num_base.wrapping_add(tile_offset);
+                    let row_in_tile = (actual_ty % 8) as u16;
+
+                    let tile_addr = (current_tile as u16) * 16;
+                    let vram = if bank == 1 { &ppu.vram1 } else { &ppu.vram0 };
+                    let lo = vram
+                        .get(tile_addr as usize + row_in_tile as usize * 2)
+                        .copied()
+                        .unwrap_or(0);
+                    let hi = vram
+                        .get(tile_addr as usize + row_in_tile as usize * 2 + 1)
+                        .copied()
+                        .unwrap_or(0);
+
+                    for tx in 0..8usize {
+                        let actual_tx = if x_flip { 7 - tx } else { tx };
+                        let bit = 7 - actual_tx;
+                        let color_idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+
+                        let rgb = if ppu.cgb {
+                            let pal_num = (attr & 0x07) as usize;
+                            if color_idx == 0 {
+                                0x00FFFFFF
+                            } else {
+                                ppu.cgb_ob_colors[pal_num][color_idx as usize]
+                            }
+                        } else {
+                            let obp = if attr & 0x10 != 0 { ppu.obp1 } else { ppu.obp0 };
+                            let shade = (obp >> (color_idx * 2)) & 0x03;
+                            if color_idx == 0 {
+                                0x00FFFFFF
+                            } else {
+                                DMG_COLORS[shade as usize]
+                            }
+                        };
+
+                        let px = ty * 8 + tx;
+                        buf[px * 4] = ((rgb >> 16) & 0xFF) as u8;
+                        buf[px * 4 + 1] = ((rgb >> 8) & 0xFF) as u8;
+                        buf[px * 4 + 2] = (rgb & 0xFF) as u8;
+                        buf[px * 4 + 3] = if color_idx == 0 { 0 } else { 255 };
+                    }
                 }
-            }
+            };
+
+        for i in 0..40 {
+            render_sprite_to_buf(&mut self.vram_viewer.oam_sprite_bufs[i], i, ppu);
+
+            let buf_len = 8 * sprite_h as usize * 4;
+            let tex = self.vram_viewer.oam_sprite_textures[i].get_or_insert_with(|| {
+                ctx.load_texture(
+                    format!("oam_sprite_{}", i),
+                    egui::ColorImage::from_rgba_unmultiplied(
+                        [8, sprite_h as usize],
+                        &self.vram_viewer.oam_sprite_bufs[i][..buf_len],
+                    ),
+                    egui::TextureOptions::NEAREST,
+                )
+            });
+            tex.set(
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [8, sprite_h as usize],
+                    &self.vram_viewer.oam_sprite_bufs[i][..buf_len],
+                ),
+                egui::TextureOptions::NEAREST,
+            );
+        }
+
+        for (px_idx, &px) in ppu.framebuffer.iter().enumerate() {
+            let r = ((px >> 16) & 0xFF) as u8;
+            let g = ((px >> 8) & 0xFF) as u8;
+            let b = (px & 0xFF) as u8;
+            self.vram_viewer.oam_screen_buf[px_idx * 4] = r;
+            self.vram_viewer.oam_screen_buf[px_idx * 4 + 1] = g;
+            self.vram_viewer.oam_screen_buf[px_idx * 4 + 2] = b;
+            self.vram_viewer.oam_screen_buf[px_idx * 4 + 3] = 255;
+        }
+        let screen_tex = self.vram_viewer.oam_screen_tex.get_or_insert_with(|| {
+            ctx.load_texture(
+                "oam_screen",
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [160, 144],
+                    &self.vram_viewer.oam_screen_buf,
+                ),
+                egui::TextureOptions::NEAREST,
+            )
+        });
+        screen_tex.set(
+            egui::ColorImage::from_rgba_unmultiplied([160, 144], &self.vram_viewer.oam_screen_buf),
+            egui::TextureOptions::NEAREST,
+        );
+
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.heading("Sprites");
+
+                let cell_w = 24.0;
+                let cell_h = if is_8x16 { 40.0 } else { 28.0 };
+                let cols = 10;
+                let rows = 4;
+                let grid_w = cols as f32 * cell_w;
+                let grid_h = rows as f32 * cell_h;
+
+                let (response, painter) =
+                    ui.allocate_painter(egui::vec2(grid_w, grid_h), egui::Sense::click());
+                let rect = response.rect;
+
+                painter.rect_filled(rect, 0.0, egui::Color32::from_gray(40));
+
+                for i in 0..40 {
+                    let col = i % cols;
+                    let row = i / cols;
+                    let cell_rect = egui::Rect::from_min_size(
+                        rect.min + egui::vec2(col as f32 * cell_w, row as f32 * cell_h),
+                        egui::vec2(cell_w, cell_h),
+                    );
+
+                    let base = i * 4;
+                    let y_pos = ppu.oam[base] as i16;
+                    let x_pos = ppu.oam[base + 1] as i16;
+
+                    let screen_y = y_pos - 16;
+                    let screen_x = x_pos - 8;
+                    let is_offscreen = screen_x <= -8
+                        || screen_x >= 160
+                        || screen_y <= -(sprite_h as i16)
+                        || screen_y >= 144;
+
+                    if i == self.vram_viewer.oam_selected {
+                        painter.rect_filled(cell_rect, 0.0, egui::Color32::from_rgb(60, 80, 120));
+                    }
+
+                    if let Some(tex) = &self.vram_viewer.oam_sprite_textures[i] {
+                        let sprite_w = 8.0 * 2.0;
+                        let sprite_h_scaled = sprite_h as f32 * 2.0;
+                        let sprite_rect = egui::Rect::from_center_size(
+                            cell_rect.center() - egui::vec2(0.0, 2.0),
+                            egui::vec2(sprite_w, sprite_h_scaled),
+                        );
+                        painter.image(
+                            tex.id(),
+                            sprite_rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+
+                        if is_offscreen {
+                            let center = sprite_rect.center();
+                            let size = 6.0;
+                            painter.line_segment(
+                                [
+                                    center - egui::vec2(size, size),
+                                    center + egui::vec2(size, size),
+                                ],
+                                egui::Stroke::new(2.0, egui::Color32::RED),
+                            );
+                            painter.line_segment(
+                                [
+                                    center + egui::vec2(-size, size),
+                                    center + egui::vec2(size, -size),
+                                ],
+                                egui::Stroke::new(2.0, egui::Color32::RED),
+                            );
+                        }
+                    }
+
+                    let label_pos = egui::pos2(cell_rect.left() + 2.0, cell_rect.bottom() - 10.0);
+                    painter.text(
+                        label_pos,
+                        egui::Align2::LEFT_CENTER,
+                        format!("{:02}", i),
+                        egui::FontId::monospace(8.0),
+                        egui::Color32::GRAY,
+                    );
+                }
+
+                for col in 0..=cols {
+                    let x = rect.left() + col as f32 * cell_w;
+                    painter.line_segment(
+                        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                        egui::Stroke::new(1.0, egui::Color32::from_gray(80)),
+                    );
+                }
+                for row in 0..=rows {
+                    let y = rect.top() + row as f32 * cell_h;
+                    painter.line_segment(
+                        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                        egui::Stroke::new(1.0, egui::Color32::from_gray(80)),
+                    );
+                }
+
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let rel = pos - rect.min;
+                    let col = (rel.x / cell_w) as usize;
+                    let row = (rel.y / cell_h) as usize;
+                    let idx = row * cols + col;
+                    if idx < 40 {
+                        self.vram_viewer.oam_selected = idx;
+                    }
+                }
+            });
+
+            ui.add_space(16.0);
+
+            ui.vertical(|ui| {
+                ui.heading("Screen Position");
+                let scale = 1.0;
+                let (screen_response, screen_painter) = ui.allocate_painter(
+                    egui::vec2(160.0 * scale, 144.0 * scale),
+                    egui::Sense::hover(),
+                );
+                let screen_rect = screen_response.rect;
+
+                screen_painter.image(
+                    screen_tex.id(),
+                    screen_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+
+                let sel = self.vram_viewer.oam_selected;
+                let base = sel * 4;
+                let y_pos = ppu.oam[base] as i16;
+                let x_pos = ppu.oam[base + 1] as i16;
+                let screen_y = (y_pos - 16) as f32 * scale;
+                let screen_x = (x_pos - 8) as f32 * scale;
+                let sprite_w = 8.0 * scale;
+                let sprite_h_scaled = sprite_h as f32 * scale;
+
+                let sprite_screen_rect = egui::Rect::from_min_size(
+                    screen_rect.min + egui::vec2(screen_x, screen_y),
+                    egui::vec2(sprite_w, sprite_h_scaled),
+                );
+                screen_painter.rect_stroke(
+                    sprite_screen_rect,
+                    0.0,
+                    egui::Stroke::new(1.0, egui::Color32::YELLOW),
+                );
+
+                ui.add_space(8.0);
+
+                ui.heading("Details");
+                ui.separator();
+
+                if sel < 40 {
+                    let base = sel * 4;
+                    let y_pos = ppu.oam[base];
+                    let x_pos = ppu.oam[base + 1];
+                    let tile_num = ppu.oam[base + 2];
+                    let attr = ppu.oam[base + 3];
+
+                    let x_flip = attr & 0x20 != 0;
+                    let y_flip = attr & 0x40 != 0;
+                    let priority = attr & 0x80 != 0;
+
+                    let screen_y = y_pos as i16 - 16;
+                    let screen_x = x_pos as i16 - 8;
+
+                    let oam_addr = 0xFE00 + (sel as u16) * 4;
+                    let tile_addr = if is_8x16 {
+                        (tile_num & 0xFE) as u16 * 16
+                    } else {
+                        tile_num as u16 * 16
+                    };
+
+                    egui::Grid::new("oam_details_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 2.0])
+                        .show(ui, |ui| {
+                            ui.label("X-loc:");
+                            ui.monospace(format!("{} (${:02X})", screen_x, x_pos));
+                            ui.end_row();
+
+                            ui.label("Y-loc:");
+                            ui.monospace(format!("{} (${:02X})", screen_y, y_pos));
+                            ui.end_row();
+
+                            ui.label("Tile No:");
+                            ui.monospace(format!("${:02X}", tile_num));
+                            ui.end_row();
+
+                            ui.label("Attribute:");
+                            ui.monospace(format!("${:02X}", attr));
+                            ui.end_row();
+
+                            ui.label("OAM addr:");
+                            ui.monospace(format!("${:04X}", oam_addr));
+                            ui.end_row();
+
+                            ui.label("Tile addr:");
+                            ui.monospace(format!("${:04X}", tile_addr));
+                            ui.end_row();
+
+                            ui.label("X-flip:");
+                            ui.checkbox(&mut x_flip.clone(), "");
+                            ui.end_row();
+
+                            ui.label("Y-flip:");
+                            ui.checkbox(&mut y_flip.clone(), "");
+                            ui.end_row();
+
+                            ui.label("Palette:");
+                            if ppu.cgb {
+                                ui.monospace(format!("OBJ {}", attr & 0x07));
+                            } else {
+                                ui.monospace(format!(
+                                    "OBP{}",
+                                    if attr & 0x10 != 0 { 1 } else { 0 }
+                                ));
+                            }
+                            ui.end_row();
+
+                            if ppu.cgb {
+                                ui.label("Bank:");
+                                ui.monospace(format!("{}", if attr & 0x08 != 0 { 1 } else { 0 }));
+                                ui.end_row();
+                            }
+
+                            ui.label("Priority:");
+                            ui.checkbox(&mut priority.clone(), "BG over OBJ");
+                            ui.end_row();
+                        });
+                }
+            });
         });
     }
 
