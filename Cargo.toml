@@ -7,5 +7,8 @@ members = [
 ]
 resolver = "2"
 
-[patch.crates-io]
-imgui-wgpu = { path = "vendor/imgui-wgpu-0.24.0" }
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

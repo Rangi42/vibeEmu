@@ -1,19 +1,19 @@
 #![allow(dead_code)]
+#![allow(unused_imports)]
 
 mod audio;
 mod keybinds;
-mod scaler;
 mod ui;
 mod ui_config;
 
 use clap::{Parser, ValueEnum};
 use cpal::traits::StreamTrait;
+use eframe::egui;
 use log::{debug, error, info, warn};
-use pixels::{Pixels, SurfaceTexture};
 use rfd::FileDialog;
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::sync::{Arc, Mutex, Once, RwLock, mpsc};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use vibe_emu_core::serial::{LinkPort, NullLinkPort};
@@ -22,16 +22,31 @@ use vibe_emu_mobile::{
     MobileAdapter, MobileAdapterDevice, MobileAddr, MobileConfig, MobileHost, MobileLinkPort,
     MobileNumber, MobileSockType, StdMobileHost,
 };
-use winit::event::{ElementState, Event, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::PhysicalKey;
-use winit::window::{Icon, UserAttentionType, Window, WindowAttributes};
 
 use crossbeam_channel as cb;
 use keybinds::KeyBindings;
-pub use scaler::GameScaler;
+use ui::debugger::{BreakpointSpec, DebuggerPauseReason, DebuggerState};
 use ui::snapshot::UiSnapshot;
 use ui_config::{EmulationMode, UiConfig, WindowSize};
+
+const DEFAULT_WINDOW_SCALE: u32 = 2;
+const GB_WIDTH: f32 = 160.0;
+const GB_HEIGHT: f32 = 144.0;
+const MENU_BAR_HEIGHT: f32 = 24.0;
+const STATUS_BAR_HEIGHT: f32 = 24.0;
+const GB_FPS: f64 = 59.7275;
+const FRAME_TIME: Duration = Duration::from_nanos((1e9_f64 / GB_FPS) as u64);
+const FF_MULT: f32 = 4.0;
+
+use std::sync::LazyLock;
+static VIEWPORT_DEBUGGER: LazyLock<egui::ViewportId> =
+    LazyLock::new(|| egui::ViewportId::from_hash_of("debugger"));
+static VIEWPORT_VRAM_VIEWER: LazyLock<egui::ViewportId> =
+    LazyLock::new(|| egui::ViewportId::from_hash_of("vram_viewer"));
+static VIEWPORT_WATCHPOINTS: LazyLock<egui::ViewportId> =
+    LazyLock::new(|| egui::ViewportId::from_hash_of("watchpoints"));
+static VIEWPORT_OPTIONS: LazyLock<egui::ViewportId> =
+    LazyLock::new(|| egui::ViewportId::from_hash_of("options"));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum LogLevelArg {
@@ -41,35 +56,6 @@ enum LogLevelArg {
     Info,
     Debug,
     Trace,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-enum WgpuBackendArg {
-    /// Let wgpu pick the best available backend.
-    Auto,
-    /// Direct3D 12 (Windows).
-    Dx12,
-    /// Direct3D 11 (Windows).
-    Dx11,
-    /// Vulkan.
-    Vulkan,
-    /// Metal (macOS).
-    Metal,
-    /// OpenGL.
-    Gl,
-}
-
-impl WgpuBackendArg {
-    fn as_env_value(self) -> Option<&'static str> {
-        match self {
-            WgpuBackendArg::Auto => None,
-            WgpuBackendArg::Dx12 => Some("dx12"),
-            WgpuBackendArg::Dx11 => Some("dx11"),
-            WgpuBackendArg::Vulkan => Some("vulkan"),
-            WgpuBackendArg::Metal => Some("metal"),
-            WgpuBackendArg::Gl => Some("gl"),
-        }
-    }
 }
 
 impl LogLevelArg {
@@ -85,6 +71,90 @@ impl LogLevelArg {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum MobileDeviceArg {
+    Blue,
+    Yellow,
+    Green,
+    Red,
+}
+
+impl From<MobileDeviceArg> for MobileAdapterDevice {
+    fn from(value: MobileDeviceArg) -> Self {
+        match value {
+            MobileDeviceArg::Blue => MobileAdapterDevice::Blue,
+            MobileDeviceArg::Yellow => MobileAdapterDevice::Yellow,
+            MobileDeviceArg::Green => MobileAdapterDevice::Green,
+            MobileDeviceArg::Red => MobileAdapterDevice::Red,
+        }
+    }
+}
+
+#[derive(Parser)]
+struct Args {
+    rom: Option<std::path::PathBuf>,
+
+    #[arg(long, conflicts_with = "cgb")]
+    dmg: bool,
+
+    #[arg(long)]
+    dmg_neutral: bool,
+
+    #[arg(long, conflicts_with = "dmg")]
+    cgb: bool,
+
+    #[arg(long)]
+    bootrom: Option<std::path::PathBuf>,
+
+    #[arg(long)]
+    debug: bool,
+
+    #[arg(long, value_enum)]
+    log_level: Option<LogLevelArg>,
+
+    #[arg(long)]
+    headless: bool,
+
+    #[arg(long)]
+    frames: Option<usize>,
+
+    #[arg(long)]
+    seconds: Option<u64>,
+
+    #[arg(long)]
+    cycles: Option<u64>,
+
+    #[arg(long)]
+    mobile: bool,
+
+    #[arg(long)]
+    mobile_config: Option<std::path::PathBuf>,
+
+    #[arg(long, value_enum, default_value_t = MobileDeviceArg::Blue)]
+    mobile_device: MobileDeviceArg,
+
+    #[arg(long)]
+    mobile_unmetered: bool,
+
+    #[arg(long)]
+    mobile_dns1: Option<String>,
+
+    #[arg(long)]
+    mobile_dns2: Option<String>,
+
+    #[arg(long)]
+    mobile_relay: Option<String>,
+
+    #[arg(long)]
+    mobile_p2p_port: Option<u16>,
+
+    #[arg(long)]
+    mobile_diag: bool,
+
+    #[arg(long)]
+    keybinds: Option<std::path::PathBuf>,
+}
+
 fn init_logging(args: &Args) {
     let default_filter = if let Some(level) = args.log_level {
         level.as_filter_str()
@@ -96,12 +166,11 @@ fn init_logging(args: &Args) {
 
     let mut logger =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_filter));
-
-    // Reduce noisy GPU backend logs. Users can override via `RUST_LOG`.
     logger.filter_module("wgpu", log::LevelFilter::Warn);
     logger.filter_module("wgpu_core", log::LevelFilter::Warn);
-    logger.filter_module("wgpu_hal", log::LevelFilter::Warn);
+    logger.filter_module("wgpu_hal", log::LevelFilter::Off);
     logger.filter_module("naga", log::LevelFilter::Warn);
+    logger.filter_module("egui_wgpu", log::LevelFilter::Warn);
     logger.format_timestamp_millis().init();
 
     struct CoreLogForwarder;
@@ -130,20 +199,7 @@ fn init_logging(args: &Args) {
     let _ = vibe_emu_core::diagnostics::try_set_log_sink(Box::new(CoreLogForwarder));
 }
 
-fn format_serial_bytes(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len());
-    for &b in data {
-        if b.is_ascii_graphic() || b == b' ' {
-            out.push(b as char);
-        } else {
-            use std::fmt::Write as _;
-            let _ = write!(&mut out, "\\x{b:02X}");
-        }
-    }
-    out
-}
-
-fn load_window_icon() -> Option<Icon> {
+fn load_window_icon() -> Option<egui::IconData> {
     let icon_data = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../gfx/vibeEmu_512px.png"
@@ -177,97 +233,21 @@ fn load_window_icon() -> Option<Icon> {
         }
         _ => return None,
     }
-    Icon::from_rgba(rgba, info.width, info.height).ok()
+    Some(egui::IconData {
+        rgba,
+        width: info.width,
+        height: info.height,
+    })
 }
 
-fn default_keybinds_path() -> std::path::PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(appdata) = std::env::var_os("APPDATA") {
-            return std::path::PathBuf::from(appdata)
-                .join("vibeemu")
-                .join("keybinds.cfg");
-        }
-    }
-
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        return std::path::PathBuf::from(xdg)
-            .join("vibeemu")
-            .join("keybinds.cfg");
-    }
-
-    if let Some(home) = std::env::var_os("HOME") {
-        return std::path::PathBuf::from(home)
-            .join(".config")
-            .join("vibeemu")
-            .join("keybinds.cfg");
-    }
-
-    std::path::PathBuf::from("keybinds.cfg")
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum SerialPeripheral {
+    #[default]
+    None,
+    MobileAdapter,
 }
 
-const DEFAULT_WINDOW_SCALE: u32 = 2;
-// Tool windows use a fixed (non-configurable) default scale.
-const SCALE: u32 = DEFAULT_WINDOW_SCALE;
-// The top menu bar consumes vertical space; ensure the default window is tall enough
-// to still fit a 2x (or SCALEx) Game Boy frame below it.
-const DEFAULT_MENU_BAR_HEIGHT_PX: u32 = 32;
-const GB_FPS: f64 = 59.7275;
-const FRAME_TIME: Duration = Duration::from_nanos((1e9_f64 / GB_FPS) as u64);
-const FF_MULT: f32 = 4.0;
-const AUDIO_WARMUP_TARGET_RATIO: f32 = 0.9;
-const AUDIO_WARMUP_CHECK_INTERVAL: u32 = 1024;
-const AUDIO_WARMUP_TIMEOUT_MS: u64 = 200;
-
-#[derive(Default)]
-struct UiState {
-    paused: bool,
-    spawn_debugger: bool,
-    spawn_vram: bool,
-    spawn_watchpoints: bool,
-    spawn_options: bool,
-    pending_exit: bool,
-    pending_action: Option<UiAction>,
-    pending_pause: Option<bool>,
-    pending_load_config_update: bool,
-    pending_save_ui_config: bool,
-    pending_window_size: Option<WindowSize>,
-    current_rom_path: Option<std::path::PathBuf>,
-    bootrom_edit_initialized: bool,
-    dmg_bootrom_edit: String,
-    cgb_bootrom_edit: String,
-    menu_pause_active: bool,
-    menu_resume_armed: bool,
-    rebinding: Option<RebindTarget>,
-    serial_peripheral: SerialPeripheral,
-    pending_serial_peripheral: Option<SerialPeripheral>,
-    last_main_inner_size: Option<(u32, u32)>,
-
-    debugger: ui::debugger::DebuggerState,
-    watchpoints: ui::watchpoints::WatchpointsState,
-    debugger_focus_pause_active: bool,
-    debugger_focus_resume_armed: bool,
-    debugger_pending_focus: bool,
-
-    key_modifiers: winit::keyboard::ModifiersState,
-
-    debugger_animate_active: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RebindTarget {
-    Joypad(u8),
-    Pause,
-    FastForward,
-    Quit,
-}
-
-enum UiAction {
-    Reset,
-    LoadPath(std::path::PathBuf),
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct LoadConfig {
     emulation_mode: EmulationMode,
     dmg_neutral: bool,
@@ -282,3754 +262,2309 @@ struct Speed {
     fast: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-enum SerialPeripheral {
-    #[default]
-    None,
-    MobileAdapter,
-}
-
-#[derive(Clone)]
 enum EmuCommand {
     SetPaused(bool),
-    Resume {
-        ignore_breakpoints: bool,
-    },
-    ResumeIgnoreOnce {
-        breakpoint: ui::debugger::BreakpointSpec,
-    },
-    SetAnimate(bool),
-    Step {
-        count: u32,
-        cmd_id: Option<u64>,
-        guarantee_snapshot: bool,
-    },
-    RunTo {
-        target: ui::debugger::BreakpointSpec,
-        ignore_breakpoints: bool,
-    },
-    JumpTo {
-        addr: u16,
-    },
-    CallCursor {
-        addr: u16,
-    },
-    JumpSp,
-    SetBreakpoints(Vec<ui::debugger::BreakpointSpec>),
-    SetWatchpoints(Vec<vibe_emu_core::watchpoints::Watchpoint>),
     SetSpeed(Speed),
     UpdateInput(u8),
-    SetSerialPeripheral(SerialPeripheral),
-    UpdateLoadConfig(LoadConfig),
     Shutdown,
-}
-
-enum UiToEmu {
-    Command(EmuCommand),
-    Action(UiAction),
-}
-
-#[derive(Clone, Debug)]
-enum UserEvent {
-    EmuWake,
-    DebuggerWake,
-    DebuggerBreak {
-        bank: u8,
-        addr: u16,
-    },
-    DebuggerWatchpoint {
-        hit: vibe_emu_core::watchpoints::WatchpointHit,
-    },
-    DebuggerAck {
-        cmd_id: u64,
-    },
-}
-
-struct EmuThreadChannels {
-    rx: mpsc::Receiver<UiToEmu>,
-    frame_tx: cb::Sender<EmuEvent>,
-    serial_tx: cb::Sender<EmuEvent>,
-    frame_pool_tx: cb::Sender<Vec<u32>>,
-    frame_pool_rx: cb::Receiver<Vec<u32>>,
-    wake_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
-    exec_trace: Arc<Mutex<Vec<ui::code_data::ExecutedInstruction>>>,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum MobileDeviceArg {
-    Blue,
-    Yellow,
-    Green,
-    Red,
-}
-
-impl From<MobileDeviceArg> for MobileAdapterDevice {
-    fn from(value: MobileDeviceArg) -> Self {
-        match value {
-            MobileDeviceArg::Blue => MobileAdapterDevice::Blue,
-            MobileDeviceArg::Yellow => MobileAdapterDevice::Yellow,
-            MobileDeviceArg::Green => MobileAdapterDevice::Green,
-            MobileDeviceArg::Red => MobileAdapterDevice::Red,
-        }
-    }
 }
 
 enum EmuEvent {
     Frame { frame: Vec<u32>, frame_index: u64 },
-    Serial { data: Vec<u8>, frame_index: u64 },
 }
 
-use ui::window::{UiWindow, WindowKind};
-
-#[derive(Parser)]
-struct Args {
-    /// Path to ROM file
-    rom: Option<std::path::PathBuf>,
-
-    /// Force DMG mode
-    #[arg(long, conflicts_with = "cgb")]
-    dmg: bool,
-
-    /// Use a neutral (non-green) DMG palette
-    #[arg(long)]
-    dmg_neutral: bool,
-
-    /// Force CGB mode
-    #[arg(long, conflicts_with = "dmg")]
-    cgb: bool,
-
-    /// Run in serial test mode
-    #[arg(long)]
-    serial: bool,
-
-    /// Path to boot ROM file
-    #[arg(long)]
-    bootrom: Option<std::path::PathBuf>,
-
-    /// Enable debug logging of CPU state and serial output
-    #[arg(long)]
-    debug: bool,
-
-    /// Logging verbosity (release builds default to `off`)
-    #[arg(long, value_enum)]
-    log_level: Option<LogLevelArg>,
-
-    /// Select wgpu backend.
-    ///
-    /// When omitted, the UI defaults to a stable backend per-platform.
-    /// On Windows this currently prefers D3D12; pass `--wgpu-backend auto` to disable.
-    #[arg(long, value_enum)]
-    wgpu_backend: Option<WgpuBackendArg>,
-
-    /// Run without opening a window
-    #[arg(long)]
-    headless: bool,
-
-    /// Number of frames to run in headless mode
-    #[arg(long)]
-    frames: Option<usize>,
-
-    /// Number of seconds to run in headless mode
-    #[arg(long)]
-    seconds: Option<u64>,
-
-    /// Number of CPU cycles to run in headless mode
-    #[arg(long)]
-    cycles: Option<u64>,
-
-    /// Enable Mobile Adapter GB emulation via libmobile
-    #[arg(long)]
-    mobile: bool,
-
-    /// Path to the persisted MOBILE_CONFIG_SIZE blob (defaults next to ROM)
-    #[arg(long)]
-    mobile_config: Option<std::path::PathBuf>,
-
-    /// Adapter model to emulate
-    #[arg(long, value_enum, default_value_t = MobileDeviceArg::Blue)]
-    mobile_device: MobileDeviceArg,
-
-    /// Mark the connection as unmetered (used by some games)
-    #[arg(long)]
-    mobile_unmetered: bool,
-
-    /// Override DNS server 1 as ip:port (e.g. `8.8.8.8:53` or `[2001:4860:4860::8888]:53`)
-    #[arg(long)]
-    mobile_dns1: Option<String>,
-
-    /// Override DNS server 2 as ip:port
-    #[arg(long)]
-    mobile_dns2: Option<String>,
-
-    /// Override relay server as ip:port
-    #[arg(long)]
-    mobile_relay: Option<String>,
-
-    /// Override P2P port (defaults to libmobile's default)
-    #[arg(long)]
-    mobile_p2p_port: Option<u16>,
-
-    /// Emit Mobile Adapter diagnostics (raw serial bytes + libmobile debug + socket events)
-    #[arg(long)]
-    mobile_diag: bool,
-
-    /// Path to a keybind configuration file (lines: `name = KeyCode`)
-    #[arg(long)]
-    keybinds: Option<std::path::PathBuf>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RebindTarget {
+    Joypad(u8),
+    Pause,
+    FastForward,
+    Quit,
 }
 
-struct DiagMobileHost {
-    inner: Box<dyn MobileHost>,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum OptionsTab {
+    #[default]
+    Keybinds,
+    Emulation,
+    MobileAdapter,
 }
 
-impl DiagMobileHost {
-    fn new(inner: Box<dyn MobileHost>) -> Self {
-        Self { inner }
-    }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum VramTab {
+    #[default]
+    BgMap,
+    Tiles,
+    Oam,
+    Palettes,
 }
 
-impl MobileHost for DiagMobileHost {
-    fn debug_log(&mut self, line: &str) {
-        info!("[MOBILE] {line}");
-        self.inner.debug_log(line);
-    }
+struct VramViewerState {
+    bg_map_tex: Option<egui::TextureHandle>,
+    bg_map_buf: Vec<u8>,
+    tiles_tex: Option<egui::TextureHandle>,
+    tiles_buf: Vec<u8>,
+    tiles_banks: u8,
+    oam_sprite_textures: Vec<Option<egui::TextureHandle>>,
+    oam_sprite_bufs: Vec<Vec<u8>>,
+    oam_selected: usize,
+    oam_sprite_h: u8,
+    palette_sel_is_bg: bool,
+    palette_sel_pal: u8,
+    palette_sel_col: u8,
+    last_frame: u64,
+}
 
-    fn update_number(&mut self, which: MobileNumber, number: Option<&str>) {
-        info!("[MOBILE] update_number {:?} -> {:?}", which, number);
-        self.inner.update_number(which, number);
-    }
-
-    fn config_read(&mut self, dest: &mut [u8], offset: usize) -> bool {
-        self.inner.config_read(dest, offset)
-    }
-
-    fn config_write(&mut self, src: &[u8], offset: usize) -> bool {
-        self.inner.config_write(src, offset)
-    }
-
-    fn sock_open(
-        &mut self,
-        conn: u32,
-        socktype: MobileSockType,
-        addr: &MobileAddr,
-        bind_port: u16,
-    ) -> bool {
-        let ok = self.inner.sock_open(conn, socktype, addr, bind_port);
-        info!(
-            "[MOBILE] sock_open conn={} type={:?} addr={:?} bind_port={} -> {}",
-            conn, socktype, addr, bind_port, ok
-        );
-        ok
-    }
-
-    fn sock_close(&mut self, conn: u32) {
-        info!("[MOBILE] sock_close conn={conn}");
-        self.inner.sock_close(conn);
-    }
-
-    fn sock_connect(&mut self, conn: u32, addr: &MobileAddr) -> i32 {
-        let rc = self.inner.sock_connect(conn, addr);
-        info!(
-            "[MOBILE] sock_connect conn={} addr={:?} -> {}",
-            conn, addr, rc
-        );
-        rc
-    }
-
-    fn sock_listen(&mut self, conn: u32) -> bool {
-        let ok = self.inner.sock_listen(conn);
-        info!("[MOBILE] sock_listen conn={} -> {}", conn, ok);
-        ok
-    }
-
-    fn sock_accept(&mut self, conn: u32) -> bool {
-        let ok = self.inner.sock_accept(conn);
-        info!("[MOBILE] sock_accept conn={} -> {}", conn, ok);
-        ok
-    }
-
-    fn sock_send(&mut self, conn: u32, data: &[u8], addr: Option<&MobileAddr>) -> i32 {
-        let rc = self.inner.sock_send(conn, data, addr);
-        info!(
-            "[MOBILE] sock_send conn={} len={} addr={:?} -> {}",
-            conn,
-            data.len(),
-            addr,
-            rc
-        );
-        rc
-    }
-
-    fn sock_recv(
-        &mut self,
-        conn: u32,
-        mut data: Option<&mut [u8]>,
-        mut addr_out: Option<&mut MobileAddr>,
-    ) -> i32 {
-        let rc = self
-            .inner
-            .sock_recv(conn, data.as_deref_mut(), addr_out.as_deref_mut());
-
-        if rc > 0 {
-            let n = rc as usize;
-            let preview_len = n.min(32);
-            match (data.as_deref(), addr_out.as_deref()) {
-                (Some(buf), Some(addr)) => {
-                    info!(
-                        "[MOBILE] sock_recv conn={} -> {} bytes from {:?} (first {:02X?}{})",
-                        conn,
-                        rc,
-                        addr,
-                        &buf[..preview_len],
-                        if n > preview_len { "…" } else { "" }
-                    );
-                }
-                (Some(buf), None) => {
-                    info!(
-                        "[MOBILE] sock_recv conn={} -> {} bytes (first {:02X?}{})",
-                        conn,
-                        rc,
-                        &buf[..preview_len],
-                        if n > preview_len { "…" } else { "" }
-                    );
-                }
-                _ => {
-                    info!("[MOBILE] sock_recv conn={} -> {} bytes", conn, rc);
-                }
-            }
-        } else {
-            info!("[MOBILE] sock_recv conn={} -> {}", conn, rc);
+impl Default for VramViewerState {
+    fn default() -> Self {
+        Self {
+            bg_map_tex: None,
+            bg_map_buf: vec![0; 256 * 256 * 4],
+            tiles_tex: None,
+            tiles_buf: vec![0; 256 * 192 * 4],
+            tiles_banks: 1,
+            oam_sprite_textures: vec![None; 40],
+            oam_sprite_bufs: (0..40).map(|_| vec![0u8; 8 * 16 * 4]).collect(),
+            oam_selected: 0,
+            oam_sprite_h: 8,
+            palette_sel_is_bg: true,
+            palette_sel_pal: 0,
+            palette_sel_col: 0,
+            last_frame: 0,
         }
-
-        rc
     }
 }
 
-struct DiagMobileLinkPort {
-    adapter: Arc<Mutex<MobileAdapter>>,
+struct EmuThreadChannels {
+    rx: mpsc::Receiver<EmuCommand>,
+    frame_tx: cb::Sender<EmuEvent>,
+    frame_pool_tx: cb::Sender<Vec<u32>>,
+    frame_pool_rx: cb::Receiver<Vec<u32>>,
 }
 
-impl DiagMobileLinkPort {
-    fn new(adapter: Arc<Mutex<MobileAdapter>>) -> Self {
-        Self { adapter }
-    }
-}
-
-impl LinkPort for DiagMobileLinkPort {
-    fn transfer(&mut self, byte: u8) -> u8 {
-        let mut adapter = match self.adapter.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                warn!("mobile adapter mutex poisoned; recovering");
-                poisoned.into_inner()
-            }
-        };
-        let rx = adapter.transfer_byte(byte).unwrap_or(0xFF);
-        debug!("[MOBILE][SIO] tx={:02X} rx={:02X}", byte, rx);
-        rx
-    }
-}
-
-fn parse_mobile_addr(s: &str) -> Result<MobileAddr, String> {
-    let sock: std::net::SocketAddr = s
-        .parse()
-        .map_err(|e| format!("invalid socket address '{s}': {e}"))?;
-
-    Ok(match sock {
-        std::net::SocketAddr::V4(v4) => MobileAddr::V4 {
-            host: v4.ip().octets(),
-            port: v4.port(),
-        },
-        std::net::SocketAddr::V6(v6) => MobileAddr::V6 {
-            host: v6.ip().octets(),
-            port: v6.port(),
-        },
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn enforce_square_corners(attrs: WindowAttributes) -> WindowAttributes {
-    use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
-
-    attrs.with_corner_preference(CornerPreference::DoNotRound)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn enforce_square_corners(attrs: WindowAttributes) -> WindowAttributes {
-    attrs
-}
-
-fn desired_main_inner_size(scale: u32, top_padding_px: u32) -> winit::dpi::PhysicalSize<u32> {
-    winit::dpi::PhysicalSize::new(160 * scale, top_padding_px + 144 * scale)
-}
-
-fn enforce_main_window_inner_size(
-    ui_state: &mut UiState,
-    window: &winit::window::Window,
-    scale: u32,
-    top_padding_px: u32,
-) -> bool {
-    let desired = desired_main_inner_size(scale, top_padding_px);
-    let desired_pair = (desired.width, desired.height);
-    if ui_state.last_main_inner_size == Some(desired_pair) {
-        return false;
-    }
-
-    ui_state.last_main_inner_size = Some(desired_pair);
-    let _ = window.request_inner_size(desired);
-    true
-}
-
-fn request_attention_and_focus(window: &winit::window::Window) {
-    window.set_minimized(false);
-    window.request_user_attention(Some(UserAttentionType::Critical));
-    window.focus_window();
-}
-
-fn spawn_debugger_window(
-    event_loop: &ActiveEventLoop,
-    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
-) {
-    use winit::dpi::LogicalSize;
-    let attrs = enforce_square_corners(
-        Window::default_attributes()
-            .with_title("vibeEmu \u{2013} Debugger")
-            .with_window_icon(load_window_icon())
-            .with_inner_size(LogicalSize::new(900.0, 700.0)),
-    );
-    let w = match event_loop.create_window(attrs) {
-        Ok(w) => w,
-        Err(e) => {
-            error!("Failed to create debugger window: {e}");
-            return;
-        }
-    };
-
-    let size = w.inner_size();
-    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
-    // Tool windows don't render a dedicated pixel framebuffer; Pixels is used as the wgpu surface
-    // carrier for ImGui rendering, so a 1×1 buffer is sufficient.
-    const IMGUI_CARRIER_BUFFER: (u32, u32) = (1, 1);
-    let pixels = match pixels::Pixels::new(IMGUI_CARRIER_BUFFER.0, IMGUI_CARRIER_BUFFER.1, surface)
-    {
-        Ok(p) => p,
-        Err(e) => {
-            error!("Pixels init failed (debugger window): {e}");
-            return;
-        }
-    };
-
-    let ui_win = UiWindow::new(WindowKind::Debugger, w, pixels, IMGUI_CARRIER_BUFFER);
-    let id = ui_win.win.id();
-    windows.insert(id, ui_win);
-    if let Some(win) = windows.get_mut(&id) {
-        win.resize(win.win.inner_size());
-    }
-}
-
-fn spawn_vram_window(
-    event_loop: &ActiveEventLoop,
-    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
-) {
-    use winit::dpi::LogicalSize;
-    let attrs = enforce_square_corners(
-        Window::default_attributes()
-            .with_title("vibeEmu \u{2013} VRAM")
-            .with_window_icon(load_window_icon())
-            .with_inner_size(LogicalSize::new(640.0, 600.0)),
-    );
-    let w = match event_loop.create_window(attrs) {
-        Ok(w) => w,
-        Err(e) => {
-            error!("Failed to create VRAM window: {e}");
-            return;
-        }
-    };
-
-    let size = w.inner_size();
-    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
-    // Tool windows don't render a dedicated pixel framebuffer; Pixels is used as the wgpu surface
-    // carrier for ImGui rendering, so a 1×1 buffer is sufficient.
-    const IMGUI_CARRIER_BUFFER: (u32, u32) = (1, 1);
-    let pixels = match pixels::Pixels::new(IMGUI_CARRIER_BUFFER.0, IMGUI_CARRIER_BUFFER.1, surface)
-    {
-        Ok(p) => p,
-        Err(e) => {
-            error!("Pixels init failed (VRAM window): {e}");
-            return;
-        }
-    };
-
-    let ui_win = UiWindow::new(WindowKind::VramViewer, w, pixels, IMGUI_CARRIER_BUFFER);
-    let id = ui_win.win.id();
-    windows.insert(id, ui_win);
-    if let Some(win) = windows.get_mut(&id) {
-        win.resize(win.win.inner_size());
-    }
-}
-
-fn spawn_options_window(
-    event_loop: &ActiveEventLoop,
-    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
-) {
-    use winit::dpi::LogicalSize;
-    let attrs = enforce_square_corners(
-        Window::default_attributes()
-            .with_title("vibeEmu \u{2013} Options")
-            .with_window_icon(load_window_icon())
-            .with_inner_size(LogicalSize::new(520.0, 420.0)),
-    );
-    let w = match event_loop.create_window(attrs) {
-        Ok(w) => w,
-        Err(e) => {
-            error!("Failed to create Options window: {e}");
-            return;
-        }
-    };
-
-    let size = w.inner_size();
-    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
-    // Tool windows don't render a dedicated pixel framebuffer; Pixels is used as the wgpu surface
-    // carrier for ImGui rendering, so a 1×1 buffer is sufficient.
-    const IMGUI_CARRIER_BUFFER: (u32, u32) = (1, 1);
-    let pixels = match pixels::Pixels::new(IMGUI_CARRIER_BUFFER.0, IMGUI_CARRIER_BUFFER.1, surface)
-    {
-        Ok(p) => p,
-        Err(e) => {
-            error!("Pixels init failed (Options window): {e}");
-            return;
-        }
-    };
-
-    let ui_win = UiWindow::new(WindowKind::Options, w, pixels, IMGUI_CARRIER_BUFFER);
-    let id = ui_win.win.id();
-    windows.insert(id, ui_win);
-    if let Some(win) = windows.get_mut(&id) {
-        win.resize(win.win.inner_size());
-    }
-}
-
-fn spawn_watchpoints_window(
-    event_loop: &ActiveEventLoop,
-    windows: &mut HashMap<winit::window::WindowId, UiWindow>,
-) {
-    use winit::dpi::LogicalSize;
-    let attrs = enforce_square_corners(
-        Window::default_attributes()
-            .with_title("vibeEmu \u{2013} Watchpoints")
-            .with_window_icon(load_window_icon())
-            .with_inner_size(LogicalSize::new(520.0, 520.0)),
-    );
-    let w = match event_loop.create_window(attrs) {
-        Ok(w) => w,
-        Err(e) => {
-            error!("Failed to create Watchpoints window: {e}");
-            return;
-        }
-    };
-
-    let size = w.inner_size();
-    let surface = pixels::SurfaceTexture::new(size.width, size.height, &w);
-    // Tool windows don't render a dedicated pixel framebuffer; Pixels is used as the wgpu surface
-    // carrier for ImGui rendering, so a 1×1 buffer is sufficient.
-    const IMGUI_CARRIER_BUFFER: (u32, u32) = (1, 1);
-    let pixels = match pixels::Pixels::new(IMGUI_CARRIER_BUFFER.0, IMGUI_CARRIER_BUFFER.1, surface)
-    {
-        Ok(p) => p,
-        Err(e) => {
-            error!("Pixels init failed (Watchpoints window): {e}");
-            return;
-        }
-    };
-
-    let ui_win = UiWindow::new(WindowKind::Watchpoints, w, pixels, IMGUI_CARRIER_BUFFER);
-    let id = ui_win.win.id();
-    windows.insert(id, ui_win);
-    if let Some(win) = windows.get_mut(&id) {
-        win.resize(win.win.inner_size());
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 fn run_emulator_thread(
     gb: Arc<Mutex<GameBoy>>,
-    ui_snapshot: Arc<RwLock<UiSnapshot>>,
     mut speed: Speed,
     initial_paused: bool,
-    debug: bool,
-    mobile: Option<Arc<Mutex<MobileAdapter>>>,
-    mut serial_peripheral: SerialPeripheral,
-    mobile_diag: bool,
-    load_config: LoadConfig,
     channels: EmuThreadChannels,
 ) {
     let EmuThreadChannels {
         rx,
         frame_tx,
-        serial_tx,
-        frame_pool_tx,
+        frame_pool_tx: _,
         frame_pool_rx,
-        wake_proxy,
-        exec_trace,
     } = channels;
 
-    let mut exec_seen_rom0 = vec![false; 0x4000];
-    let mut exec_seen_romx: Vec<Option<Vec<bool>>> = vec![None; 256];
-    let mut pending_exec_trace: Vec<ui::code_data::ExecutedInstruction> = Vec::new();
-
-    let flush_exec_trace = |pending: &mut Vec<ui::code_data::ExecutedInstruction>| {
-        if pending.is_empty() {
-            return;
-        }
-
-        if let Ok(mut buf) = exec_trace.lock() {
-            buf.extend(pending.drain(..));
-        }
-    };
-
-    let note_execute_pc =
-        |pc: u16,
-         bank: u8,
-         mmu: &mut Mmu,
-         seen_rom0: &mut [bool],
-         seen_romx: &mut [Option<Vec<bool>>],
-         pending: &mut Vec<ui::code_data::ExecutedInstruction>| {
-            if pc >= 0x8000 {
-                return;
-            }
-
-            let (bank, idx) = if pc < 0x4000 {
-                (0u8, pc as usize)
-            } else {
-                (bank, (pc - 0x4000) as usize)
-            };
-
-            if pc < 0x4000 {
-                if seen_rom0.get(idx).copied().unwrap_or(false) {
-                    return;
-                }
-                if let Some(slot) = seen_rom0.get_mut(idx) {
-                    *slot = true;
-                }
-            } else {
-                let bank_slot = seen_romx
-                    .get_mut(bank as usize)
-                    .expect("ROMX bank index out of range");
-                if bank_slot.is_none() {
-                    *bank_slot = Some(vec![false; 0x4000]);
-                }
-                let bank_map = bank_slot.as_mut().expect("ROMX bank map missing");
-                if bank_map.get(idx).copied().unwrap_or(false) {
-                    return;
-                }
-                if let Some(slot) = bank_map.get_mut(idx) {
-                    *slot = true;
-                }
-            }
-
-            let opcode = mmu.read_byte(pc);
-            let len = ui::code_data::sm83_instr_len(opcode);
-            pending.push(ui::code_data::ExecutedInstruction {
-                bank,
-                addr: pc,
-                len,
-            });
-        };
-
-    fn exec_break_key_for_pc(pc: u16, mmu: &Mmu) -> ui::debugger::BreakpointSpec {
-        let active_rom_bank = mmu.cart.as_ref().map(|c| c.current_rom_bank()).unwrap_or(1);
-        let vram_bank = mmu.ppu.vram_bank as u8;
-        let wram_bank = mmu.wram_bank as u8;
-        let sram_bank = mmu.cart.as_ref().map(|c| c.current_ram_bank()).unwrap_or(0);
-
-        let bank = match pc {
-            0x0000..=0x3FFF => 0,
-            0x4000..=0x7FFF => active_rom_bank.min(0xFF) as u8,
-            0x8000..=0x9FFF => vram_bank,
-            0xA000..=0xBFFF => sram_bank,
-            0xC000..=0xCFFF => 0,
-            0xD000..=0xDFFF => wram_bank,
-            0xE000..=0xEFFF => 0,
-            0xF000..=0xFDFF => wram_bank,
-            _ => 0,
-        };
-
-        ui::debugger::BreakpointSpec { bank, addr: pc }
-    }
-
-    fn apply_serial_peripheral(
-        gb: &mut GameBoy,
-        mobile: &Option<Arc<Mutex<MobileAdapter>>>,
-        desired: SerialPeripheral,
-        mobile_diag: bool,
-        serial_peripheral: &mut SerialPeripheral,
-        mobile_active: &mut bool,
-        mobile_time_accum_ns: &mut u128,
-    ) {
-        match desired {
-            SerialPeripheral::None => {
-                if let Some(mobile) = mobile.as_ref()
-                    && let Ok(mut adapter) = mobile.lock()
-                {
-                    let _ = adapter.stop();
-                }
-                gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
-                *mobile_active = false;
-                *serial_peripheral = SerialPeripheral::None;
-            }
-            SerialPeripheral::MobileAdapter => {
-                let Some(mobile) = mobile.as_ref() else {
-                    warn!("Mobile Adapter requested but unavailable");
-                    gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
-                    *mobile_active = false;
-                    *serial_peripheral = SerialPeripheral::None;
-                    *mobile_time_accum_ns = 0;
-                    return;
-                };
-
-                if let Ok(mut adapter) = mobile.lock() {
-                    let _ = adapter.stop();
-                    if let Err(e) = adapter.start() {
-                        warn!("Failed to start Mobile Adapter: {e}");
-                        gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
-                        *mobile_active = false;
-                        *serial_peripheral = SerialPeripheral::None;
-                        *mobile_time_accum_ns = 0;
-                        return;
-                    }
-                }
-
-                if mobile_diag {
-                    gb.mmu
-                        .serial
-                        .connect(Box::new(DiagMobileLinkPort::new(Arc::clone(mobile))));
-                } else {
-                    gb.mmu
-                        .serial
-                        .connect(Box::new(MobileLinkPort::new(Arc::clone(mobile))));
-                }
-
-                *mobile_active = true;
-                *serial_peripheral = SerialPeripheral::MobileAdapter;
-            }
-        }
-
-        *mobile_time_accum_ns = 0;
-    }
-
-    let mut load_config = load_config;
     let mut paused = initial_paused;
-    let mut step_budget: u32 = 0;
-    let mut pending_debug_ack: Option<u64> = None;
-    let mut breakpoints: std::collections::HashSet<ui::debugger::BreakpointSpec> =
-        std::collections::HashSet::new();
-    let mut watchpoints: Vec<vibe_emu_core::watchpoints::Watchpoint> = Vec::new();
-    let mut temp_exec_break: Option<ui::debugger::BreakpointSpec> = None;
-    let mut ignore_breakpoints = false;
-    let mut ignore_once_breakpoint: Option<ui::debugger::BreakpointSpec> = None;
-    let mut watchpoints_suspended = false;
-    let mut animate = false;
     let mut frame_count = 0u64;
     let mut next_frame = Instant::now() + FRAME_TIME;
-    let mut audio_stream = None;
-    let mut mobile_time_accum_ns: u128 = 0;
-    let mut mobile_active = serial_peripheral == SerialPeripheral::MobileAdapter;
-
-    if let Ok(mut gb) = gb.lock() {
-        apply_serial_peripheral(
-            &mut gb,
-            &mobile,
-            serial_peripheral,
-            mobile_diag,
-            &mut serial_peripheral,
-            &mut mobile_active,
-            &mut mobile_time_accum_ns,
-        );
-        gb.mmu.watchpoints.set_watchpoints(watchpoints.clone());
-        gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-        if !cfg!(test) && gb.mmu.cart.is_some() {
-            rebuild_audio_stream(&mut gb, speed, &mut audio_stream);
-        }
-    }
 
     loop {
-        while let Ok(msg) = rx.try_recv() {
-            match msg {
-                UiToEmu::Command(cmd) => match cmd {
-                    EmuCommand::SetPaused(p) => {
-                        paused = p;
-                        next_frame = Instant::now() + FRAME_TIME;
-
-                        ignore_breakpoints = false;
-                        ignore_once_breakpoint = None;
-                        watchpoints_suspended = false;
-                        animate = false;
-
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                        }
-
-                        if paused {
-                            temp_exec_break = None;
-                        }
-
-                        if paused {
-                            if let Ok(mut gb) = gb.lock()
-                                && let Ok(mut snap) = ui_snapshot.write()
-                            {
-                                *snap = UiSnapshot::from_gb(&mut gb, true);
-                            }
-                            let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
-                        }
-                    }
-                    EmuCommand::Resume {
-                        ignore_breakpoints: ignore,
-                    } => {
-                        paused = false;
-                        ignore_breakpoints = ignore;
-                        watchpoints_suspended = ignore;
-                        next_frame = Instant::now() + FRAME_TIME;
-                        ignore_once_breakpoint = None;
-
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                        }
-                    }
-                    EmuCommand::ResumeIgnoreOnce { breakpoint } => {
-                        paused = false;
-                        ignore_breakpoints = false;
-                        ignore_once_breakpoint = Some(breakpoint);
-                        watchpoints_suspended = false;
-                        next_frame = Instant::now() + FRAME_TIME;
-
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                        }
-                    }
-                    EmuCommand::SetAnimate(value) => {
-                        animate = value;
-                    }
-                    EmuCommand::Step {
-                        count,
-                        cmd_id,
-                        guarantee_snapshot,
-                    } => {
-                        step_budget = step_budget.saturating_add(count);
-                        paused = true;
-                        ignore_breakpoints = false;
-                        watchpoints_suspended = false;
-                        next_frame = Instant::now() + FRAME_TIME;
-                        ignore_once_breakpoint = None;
-                        animate = false;
-                        temp_exec_break = None;
-
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                        }
-
-                        if guarantee_snapshot {
-                            pending_debug_ack = cmd_id;
-                        }
-                    }
-                    EmuCommand::RunTo {
-                        target,
-                        ignore_breakpoints: ignore,
-                    } => {
-                        temp_exec_break = Some(target);
-                        paused = false;
-                        ignore_breakpoints = ignore;
-                        watchpoints_suspended = ignore;
-                        ignore_once_breakpoint = None;
-                        next_frame = Instant::now() + FRAME_TIME;
-
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                        }
-                    }
-                    EmuCommand::JumpTo { addr } => {
-                        paused = true;
-                        ignore_breakpoints = false;
-                        ignore_once_breakpoint = None;
-                        watchpoints_suspended = false;
-                        animate = false;
-                        next_frame = Instant::now() + FRAME_TIME;
-                        temp_exec_break = None;
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                            gb.cpu.pc = addr;
-                            gb.cpu.halted = false;
-                            if let Ok(mut snap) = ui_snapshot.write() {
-                                *snap = UiSnapshot::from_gb(&mut gb, true);
-                            }
-                        }
-                        let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
-                    }
-                    EmuCommand::CallCursor { addr } => {
-                        paused = true;
-                        ignore_breakpoints = false;
-                        ignore_once_breakpoint = None;
-                        watchpoints_suspended = false;
-                        animate = false;
-                        next_frame = Instant::now() + FRAME_TIME;
-                        temp_exec_break = None;
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                            let ret = gb.cpu.pc;
-                            let sp_hi = gb.cpu.sp.wrapping_sub(1);
-                            let sp_lo = gb.cpu.sp.wrapping_sub(2);
-                            gb.mmu.write_byte(sp_hi, (ret >> 8) as u8);
-                            gb.mmu.write_byte(sp_lo, (ret & 0xFF) as u8);
-                            gb.cpu.sp = sp_lo;
-                            gb.cpu.pc = addr;
-                            gb.cpu.halted = false;
-                            if let Ok(mut snap) = ui_snapshot.write() {
-                                *snap = UiSnapshot::from_gb(&mut gb, true);
-                            }
-                        }
-                        let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
-                    }
-                    EmuCommand::JumpSp => {
-                        paused = true;
-                        ignore_breakpoints = false;
-                        ignore_once_breakpoint = None;
-                        watchpoints_suspended = false;
-                        animate = false;
-                        next_frame = Instant::now() + FRAME_TIME;
-                        temp_exec_break = None;
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                            let sp = gb.cpu.sp;
-                            let lo = gb.mmu.read_byte(sp);
-                            let hi = gb.mmu.read_byte(sp.wrapping_add(1));
-                            let target = u16::from_le_bytes([lo, hi]);
-                            gb.cpu.sp = sp.wrapping_add(2);
-                            gb.cpu.pc = target;
-                            gb.cpu.halted = false;
-                            if let Ok(mut snap) = ui_snapshot.write() {
-                                *snap = UiSnapshot::from_gb(&mut gb, true);
-                            }
-                        }
-                        let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
-                    }
-                    EmuCommand::SetBreakpoints(list) => {
-                        breakpoints.clear();
-                        breakpoints.extend(list);
-                    }
-                    EmuCommand::SetWatchpoints(list) => {
-                        watchpoints = list;
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.watchpoints.set_watchpoints(watchpoints.clone());
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                        }
-                    }
-                    EmuCommand::SetSpeed(new_speed) => {
-                        speed = new_speed;
-                        next_frame = Instant::now() + FRAME_TIME;
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.apu.set_speed(speed.factor);
-                        }
-                    }
-                    EmuCommand::UpdateInput(state) => {
-                        if let Ok(mut gb) = gb.lock() {
-                            let mmu = &mut gb.mmu;
-                            let if_reg = &mut mmu.if_reg;
-                            mmu.input.update_state(state, if_reg);
-                        }
-                    }
-                    EmuCommand::SetSerialPeripheral(peripheral) => {
-                        if let Ok(mut gb) = gb.lock() {
-                            apply_serial_peripheral(
-                                &mut gb,
-                                &mobile,
-                                peripheral,
-                                mobile_diag,
-                                &mut serial_peripheral,
-                                &mut mobile_active,
-                                &mut mobile_time_accum_ns,
-                            );
-                        }
-                    }
-                    EmuCommand::UpdateLoadConfig(new_cfg) => {
-                        load_config = new_cfg;
-                    }
-                    EmuCommand::Shutdown => {
-                        if let Ok(mut gb) = gb.lock() {
-                            gb.mmu.save_cart_ram();
-                        }
-                        if let Some(mobile) = mobile.as_ref()
-                            && let Ok(mut adapter) = mobile.lock()
-                        {
-                            let _ = adapter.stop();
-                        }
-                        return;
-                    }
-                },
-                UiToEmu::Action(action) => {
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                EmuCommand::SetPaused(p) => {
+                    paused = p;
+                    next_frame = Instant::now() + FRAME_TIME;
+                }
+                EmuCommand::SetSpeed(s) => {
+                    speed = s;
+                }
+                EmuCommand::UpdateInput(input) => {
                     if let Ok(mut gb) = gb.lock() {
-                        apply_ui_action(action, &mut gb, &mut audio_stream, speed, &load_config);
-                        // GameBoy::reset rebuilds the MMU (including Serial), so restore the
-                        // currently selected serial peripheral after any reset/load.
-                        apply_serial_peripheral(
-                            &mut gb,
-                            &mobile,
-                            serial_peripheral,
-                            mobile_diag,
-                            &mut serial_peripheral,
-                            &mut mobile_active,
-                            &mut mobile_time_accum_ns,
-                        );
-                        gb.mmu.watchpoints.set_watchpoints(watchpoints.clone());
-                        gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                        gb.mmu.ppu.clear_frame_flag();
-                        frame_count = 0;
-                        next_frame = Instant::now() + FRAME_TIME;
+                        gb.mmu.input.set_state(input);
                     }
+                }
+                EmuCommand::Shutdown => {
+                    return;
                 }
             }
         }
 
         if paused {
-            if step_budget == 0 {
-                thread::sleep(Duration::from_millis(1));
-                continue;
-            }
-
-            let want_guaranteed = pending_debug_ack.is_some() && step_budget == 1;
-
-            let mut step_watch_hit: Option<vibe_emu_core::watchpoints::WatchpointHit> = None;
-
-            if let Ok(mut gb) = gb.lock() {
-                let (cpu, mmu) = {
-                    let GameBoy { cpu, mmu, .. } = &mut *gb;
-                    (cpu, mmu)
-                };
-
-                let pre_pc = cpu.pc;
-                let pre_exec_hit = if !watchpoints_suspended {
-                    watchpoints.iter().find(|wp| {
-                        wp.enabled
-                            && wp.on_execute
-                            && wp.matches_addr(pre_pc)
-                            && wp.matches_value(None)
-                    })
-                } else {
-                    None
-                };
-
-                let pre_fallthrough = {
-                    let was = mmu.watchpoints.suspended();
-                    if !was {
-                        mmu.watchpoints.set_suspended(true);
-                    }
-                    let opcode = mmu.read_byte(pre_pc);
-                    if !was {
-                        mmu.watchpoints.set_suspended(false);
-                    }
-                    let len = ui::code_data::sm83_instr_len(opcode) as u16;
-                    pre_pc.wrapping_add(len)
-                };
-
-                let romx_bank = mmu.cart.as_ref().map(|c| c.current_rom_bank()).unwrap_or(1);
-                let bank = romx_bank.min(0xFF) as u8;
-                let was = mmu.watchpoints.suspended();
-                if !was {
-                    mmu.watchpoints.set_suspended(true);
-                }
-                note_execute_pc(
-                    pre_pc,
-                    bank,
-                    mmu,
-                    &mut exec_seen_rom0,
-                    &mut exec_seen_romx,
-                    &mut pending_exec_trace,
-                );
-                if !was {
-                    mmu.watchpoints.set_suspended(false);
-                }
-                cpu.step(mmu);
-
-                if let Some(hit) = mmu.watchpoints.take_hit() {
-                    step_watch_hit = Some(hit);
-                } else if !watchpoints_suspended && cpu.pc != pre_fallthrough {
-                    let dest = cpu.pc;
-                    if let Some(wp) = watchpoints.iter().find(|wp| {
-                        wp.enabled && wp.on_jump && wp.matches_addr(dest) && wp.matches_value(None)
-                    }) {
-                        step_watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
-                            id: wp.id,
-                            trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Jump,
-                            addr: dest,
-                            value: None,
-                            pc: Some(pre_pc),
-                        });
-                    }
-                } else if let Some(wp) = pre_exec_hit {
-                    step_watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
-                        id: wp.id,
-                        trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Execute,
-                        addr: pre_pc,
-                        value: None,
-                        pc: Some(pre_pc),
-                    });
-                }
-
-                if want_guaranteed {
-                    if let Ok(mut snap) = ui_snapshot.write() {
-                        *snap = UiSnapshot::from_gb(&mut gb, true);
-                    }
-                } else if let Ok(mut snap) = ui_snapshot.try_write() {
-                    *snap = UiSnapshot::from_gb(&mut gb, true);
-                }
-            }
-
-            step_budget = step_budget.saturating_sub(1);
-
-            flush_exec_trace(&mut pending_exec_trace);
-
-            if want_guaranteed && let Some(cmd_id) = pending_debug_ack.take() {
-                let _ = wake_proxy.send_event(UserEvent::DebuggerAck { cmd_id });
-            }
-            if let Some(hit) = step_watch_hit {
-                let _ = wake_proxy.send_event(UserEvent::DebuggerWatchpoint { hit });
-            }
-            let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
+            std::thread::sleep(Duration::from_millis(10));
             continue;
         }
 
-        let frame_start = Instant::now();
-        let mut frame_buf: Option<Vec<u32>> = None;
-        let mut serial = None;
-
-        if let Ok(mut gb) = gb.lock() {
-            gb.mmu.apu.set_speed(speed.factor);
-
-            let mut break_hit: Option<(u8, u16)> = None;
-            let mut watch_hit: Option<vibe_emu_core::watchpoints::WatchpointHit> = None;
-            let mut yield_for_messages = false;
-            let mut pause_wake_needed = false;
-            let mut debugger_wake_needed = false;
-            let mut shutdown_requested = false;
-            let mut deferred: Vec<UiToEmu> = Vec::new();
-
-            {
-                let (cpu, mmu) = {
-                    let GameBoy { cpu, mmu, .. } = &mut *gb;
-                    (cpu, mmu)
-                };
-
-                if temp_exec_break.is_some() || (!ignore_breakpoints && !breakpoints.is_empty()) {
-                    let key = exec_break_key_for_pc(cpu.pc, mmu);
-                    let ignored_once = ignore_once_breakpoint == Some(key);
-                    if ignored_once {
-                        ignore_once_breakpoint = None;
-                    }
-
-                    let hit = temp_exec_break == Some(key)
-                        || (!ignored_once && !ignore_breakpoints && breakpoints.contains(&key));
-                    if hit {
-                        temp_exec_break = None;
-                        break_hit = Some((key.bank, key.addr));
-                    }
-                }
-
-                if !watchpoints_suspended {
-                    for wp in &watchpoints {
-                        if !wp.enabled || !wp.on_execute || !wp.matches_addr(cpu.pc) {
-                            continue;
-                        }
-                        if !wp.matches_value(None) {
-                            continue;
-                        }
-                        watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
-                            id: wp.id,
-                            trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Execute,
-                            addr: cpu.pc,
-                            value: None,
-                            pc: Some(cpu.pc),
-                        });
-                        break;
-                    }
-                }
-
-                let mut instrs_since_poll: u32 = 0;
-                while !mmu.ppu.frame_ready() {
-                    if yield_for_messages || break_hit.is_some() || watch_hit.is_some() {
-                        break;
-                    }
-
-                    if temp_exec_break.is_some() || (!ignore_breakpoints && !breakpoints.is_empty())
-                    {
-                        let key = exec_break_key_for_pc(cpu.pc, mmu);
-                        if temp_exec_break == Some(key) {
-                            temp_exec_break = None;
-                            break_hit = Some((key.bank, key.addr));
-                            break;
-                        }
-
-                        if ignore_once_breakpoint == Some(key) {
-                            ignore_once_breakpoint = None;
-                        } else if !ignore_breakpoints && breakpoints.contains(&key) {
-                            temp_exec_break = None;
-                            break_hit = Some((key.bank, key.addr));
-                            break;
-                        }
-                    }
-
-                    if !watchpoints_suspended {
-                        for wp in &watchpoints {
-                            if !wp.enabled || !wp.on_execute || !wp.matches_addr(cpu.pc) {
-                                continue;
-                            }
-                            if !wp.matches_value(None) {
-                                continue;
-                            }
-                            watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
-                                id: wp.id,
-                                trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Execute,
-                                addr: cpu.pc,
-                                value: None,
-                                pc: Some(cpu.pc),
-                            });
-                            break;
-                        }
-                        if watch_hit.is_some() {
-                            break;
-                        }
-                    }
-
-                    let pre_pc = cpu.pc;
-                    let pre_fallthrough = {
-                        let was = mmu.watchpoints.suspended();
-                        if !was {
-                            mmu.watchpoints.set_suspended(true);
-                        }
-                        let opcode = mmu.read_byte(pre_pc);
-                        if !was {
-                            mmu.watchpoints.set_suspended(false);
-                        }
-                        let len = ui::code_data::sm83_instr_len(opcode) as u16;
-                        pre_pc.wrapping_add(len)
-                    };
-
-                    let romx_bank = mmu.cart.as_ref().map(|c| c.current_rom_bank()).unwrap_or(1);
-                    let bank = romx_bank.min(0xFF) as u8;
-                    let was = mmu.watchpoints.suspended();
-                    if !was {
-                        mmu.watchpoints.set_suspended(true);
-                    }
-                    note_execute_pc(
-                        pre_pc,
-                        bank,
-                        mmu,
-                        &mut exec_seen_rom0,
-                        &mut exec_seen_romx,
-                        &mut pending_exec_trace,
-                    );
-                    if !was {
-                        mmu.watchpoints.set_suspended(false);
-                    }
-
-                    cpu.step(mmu);
-
-                    if let Some(hit) = mmu.watchpoints.take_hit() {
-                        watch_hit = Some(hit);
-                        break;
-                    }
-
-                    if !watchpoints_suspended && cpu.pc != pre_fallthrough {
-                        let dest = cpu.pc;
-                        for wp in &watchpoints {
-                            if !wp.enabled || !wp.on_jump || !wp.matches_addr(dest) {
-                                continue;
-                            }
-                            if !wp.matches_value(None) {
-                                continue;
-                            }
-                            watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
-                                id: wp.id,
-                                trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Jump,
-                                addr: dest,
-                                value: None,
-                                pc: Some(pre_pc),
-                            });
-                            break;
-                        }
-                        if watch_hit.is_some() {
-                            break;
-                        }
-                    }
-
-                    instrs_since_poll = instrs_since_poll.wrapping_add(1);
-                    if instrs_since_poll >= 256 {
-                        instrs_since_poll = 0;
-
-                        while let Ok(msg) = rx.try_recv() {
-                            match msg {
-                                UiToEmu::Command(cmd) => match cmd {
-                                    EmuCommand::SetPaused(p) => {
-                                        paused = p;
-                                        next_frame = Instant::now() + FRAME_TIME;
-                                        ignore_breakpoints = false;
-                                        ignore_once_breakpoint = None;
-                                        watchpoints_suspended = false;
-                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
-                                        animate = false;
-                                        if paused {
-                                            temp_exec_break = None;
-                                            pause_wake_needed = true;
-                                            yield_for_messages = true;
-                                            break;
-                                        }
-                                    }
-                                    EmuCommand::Resume {
-                                        ignore_breakpoints: ignore,
-                                    } => {
-                                        paused = false;
-                                        ignore_breakpoints = ignore;
-                                        watchpoints_suspended = ignore;
-                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
-                                        next_frame = Instant::now() + FRAME_TIME;
-                                        ignore_once_breakpoint = None;
-                                    }
-                                    EmuCommand::ResumeIgnoreOnce { breakpoint } => {
-                                        paused = false;
-                                        ignore_breakpoints = false;
-                                        ignore_once_breakpoint = Some(breakpoint);
-                                        watchpoints_suspended = false;
-                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
-                                        next_frame = Instant::now() + FRAME_TIME;
-                                    }
-                                    EmuCommand::SetAnimate(value) => {
-                                        animate = value;
-                                    }
-                                    EmuCommand::Step {
-                                        count,
-                                        cmd_id,
-                                        guarantee_snapshot,
-                                    } => {
-                                        step_budget = step_budget.saturating_add(count);
-                                        paused = true;
-                                        ignore_breakpoints = false;
-                                        watchpoints_suspended = false;
-                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
-                                        next_frame = Instant::now() + FRAME_TIME;
-                                        ignore_once_breakpoint = None;
-                                        animate = false;
-                                        temp_exec_break = None;
-                                        if guarantee_snapshot {
-                                            pending_debug_ack = cmd_id;
-                                        }
-                                        pause_wake_needed = true;
-                                        yield_for_messages = true;
-                                        break;
-                                    }
-                                    EmuCommand::RunTo {
-                                        target,
-                                        ignore_breakpoints: ignore,
-                                    } => {
-                                        temp_exec_break = Some(target);
-                                        paused = false;
-                                        ignore_breakpoints = ignore;
-                                        watchpoints_suspended = ignore;
-                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
-                                        ignore_once_breakpoint = None;
-                                        next_frame = Instant::now() + FRAME_TIME;
-                                    }
-                                    cmd @ (EmuCommand::JumpTo { .. }
-                                    | EmuCommand::CallCursor { .. }
-                                    | EmuCommand::JumpSp) => {
-                                        deferred.push(UiToEmu::Command(cmd));
-                                        pause_wake_needed = true;
-                                        yield_for_messages = true;
-                                        break;
-                                    }
-                                    EmuCommand::SetBreakpoints(list) => {
-                                        breakpoints.clear();
-                                        breakpoints.extend(list);
-                                    }
-                                    EmuCommand::SetWatchpoints(list) => {
-                                        watchpoints = list;
-                                        mmu.watchpoints.set_watchpoints(watchpoints.clone());
-                                        mmu.watchpoints.set_suspended(watchpoints_suspended);
-                                    }
-                                    EmuCommand::SetSpeed(new_speed) => {
-                                        speed = new_speed;
-                                        next_frame = Instant::now() + FRAME_TIME;
-                                        mmu.apu.set_speed(speed.factor);
-                                    }
-                                    EmuCommand::UpdateInput(state) => {
-                                        let if_reg = &mut mmu.if_reg;
-                                        mmu.input.update_state(state, if_reg);
-                                    }
-                                    EmuCommand::UpdateLoadConfig(new_cfg) => {
-                                        load_config = new_cfg;
-                                    }
-                                    EmuCommand::SetSerialPeripheral(peripheral) => {
-                                        deferred.push(UiToEmu::Command(
-                                            EmuCommand::SetSerialPeripheral(peripheral),
-                                        ));
-                                        yield_for_messages = true;
-                                        break;
-                                    }
-                                    EmuCommand::Shutdown => {
-                                        shutdown_requested = true;
-                                        yield_for_messages = true;
-                                        break;
-                                    }
-                                },
-                                UiToEmu::Action(action) => {
-                                    deferred.push(UiToEmu::Action(action));
-                                    yield_for_messages = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if animate && !yield_for_messages {
-                            debugger_wake_needed = true;
-                            yield_for_messages = true;
-                            break;
-                        }
-                    }
-                }
-
-                if !yield_for_messages
-                    && break_hit.is_none()
-                    && watch_hit.is_none()
-                    && (temp_exec_break.is_some()
-                        || (!ignore_breakpoints && !breakpoints.is_empty()))
-                {
-                    let key = exec_break_key_for_pc(cpu.pc, mmu);
-                    let ignored_once = ignore_once_breakpoint == Some(key);
-                    if ignored_once {
-                        ignore_once_breakpoint = None;
-                    }
-
-                    let hit = temp_exec_break == Some(key)
-                        || (!ignored_once && !ignore_breakpoints && breakpoints.contains(&key));
-                    if hit {
-                        temp_exec_break = None;
-                        break_hit = Some((key.bank, key.addr));
-                    }
-                }
-
-                if !yield_for_messages
-                    && break_hit.is_none()
-                    && watch_hit.is_none()
-                    && !watchpoints_suspended
-                {
-                    for wp in &watchpoints {
-                        if !wp.enabled || !wp.on_execute || !wp.matches_addr(cpu.pc) {
-                            continue;
-                        }
-                        if !wp.matches_value(None) {
-                            continue;
-                        }
-                        watch_hit = Some(vibe_emu_core::watchpoints::WatchpointHit {
-                            id: wp.id,
-                            trigger: vibe_emu_core::watchpoints::WatchpointTrigger::Execute,
-                            addr: cpu.pc,
-                            value: None,
-                            pc: Some(cpu.pc),
-                        });
-                        break;
-                    }
-                }
-
-                if break_hit.is_some() || watch_hit.is_some() {
-                    // Breakpoint hit; do not attempt to complete or present a video frame.
-                    // We'll publish a snapshot after we drop the CPU/MMU borrows.
-                } else if yield_for_messages {
-                    // Defer any actions until we drop the CPU/MMU borrows.
-                } else {
-                    // Avoid allocating every frame. If no free buffers are
-                    // available, drop this frame rather than allocating.
-                    if let Ok(mut buf) = frame_pool_rx.try_recv() {
-                        // Core framebuffer is 0x00RRGGBB; convert to a u32 layout whose
-                        // *in-memory bytes* match Pixels RGBA8 on little-endian: [R,G,B,A].
-                        for (dst, &src) in buf.iter_mut().zip(mmu.ppu.framebuffer().iter()) {
-                            // 0x00RRGGBB -> 0xFFBBGGRR (bytes RR GG BB FF)
-                            *dst = 0xFF00_0000
-                                | ((src & 0x0000_00FF) << 16)
-                                | (src & 0x0000_FF00)
-                                | ((src & 0x00FF_0000) >> 16);
-                        }
-                        frame_buf = Some(buf);
-                    }
-                    mmu.ppu.clear_frame_flag();
-                }
-            }
-
-            if shutdown_requested {
-                gb.mmu.save_cart_ram();
-                if let Some(mobile) = mobile.as_ref()
-                    && let Ok(mut adapter) = mobile.lock()
-                {
-                    let _ = adapter.stop();
-                }
-                return;
-            }
-
-            if yield_for_messages {
-                for msg in deferred {
-                    match msg {
-                        UiToEmu::Command(EmuCommand::SetSerialPeripheral(peripheral)) => {
-                            apply_serial_peripheral(
-                                &mut gb,
-                                &mobile,
-                                peripheral,
-                                mobile_diag,
-                                &mut serial_peripheral,
-                                &mut mobile_active,
-                                &mut mobile_time_accum_ns,
-                            );
-                        }
-                        UiToEmu::Action(action) => {
-                            apply_ui_action(
-                                action,
-                                &mut gb,
-                                &mut audio_stream,
-                                speed,
-                                &load_config,
-                            );
-                            apply_serial_peripheral(
-                                &mut gb,
-                                &mobile,
-                                serial_peripheral,
-                                mobile_diag,
-                                &mut serial_peripheral,
-                                &mut mobile_active,
-                                &mut mobile_time_accum_ns,
-                            );
-                            gb.mmu.watchpoints.set_watchpoints(watchpoints.clone());
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                            gb.mmu.ppu.clear_frame_flag();
-                            frame_count = 0;
-                            next_frame = Instant::now() + FRAME_TIME;
-                        }
-                        UiToEmu::Command(EmuCommand::JumpTo { addr }) => {
-                            paused = true;
-                            ignore_breakpoints = false;
-                            ignore_once_breakpoint = None;
-                            watchpoints_suspended = false;
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                            animate = false;
-                            next_frame = Instant::now() + FRAME_TIME;
-                            temp_exec_break = None;
-                            gb.cpu.pc = addr;
-                            gb.cpu.halted = false;
-                        }
-                        UiToEmu::Command(EmuCommand::CallCursor { addr }) => {
-                            paused = true;
-                            ignore_breakpoints = false;
-                            ignore_once_breakpoint = None;
-                            watchpoints_suspended = false;
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                            animate = false;
-                            next_frame = Instant::now() + FRAME_TIME;
-                            temp_exec_break = None;
-
-                            let ret = gb.cpu.pc;
-                            let sp_hi = gb.cpu.sp.wrapping_sub(1);
-                            let sp_lo = gb.cpu.sp.wrapping_sub(2);
-                            gb.mmu.write_byte(sp_hi, (ret >> 8) as u8);
-                            gb.mmu.write_byte(sp_lo, (ret & 0xFF) as u8);
-                            gb.cpu.sp = sp_lo;
-                            gb.cpu.pc = addr;
-                            gb.cpu.halted = false;
-                        }
-                        UiToEmu::Command(EmuCommand::JumpSp) => {
-                            paused = true;
-                            ignore_breakpoints = false;
-                            ignore_once_breakpoint = None;
-                            watchpoints_suspended = false;
-                            gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                            animate = false;
-                            next_frame = Instant::now() + FRAME_TIME;
-                            temp_exec_break = None;
-
-                            let sp = gb.cpu.sp;
-                            let lo = gb.mmu.read_byte(sp);
-                            let hi = gb.mmu.read_byte(sp.wrapping_add(1));
-                            let target = u16::from_le_bytes([lo, hi]);
-                            gb.cpu.sp = sp.wrapping_add(2);
-                            gb.cpu.pc = target;
-                            gb.cpu.halted = false;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if pause_wake_needed {
-                    if let Ok(mut snap) = ui_snapshot.write() {
-                        *snap = UiSnapshot::from_gb(&mut gb, true);
-                    }
-                    let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
-                } else if debugger_wake_needed {
-                    if let Ok(mut snap) = ui_snapshot.try_write() {
-                        *snap = UiSnapshot::from_gb(&mut gb, false);
-                    }
-                    let _ = wake_proxy.send_event(UserEvent::DebuggerWake);
-                }
-
-                continue;
-            }
-
-            if let Some((bank, pc)) = break_hit {
-                paused = true;
-                ignore_breakpoints = false;
-                ignore_once_breakpoint = None;
-                watchpoints_suspended = false;
-                gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                animate = false;
-                temp_exec_break = None;
-                if let Ok(mut snap) = ui_snapshot.write() {
-                    *snap = UiSnapshot::from_gb(&mut gb, true);
-                }
-                let _ = wake_proxy.send_event(UserEvent::DebuggerBreak { bank, addr: pc });
-                continue;
-            }
-
-            if let Some(hit) = watch_hit {
-                paused = true;
-                ignore_breakpoints = false;
-                ignore_once_breakpoint = None;
-                watchpoints_suspended = false;
-                gb.mmu.watchpoints.set_suspended(watchpoints_suspended);
-                animate = false;
-                temp_exec_break = None;
-                if let Ok(mut snap) = ui_snapshot.write() {
-                    *snap = UiSnapshot::from_gb(&mut gb, true);
-                }
-                let _ = wake_proxy.send_event(UserEvent::DebuggerWatchpoint { hit });
-                continue;
-            }
-
-            // Publish a UI snapshot while we already hold the emulation lock.
-            // Use try_write to avoid stalling emulation if the UI is mid-draw.
-            if let Ok(mut snap) = ui_snapshot.try_write() {
-                *snap = UiSnapshot::from_gb(&mut gb, paused);
-            }
-
-            flush_exec_trace(&mut pending_exec_trace);
-
-            if !speed.fast {
-                let elapsed = frame_start.elapsed();
-                let warn_threshold = FRAME_TIME + FRAME_TIME / 2;
-                if elapsed > warn_threshold {
-                    warn!(
-                        "Frame emulation exceeded budget: {:?} vs {:?} (audio queue {} / {})",
-                        elapsed,
-                        FRAME_TIME,
-                        gb.mmu.apu.queued_frames(),
-                        gb.mmu.apu.max_queue_capacity()
-                    );
-                }
-            }
-
-            if debug && frame_count.is_multiple_of(60) {
-                let out = gb.mmu.take_serial();
-                if !out.is_empty() {
-                    serial = Some(out);
-                }
-                debug!(target: "vibe_emu_ui::cpu", "{}", gb.cpu.debug_state());
-            }
-        }
-
-        if let Some(frame) = frame_buf {
-            // If the UI is behind, drop frames instead of queueing unbounded.
-            let evt = EmuEvent::Frame {
-                frame,
-                frame_index: frame_count,
-            };
-
-            match frame_tx.send_timeout(evt, Duration::ZERO) {
-                Ok(()) => {
-                    let _ = wake_proxy.send_event(UserEvent::EmuWake);
-                }
-                Err(
-                    cb::SendTimeoutError::Timeout(evt) | cb::SendTimeoutError::Disconnected(evt),
-                ) => {
-                    // Return buffer to the pool if we couldn't send.
-                    if let EmuEvent::Frame { frame, .. } = evt {
-                        let _ = frame_pool_tx.send_timeout(frame, Duration::ZERO);
-                    }
-                }
-            }
-        }
-
-        if let Some(serial) = serial {
-            let _ = serial_tx.send_timeout(
-                EmuEvent::Serial {
-                    data: serial,
-                    frame_index: frame_count,
-                },
-                Duration::ZERO,
-            );
-            let _ = wake_proxy.send_event(UserEvent::EmuWake);
-        }
-
-        frame_count = frame_count.wrapping_add(1);
-
-        if mobile_active && let Some(mobile) = mobile.as_ref() {
-            // Advance emulated time by one frame and drive libmobile.
-            mobile_time_accum_ns += FRAME_TIME.as_nanos();
-            let delta_ms = (mobile_time_accum_ns / 1_000_000) as u32;
-            mobile_time_accum_ns %= 1_000_000;
-
-            if delta_ms != 0
-                && let Ok(mut adapter) = mobile.lock()
-            {
-                let _ = adapter.poll(delta_ms);
-            }
-        }
+        let frame_duration = Duration::from_secs_f64(1.0 / (GB_FPS * speed.factor as f64));
 
         if !speed.fast {
             let now = Instant::now();
             if now < next_frame {
-                thread::sleep(next_frame - now);
+                std::thread::sleep(next_frame - now);
             }
-            next_frame += FRAME_TIME;
+
+            // Advance next_frame by the frame duration, keeping a fixed schedule.
+            // Allow catching up from small delays (up to ~3 frames behind) naturally,
+            // only reset if we fall too far behind to prevent runaway catch-up.
+            next_frame += frame_duration;
+            let max_behind = frame_duration * 3;
+            if next_frame + max_behind < Instant::now() {
+                next_frame = Instant::now();
+            }
         } else {
-            next_frame = Instant::now();
-        }
-    }
-}
-
-fn draw_vram(
-    viewer: Option<&mut ui::vram_viewer::VramViewerWindow>,
-    renderer: &mut imgui_wgpu::Renderer,
-    pixels: &mut Pixels,
-    snapshot: &UiSnapshot,
-    ui: &imgui::Ui,
-) {
-    let _ = pixels.frame_mut();
-    if let Some(viewer) = viewer {
-        viewer.ui(ui, &snapshot.ppu, renderer, pixels.device(), pixels.queue());
-    } else {
-        ui.text("VRAM viewer not initialized");
-    }
-}
-
-fn draw_game_screen(pixels: &mut Pixels, frame: &[u32]) {
-    // Frames are pre-converted to a u32 layout that matches Pixels' RGBA8
-    // byte buffer on little-endian platforms: 0xAABBGGRR in u32.
-    let dst = pixels.frame_mut();
-    if dst.len() == frame.len() * 4 {
-        // SAFETY: `frame` is a `[u32]` stored contiguously; we only view its bytes.
-        // The emulator thread writes pixels as 0xAABBGGRR so little-endian memory
-        // order matches RGBA8 ([R, G, B, A]) expected by Pixels.
-        let src =
-            unsafe { std::slice::from_raw_parts(frame.as_ptr().cast::<u8>(), frame.len() * 4) };
-        dst.copy_from_slice(src);
-    }
-}
-
-fn build_ui(state: &mut UiState, cfg: &mut UiConfig, ui: &imgui::Ui, mobile_available: bool) {
-    let mut any_menu_open = false;
-
-    // Top menu bar (replaces the old right-click context menu).
-    if let Some(_bar) = ui.begin_main_menu_bar() {
-        if let Some(_menu) = ui.begin_menu("File") {
-            any_menu_open = true;
-            if ui.menu_item("Load ROM...")
-                && let Some(path) = FileDialog::new()
-                    .add_filter("Game Boy ROM", &["gb", "gbc"])
-                    .pick_file()
-            {
-                state.current_rom_path = Some(path.clone());
-                state.debugger.load_symbols_for_rom_path(Some(&path));
-                state.pending_action = Some(UiAction::LoadPath(path));
-            }
-            if ui.menu_item("Reset") {
-                state.pending_action = Some(UiAction::Reset);
-            }
-            if ui.menu_item("Exit") {
-                state.pending_exit = true;
-            }
+            // Fast forward: run as fast as possible, reset timing when we exit fast mode
+            next_frame = Instant::now() + frame_duration;
         }
 
-        if let Some(_menu) = ui.begin_menu("Emulation") {
-            any_menu_open = true;
+        let mut frame_buf = frame_pool_rx
+            .try_recv()
+            .unwrap_or_else(|_| vec![0u32; 160 * 144]);
 
-            let pause_label = if state.paused { "Resume" } else { "Pause" };
-            if ui.menu_item(pause_label) {
-                let new_paused = !state.paused;
-                state.paused = new_paused;
-                state.pending_pause = Some(new_paused);
-                // Manual pause overrides menu auto-resume.
-                state.menu_resume_armed = false;
+        if let Ok(mut gb) = gb.lock() {
+            let GameBoy { cpu, mmu, .. } = &mut *gb;
+            mmu.ppu.clear_frame_flag();
+            while !mmu.ppu.frame_ready() {
+                cpu.step(mmu);
             }
+            frame_buf.copy_from_slice(mmu.ppu.framebuffer());
+        }
 
-            if let Some(_serial_menu) = ui.begin_menu("Serial Peripheral") {
-                any_menu_open = true;
-                if mobile_available {
-                    let none_selected = state.serial_peripheral == SerialPeripheral::None;
-                    if ui.menu_item_config("None").selected(none_selected).build() && !none_selected
-                    {
-                        state.serial_peripheral = SerialPeripheral::None;
-                        state.pending_serial_peripheral = Some(SerialPeripheral::None);
+        frame_count += 1;
+        let _ = frame_tx.try_send(EmuEvent::Frame {
+            frame: frame_buf,
+            frame_index: frame_count,
+        });
+    }
+}
+
+struct VibeEmuApp {
+    gb: Arc<Mutex<GameBoy>>,
+    emu_tx: mpsc::Sender<EmuCommand>,
+    frame_rx: cb::Receiver<EmuEvent>,
+    frame_pool_tx: cb::Sender<Vec<u32>>,
+    _audio_stream: Option<cpal::Stream>,
+
+    framebuffer: Vec<u32>,
+    texture: Option<egui::TextureHandle>,
+    paused: bool,
+    current_rom_path: Option<std::path::PathBuf>,
+    keybinds: KeyBindings,
+    keybinds_path: std::path::PathBuf,
+    joypad_state: u8,
+    fast_forward: bool,
+
+    show_debugger: bool,
+    show_vram_viewer: bool,
+    show_options: bool,
+
+    // Options window state
+    emulation_mode: EmulationMode,
+    dmg_bootrom_path: String,
+    cgb_bootrom_path: String,
+    selected_window_scale: usize,
+    rebinding: Option<RebindTarget>,
+    options_tab: OptionsTab,
+
+    // Debugger state
+    debugger_snapshot: Option<UiSnapshot>,
+    debugger_state: DebuggerState,
+    add_breakpoint_input: String,
+    goto_disasm_input: String,
+
+    // VRAM Viewer state
+    vram_tab: VramTab,
+    vram_viewer: VramViewerState,
+    cached_ppu_snapshot: Option<ui::snapshot::PpuSnapshot>,
+
+    // Watchpoints window state
+    show_watchpoints: bool,
+    watchpoints: Vec<vibe_emu_core::watchpoints::Watchpoint>,
+    next_watchpoint_id: u32,
+    wp_edit_start_addr: String,
+    wp_edit_end_addr: String,
+    wp_edit_on_read: bool,
+    wp_edit_on_write: bool,
+
+    // Mobile Adapter state
+    mobile_enabled: bool,
+    mobile_dns1: String,
+    mobile_dns2: String,
+    mobile_relay: String,
+
+    // Status bar state
+    last_fps_update: std::time::Instant,
+    frame_count_since_update: u64,
+    current_fps: f64,
+}
+
+impl VibeEmuApp {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        _cc: &eframe::CreationContext<'_>,
+        gb: Arc<Mutex<GameBoy>>,
+        emu_tx: mpsc::Sender<EmuCommand>,
+        frame_rx: cb::Receiver<EmuEvent>,
+        frame_pool_tx: cb::Sender<Vec<u32>>,
+        rom_path: Option<std::path::PathBuf>,
+        keybinds: KeyBindings,
+        keybinds_path: std::path::PathBuf,
+        emulation_mode: EmulationMode,
+    ) -> Self {
+        let paused = rom_path.is_none();
+        if paused {
+            let _ = emu_tx.send(EmuCommand::SetPaused(true));
+        }
+
+        let audio_stream = if let Ok(mut gb_lock) = gb.lock() {
+            audio::start_stream(&mut gb_lock.mmu.apu, true)
+        } else {
+            None
+        };
+
+        let mut app = Self {
+            gb,
+            emu_tx,
+            frame_rx,
+            frame_pool_tx,
+            _audio_stream: audio_stream,
+            framebuffer: vec![0u32; 160 * 144],
+            texture: None,
+            paused,
+            current_rom_path: rom_path,
+            keybinds,
+            keybinds_path,
+            joypad_state: 0xFF,
+            fast_forward: false,
+            show_debugger: false,
+            show_vram_viewer: false,
+            show_options: false,
+            emulation_mode,
+            dmg_bootrom_path: String::new(),
+            cgb_bootrom_path: String::new(),
+            selected_window_scale: (DEFAULT_WINDOW_SCALE - 1) as usize,
+            rebinding: None,
+            options_tab: OptionsTab::default(),
+            debugger_snapshot: None,
+            debugger_state: DebuggerState::default(),
+            add_breakpoint_input: String::new(),
+            goto_disasm_input: String::new(),
+            vram_tab: VramTab::default(),
+            vram_viewer: VramViewerState::default(),
+            cached_ppu_snapshot: None,
+            show_watchpoints: false,
+            watchpoints: Vec::new(),
+            next_watchpoint_id: 1,
+            wp_edit_start_addr: String::new(),
+            wp_edit_end_addr: String::new(),
+            wp_edit_on_read: true,
+            wp_edit_on_write: true,
+            mobile_enabled: false,
+            mobile_dns1: String::new(),
+            mobile_dns2: String::new(),
+            mobile_relay: String::new(),
+            last_fps_update: std::time::Instant::now(),
+            frame_count_since_update: 0,
+            current_fps: 0.0,
+        };
+
+        // Load symbols for ROM if one was provided at startup
+        if let Some(ref path) = app.current_rom_path {
+            app.debugger_state.load_symbols_for_rom_path(Some(path));
+        }
+
+        app
+    }
+
+    fn handle_input(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+
+        let mut new_state = 0xFFu8;
+        let mut new_fast_forward = false;
+
+        ctx.input(|i| {
+            for (action, key) in self.keybinds.iter() {
+                if i.key_down(*key) {
+                    match action.as_str() {
+                        "right" => new_state &= !0x01,
+                        "left" => new_state &= !0x02,
+                        "up" => new_state &= !0x04,
+                        "down" => new_state &= !0x08,
+                        "a" => new_state &= !0x10,
+                        "b" => new_state &= !0x20,
+                        "select" => new_state &= !0x40,
+                        "start" => new_state &= !0x80,
+                        _ => {}
                     }
+                }
+            }
 
-                    let mob_selected = state.serial_peripheral == SerialPeripheral::MobileAdapter;
+            new_fast_forward = i.key_down(self.keybinds.fast_forward_key());
+        });
+
+        if new_state != self.joypad_state {
+            self.joypad_state = new_state;
+            let _ = self.emu_tx.send(EmuCommand::UpdateInput(new_state));
+        }
+
+        if new_fast_forward != self.fast_forward {
+            self.fast_forward = new_fast_forward;
+            let _ = self.emu_tx.send(EmuCommand::SetSpeed(Speed {
+                factor: 1.0,
+                fast: self.fast_forward,
+            }));
+        }
+    }
+
+    fn poll_frames(&mut self) {
+        while let Ok(evt) = self.frame_rx.try_recv() {
+            let EmuEvent::Frame {
+                mut frame,
+                frame_index: _,
+            } = evt;
+            std::mem::swap(&mut self.framebuffer, &mut frame);
+            let _ = self.frame_pool_tx.try_send(frame);
+            self.frame_count_since_update += 1;
+        }
+
+        let elapsed = self.last_fps_update.elapsed();
+        if elapsed >= Duration::from_secs(1) {
+            let instant_fps = self.frame_count_since_update as f64 / elapsed.as_secs_f64();
+            // Exponential moving average for smoother display
+            self.current_fps = self.current_fps * 0.7 + instant_fps * 0.3;
+            self.frame_count_since_update = 0;
+            self.last_fps_update = std::time::Instant::now();
+        }
+    }
+
+    fn update_texture(&mut self, ctx: &egui::Context) {
+        let pixels: Vec<egui::Color32> = self
+            .framebuffer
+            .iter()
+            .map(|&rgba| {
+                let r = ((rgba >> 16) & 0xFF) as u8;
+                let g = ((rgba >> 8) & 0xFF) as u8;
+                let b = (rgba & 0xFF) as u8;
+                egui::Color32::from_rgb(r, g, b)
+            })
+            .collect();
+
+        let image = egui::ColorImage {
+            size: [160, 144],
+            pixels,
+        };
+
+        match &mut self.texture {
+            Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+            None => {
+                self.texture =
+                    Some(ctx.load_texture("gb_framebuffer", image, egui::TextureOptions::NEAREST));
+            }
+        }
+    }
+
+    fn load_rom(&mut self, path: std::path::PathBuf) {
+        match Cartridge::from_file(&path) {
+            Ok(cart) => {
+                let cgb_mode = match self.emulation_mode {
+                    EmulationMode::ForceDmg => false,
+                    EmulationMode::ForceCgb => true,
+                    EmulationMode::Auto => cart.cgb,
+                };
+                info!(
+                    "Loading ROM: {} (CGB header: {}, mode: {:?} → cgb_mode: {})",
+                    cart.title, cart.cgb, self.emulation_mode, cgb_mode
+                );
+                if let Ok(mut gb) = self.gb.lock() {
+                    gb.mmu.save_cart_ram();
+                    *gb = GameBoy::new_with_mode(cgb_mode);
+                    gb.mmu.load_cart(cart);
+                    self._audio_stream = audio::start_stream(&mut gb.mmu.apu, true);
+                }
+                self.current_rom_path = Some(path.clone());
+                self.debugger_state.load_symbols_for_rom_path(Some(&path));
+                self.paused = false;
+                let _ = self.emu_tx.send(EmuCommand::SetPaused(false));
+                info!("ROM loaded successfully");
+            }
+            Err(e) => {
+                error!("Failed to load ROM: {e}");
+            }
+        }
+    }
+}
+
+impl eframe::App for VibeEmuApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_input(ctx);
+        self.poll_frames();
+        self.update_texture(ctx);
+
+        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open ROM...").clicked() {
+                        if let Some(path) = FileDialog::new()
+                            .add_filter("Game Boy ROMs", &["gb", "gbc"])
+                            .pick_file()
+                        {
+                            self.load_rom(path);
+                        }
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Exit").clicked() {
+                        let _ = self.emu_tx.send(EmuCommand::Shutdown);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+
+                ui.menu_button("Emulation", |ui| {
                     if ui
-                        .menu_item_config("Mobile Adapter GB")
-                        .selected(mob_selected)
-                        .build()
-                        && !mob_selected
+                        .button(if self.paused { "Resume" } else { "Pause" })
+                        .clicked()
                     {
-                        state.serial_peripheral = SerialPeripheral::MobileAdapter;
-                        state.pending_serial_peripheral = Some(SerialPeripheral::MobileAdapter);
+                        self.paused = !self.paused;
+                        let _ = self.emu_tx.send(EmuCommand::SetPaused(self.paused));
+                        ui.close_menu();
                     }
+                    if ui.button("Reset").clicked() {
+                        if let Ok(mut gb) = self.gb.lock() {
+                            gb.reset();
+                            self._audio_stream = audio::start_stream(&mut gb.mmu.apu, true);
+                        }
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.menu_button("Mode", |ui| {
+                        if ui
+                            .radio_value(
+                                &mut self.emulation_mode,
+                                EmulationMode::Auto,
+                                "Auto (detect from ROM)",
+                            )
+                            .clicked()
+                        {
+                            ui.close_menu();
+                        }
+                        if ui
+                            .radio_value(
+                                &mut self.emulation_mode,
+                                EmulationMode::ForceDmg,
+                                "Force DMG",
+                            )
+                            .clicked()
+                        {
+                            ui.close_menu();
+                        }
+                        if ui
+                            .radio_value(
+                                &mut self.emulation_mode,
+                                EmulationMode::ForceCgb,
+                                "Force CGB",
+                            )
+                            .clicked()
+                        {
+                            ui.close_menu();
+                        }
+                    });
+                });
+
+                ui.menu_button("Debug", |ui| {
+                    if ui.button("Debugger").clicked() {
+                        self.show_debugger = !self.show_debugger;
+                        ui.close_menu();
+                    }
+                    if ui.button("VRAM Viewer").clicked() {
+                        self.show_vram_viewer = !self.show_vram_viewer;
+                        ui.close_menu();
+                    }
+                    if ui.button("Watchpoints").clicked() {
+                        self.show_watchpoints = !self.show_watchpoints;
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("Options", |ui| {
+                    if ui.button("Settings...").clicked() {
+                        self.show_options = !self.show_options;
+                        ui.close_menu();
+                    }
+                });
+            });
+        });
+
+        // Status bar at the bottom
+        egui::TopBottomPanel::bottom("status_bar")
+            .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(4.0))
+            .show(ctx, |ui| {
+                let total_width = ui.available_width();
+
+                ui.horizontal(|ui| {
+                    // Emulation status (left side, always visible)
+                    let status_text = if self.paused {
+                        ("⏸ Paused", egui::Color32::YELLOW)
+                    } else if self.fast_forward {
+                        ("⏩ Fast", egui::Color32::GREEN)
+                    } else {
+                        ("▶ Running", egui::Color32::GREEN)
+                    };
+                    ui.colored_label(status_text.1, status_text.0);
+
+                    // Calculate space needed for FPS (approximate)
+                    let fps_text = format!("{:.1} FPS", self.current_fps);
+                    let fps_reserve = 80.0;
+
+                    let remaining = total_width - ui.min_rect().width() - fps_reserve - 30.0;
+
+                    // ROM name only if there's enough room
+                    if remaining > 60.0
+                        && let Some(path) = &self.current_rom_path
+                        && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    {
+                        ui.separator();
+                        ui.add_sized(
+                            [remaining.min(200.0), ui.available_height()],
+                            egui::Label::new(name)
+                                .truncate()
+                                .wrap_mode(egui::TextWrapMode::Truncate),
+                        );
+                    }
+
+                    // FPS counter (right-aligned)
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(fps_text);
+                    });
+                });
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none())
+            .show(ctx, |ui| {
+                if let Some(tex) = &self.texture {
+                    let available = ui.available_size();
+                    let scale = (available.x / GB_WIDTH)
+                        .min(available.y / GB_HEIGHT)
+                        .floor()
+                        .max(1.0);
+                    let size = egui::vec2(GB_WIDTH * scale, GB_HEIGHT * scale);
+                    let offset = (available - size) / 2.0;
+                    let rect = egui::Rect::from_min_size(
+                        ui.min_rect().min + egui::vec2(offset.x, offset.y),
+                        size,
+                    );
+                    ui.put(rect, egui::Image::new(tex).fit_to_exact_size(size));
                 } else {
-                    state.serial_peripheral = SerialPeripheral::None;
-                    ui.text_disabled("Mobile Adapter GB (unavailable)");
+                    ui.centered_and_justified(|ui| {
+                        ui.label("No ROM loaded. Use File → Open ROM...");
+                    });
                 }
-            }
+            });
 
-            if let Some(_mode_menu) = ui.begin_menu("Hardware Mode") {
-                any_menu_open = true;
-
-                let auto_selected = cfg.emulation_mode == EmulationMode::Auto;
-                if ui.menu_item_config("Auto").selected(auto_selected).build() && !auto_selected {
-                    cfg.emulation_mode = EmulationMode::Auto;
-                    state.pending_load_config_update = true;
-                    state.pending_save_ui_config = true;
-                    if let Some(path) = state.current_rom_path.clone() {
-                        state.pending_action = Some(UiAction::LoadPath(path));
-                    }
-                }
-
-                let dmg_selected = cfg.emulation_mode == EmulationMode::ForceDmg;
-                if ui
-                    .menu_item_config("Force DMG")
-                    .selected(dmg_selected)
-                    .build()
-                    && !dmg_selected
-                {
-                    cfg.emulation_mode = EmulationMode::ForceDmg;
-                    state.pending_load_config_update = true;
-                    state.pending_save_ui_config = true;
-                    if let Some(path) = state.current_rom_path.clone() {
-                        state.pending_action = Some(UiAction::LoadPath(path));
-                    }
-                }
-
-                let cgb_selected = cfg.emulation_mode == EmulationMode::ForceCgb;
-                if ui
-                    .menu_item_config("Force CGB")
-                    .selected(cgb_selected)
-                    .build()
-                    && !cgb_selected
-                {
-                    cfg.emulation_mode = EmulationMode::ForceCgb;
-                    state.pending_load_config_update = true;
-                    state.pending_save_ui_config = true;
-                    if let Some(path) = state.current_rom_path.clone() {
-                        state.pending_action = Some(UiAction::LoadPath(path));
-                    }
-                }
-            }
+        if self.show_debugger {
+            self.draw_debugger_window(ctx);
         }
 
-        if let Some(_menu) = ui.begin_menu("Tools") {
-            any_menu_open = true;
-            if ui.menu_item("Debugger") {
-                state.spawn_debugger = true;
-                state.paused = true;
-                state.pending_pause = Some(true);
-                state.menu_resume_armed = false;
-            }
-            if ui.menu_item("VRAM Viewer") {
-                state.spawn_vram = true;
-                state.paused = true;
-                state.pending_pause = Some(true);
-                state.menu_resume_armed = false;
-            }
-            if ui.menu_item("Watchpoints") {
-                state.spawn_watchpoints = true;
-                state.paused = true;
-                state.pending_pause = Some(true);
-                state.menu_resume_armed = false;
-            }
+        if self.show_vram_viewer {
+            self.draw_vram_viewer_window(ctx);
         }
 
-        if let Some(_menu) = ui.begin_menu("Options") {
-            any_menu_open = true;
-            if ui.menu_item("Options...") {
-                state.spawn_options = true;
-            }
+        if self.show_watchpoints {
+            self.draw_watchpoints_window(ctx);
+        }
+
+        if self.show_options {
+            self.draw_options_window(ctx);
+        }
+
+        if !self.paused {
+            ctx.request_repaint();
         }
     }
 
-    // Auto-pause while the top menu is open, and resume when it closes.
-    if any_menu_open {
-        if !state.menu_pause_active {
-            state.menu_pause_active = true;
-            state.menu_resume_armed = !state.paused;
-            if !state.paused {
-                state.paused = true;
-                state.pending_pause = Some(true);
-            }
+    fn on_exit(&mut self) {
+        if let Ok(mut gb) = self.gb.lock() {
+            gb.mmu.save_cart_ram();
         }
-    } else if state.menu_pause_active {
-        state.menu_pause_active = false;
-        if state.menu_resume_armed {
-            state.menu_resume_armed = false;
-            state.paused = false;
-            state.pending_pause = Some(false);
-        }
+        let _ = self.emu_tx.send(EmuCommand::Shutdown);
     }
 }
 
-fn draw_options_window(
-    state: &mut UiState,
-    cfg: &mut UiConfig,
-    keybinds: &KeyBindings,
-    ui: &imgui::Ui,
-) {
-    let display = ui.io().display_size;
-    let flags = imgui::WindowFlags::NO_MOVE
-        | imgui::WindowFlags::NO_RESIZE
-        | imgui::WindowFlags::NO_COLLAPSE;
-
-    ui.window("Options")
-        .position([0.0, 0.0], imgui::Condition::Always)
-        .size(display, imgui::Condition::Always)
-        .flags(flags)
-        .build(|| {
-            if !state.bootrom_edit_initialized {
-                state.bootrom_edit_initialized = true;
-                state.dmg_bootrom_edit = cfg
-                    .dmg_bootrom_path
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                state.cgb_bootrom_edit = cfg
-                    .cgb_bootrom_path
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-            }
-
-            if let Some(_tabs) = imgui::TabBar::new("OptionsTabs").begin(ui) {
-                if let Some(_tab) = imgui::TabItem::new("Keybinds").begin(ui) {
-                    ui.text("Click Rebind, then press a key.");
-
-                    if state.rebinding.is_some() {
-                        ui.text_colored([1.0, 0.8, 0.2, 1.0], "Waiting for key...");
-                        ui.same_line();
-                        if ui.button("Cancel") {
-                            state.rebinding = None;
-                        }
-                        ui.separator();
-                    }
-
-                    let mut row = |label: &str, current: String, target: RebindTarget| {
-                        ui.text(label);
-                        ui.same_line();
-                        ui.text_disabled(current);
-                        ui.same_line();
-                        let btn = format!("Rebind##{label}");
-                        if ui.button(btn) {
-                            state.rebinding = Some(target);
-                        }
-                    };
-
-                    let fmt_joy = |mask: u8| {
-                        keybinds
-                            .key_for_joypad_mask(mask)
-                            .map(|c| format!("{c:?}"))
-                            .unwrap_or_else(|| "<unbound>".to_string())
-                    };
-
-                    row("Up", fmt_joy(0x04), RebindTarget::Joypad(0x04));
-                    row("Down", fmt_joy(0x08), RebindTarget::Joypad(0x08));
-                    row("Left", fmt_joy(0x02), RebindTarget::Joypad(0x02));
-                    row("Right", fmt_joy(0x01), RebindTarget::Joypad(0x01));
-
-                    ui.separator();
-                    row("A", fmt_joy(0x10), RebindTarget::Joypad(0x10));
-                    row("B", fmt_joy(0x20), RebindTarget::Joypad(0x20));
-                    row("Select", fmt_joy(0x40), RebindTarget::Joypad(0x40));
-                    row("Start", fmt_joy(0x80), RebindTarget::Joypad(0x80));
-
-                    ui.separator();
-                    row(
-                        "Pause",
-                        format!("{:?}", keybinds.pause_key()),
-                        RebindTarget::Pause,
-                    );
-                    row(
-                        "Fast Forward",
-                        format!("{:?}", keybinds.fast_forward_key()),
-                        RebindTarget::FastForward,
-                    );
-                    row(
-                        "Quit",
-                        format!("{:?}", keybinds.quit_key()),
-                        RebindTarget::Quit,
-                    );
+impl VibeEmuApp {
+    fn draw_options_window(&mut self, ctx: &egui::Context) {
+        ctx.show_viewport_immediate(
+            *VIEWPORT_OPTIONS,
+            egui::ViewportBuilder::default()
+                .with_title("Options")
+                .with_inner_size([400.0, 300.0]),
+            |ctx, class| {
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    self.show_options = false;
                 }
 
-                if let Some(_tab) = imgui::TabItem::new("Emulation").begin(ui) {
-                    ui.text("Boot ROMs");
+                match class {
+                    egui::ViewportClass::Embedded => {
+                        egui::Window::new("Options").show(ctx, |ui| {
+                            self.draw_options_content(ui, ctx);
+                        });
+                    }
+                    _ => {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            self.draw_options_content(ui, ctx);
+                        });
+                    }
+                }
+            },
+        );
+    }
+
+    fn draw_options_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal(|ui| {
+            if ui
+                .selectable_label(self.options_tab == OptionsTab::Keybinds, "Keybinds")
+                .clicked()
+            {
+                self.options_tab = OptionsTab::Keybinds;
+            }
+            if ui
+                .selectable_label(self.options_tab == OptionsTab::Emulation, "Emulation")
+                .clicked()
+            {
+                self.options_tab = OptionsTab::Emulation;
+            }
+            if ui
+                .selectable_label(
+                    self.options_tab == OptionsTab::MobileAdapter,
+                    "Mobile Adapter",
+                )
+                .clicked()
+            {
+                self.options_tab = OptionsTab::MobileAdapter;
+            }
+        });
+
+        ui.separator();
+        ui.add_space(8.0);
+
+        match self.options_tab {
+            OptionsTab::Keybinds => {
+                if self.rebinding.is_some() {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(egui::Color32::YELLOW, "Waiting for key...");
+                        if ui.button("Cancel").clicked() {
+                            self.rebinding = None;
+                        }
+                    });
                     ui.separator();
 
-                    ui.text("DMG boot ROM");
-                    let dmg_changed =
-                        imgui::InputText::new(ui, "##dmg_bootrom", &mut state.dmg_bootrom_edit)
-                            .build();
-                    ui.same_line();
-                    let mut dmg_browsed = false;
-                    if ui.button("Browse##dmg_bootrom")
-                        && let Some(path) = FileDialog::new().pick_file()
-                    {
-                        state.dmg_bootrom_edit = path.to_string_lossy().to_string();
-                        dmg_browsed = true;
-                    }
-                    if dmg_changed || dmg_browsed {
-                        let trimmed = state.dmg_bootrom_edit.trim();
-                        cfg.dmg_bootrom_path = if trimmed.is_empty() {
-                            None
-                        } else {
-                            Some(std::path::PathBuf::from(trimmed))
-                        };
-                        state.pending_load_config_update = true;
-                        state.pending_save_ui_config = true;
-                    }
+                    ctx.input(|i| {
+                        for key in i.keys_down.iter() {
+                            if let Some(target) = self.rebinding {
+                                self.keybinds.rebind(target, *key);
+                                if let Err(e) = self.keybinds.save_to_file(&self.keybinds_path) {
+                                    log::warn!("Failed to save keybinds: {e}");
+                                }
+                                self.rebinding = None;
+                                break;
+                            }
+                        }
+                    });
+                }
 
-                    ui.text("CGB boot ROM");
-                    let cgb_changed =
-                        imgui::InputText::new(ui, "##cgb_bootrom", &mut state.cgb_bootrom_edit)
-                            .build();
-                    ui.same_line();
-                    let mut cgb_browsed = false;
-                    if ui.button("Browse##cgb_bootrom")
+                ui.label("Click Rebind, then press a key.");
+                ui.add_space(4.0);
+
+                egui::Grid::new("keybinds_grid")
+                    .num_columns(3)
+                    .spacing([20.0, 4.0])
+                    .show(ui, |ui| {
+                        let fmt_joy = |keybinds: &KeyBindings, mask: u8| -> String {
+                            keybinds
+                                .key_for_joypad_mask(mask)
+                                .map(|k| format!("{k:?}"))
+                                .unwrap_or_else(|| "<unbound>".to_string())
+                        };
+
+                        for (label, mask) in [
+                            ("Up", 0x04u8),
+                            ("Down", 0x08),
+                            ("Left", 0x02),
+                            ("Right", 0x01),
+                        ] {
+                            ui.label(label);
+                            ui.label(fmt_joy(&self.keybinds, mask));
+                            if ui.button("Rebind").clicked() {
+                                self.rebinding = Some(RebindTarget::Joypad(mask));
+                            }
+                            ui.end_row();
+                        }
+
+                        ui.separator();
+                        ui.end_row();
+
+                        for (label, mask) in [
+                            ("A", 0x10u8),
+                            ("B", 0x20),
+                            ("Select", 0x40),
+                            ("Start", 0x80),
+                        ] {
+                            ui.label(label);
+                            ui.label(fmt_joy(&self.keybinds, mask));
+                            if ui.button("Rebind").clicked() {
+                                self.rebinding = Some(RebindTarget::Joypad(mask));
+                            }
+                            ui.end_row();
+                        }
+
+                        ui.separator();
+                        ui.end_row();
+
+                        ui.label("Fast Forward");
+                        ui.label(format!("{:?}", self.keybinds.fast_forward_key()));
+                        if ui.button("Rebind").clicked() {
+                            self.rebinding = Some(RebindTarget::FastForward);
+                        }
+                        ui.end_row();
+                    });
+            }
+            OptionsTab::Emulation => {
+                ui.horizontal(|ui| {
+                    ui.label("DMG Boot ROM:");
+                    ui.text_edit_singleline(&mut self.dmg_bootrom_path);
+                    if ui.button("Browse...").clicked()
                         && let Some(path) = FileDialog::new().pick_file()
                     {
-                        state.cgb_bootrom_edit = path.to_string_lossy().to_string();
-                        cgb_browsed = true;
+                        self.dmg_bootrom_path = path.to_string_lossy().to_string();
                     }
-                    if cgb_changed || cgb_browsed {
-                        let trimmed = state.cgb_bootrom_edit.trim();
-                        cfg.cgb_bootrom_path = if trimmed.is_empty() {
-                            None
-                        } else {
-                            Some(std::path::PathBuf::from(trimmed))
-                        };
-                        state.pending_load_config_update = true;
-                        state.pending_save_ui_config = true;
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("CGB Boot ROM:");
+                    ui.text_edit_singleline(&mut self.cgb_bootrom_path);
+                    if ui.button("Browse...").clicked()
+                        && let Some(path) = FileDialog::new().pick_file()
+                    {
+                        self.cgb_bootrom_path = path.to_string_lossy().to_string();
                     }
+                });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("Window Scale:");
+                    let prev_scale = self.selected_window_scale;
+                    egui::ComboBox::from_id_salt("window_scale")
+                        .selected_text(match self.selected_window_scale {
+                            0 => "1x",
+                            1 => "2x",
+                            2 => "3x",
+                            3 => "4x",
+                            4 => "5x",
+                            5 => "6x",
+                            _ => "2x",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.selected_window_scale, 0, "1x");
+                            ui.selectable_value(&mut self.selected_window_scale, 1, "2x");
+                            ui.selectable_value(&mut self.selected_window_scale, 2, "3x");
+                            ui.selectable_value(&mut self.selected_window_scale, 3, "4x");
+                            ui.selectable_value(&mut self.selected_window_scale, 4, "5x");
+                            ui.selectable_value(&mut self.selected_window_scale, 5, "6x");
+                        });
+                    if self.selected_window_scale != prev_scale {
+                        let scale = (self.selected_window_scale + 1) as f32;
+                        let new_size = egui::vec2(
+                            GB_WIDTH * scale,
+                            GB_HEIGHT * scale + MENU_BAR_HEIGHT + STATUS_BAR_HEIGHT,
+                        );
+                        ctx.send_viewport_cmd_to(
+                            egui::ViewportId::ROOT,
+                            egui::ViewportCommand::InnerSize(new_size),
+                        );
+                    }
+                });
+            }
+            OptionsTab::MobileAdapter => {
+                ui.checkbox(&mut self.mobile_enabled, "Enable Mobile Adapter");
+
+                ui.add_enabled_ui(self.mobile_enabled, |ui| {
+                    ui.separator();
+                    ui.label("DNS Servers:");
+                    ui.horizontal(|ui| {
+                        ui.label("Primary:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.mobile_dns1)
+                                .desired_width(150.0)
+                                .hint_text("e.g. 8.8.8.8"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Secondary:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.mobile_dns2)
+                                .desired_width(150.0)
+                                .hint_text("e.g. 8.8.4.4"),
+                        );
+                    });
 
                     ui.separator();
-                    let items = [
-                        "1x",
-                        "2x",
-                        "3x",
-                        "4x",
-                        "5x",
-                        "6x",
-                        "Fullscreen",
-                        "Fullscreen (stretched)",
-                    ];
-                    let mut current_idx = match cfg.window_size {
-                        WindowSize::X1 => 0,
-                        WindowSize::X2 => 1,
-                        WindowSize::X3 => 2,
-                        WindowSize::X4 => 3,
-                        WindowSize::X5 => 4,
-                        WindowSize::X6 => 5,
-                        WindowSize::Fullscreen => 6,
-                        WindowSize::FullscreenStretched => 7,
+                    ui.label("Relay Server:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.mobile_relay)
+                            .desired_width(250.0)
+                            .hint_text("relay.example.com:port"),
+                    );
+
+                    ui.separator();
+                    ui.label("Note: Changes require ROM reload to take effect.");
+                });
+            }
+        }
+    }
+
+    fn draw_debugger_window(&mut self, ctx: &egui::Context) {
+        // Use try_lock to avoid blocking the emulator thread during fast forward
+        if let Ok(mut gb) = self.gb.try_lock() {
+            self.debugger_snapshot = Some(UiSnapshot::from_gb(&mut gb, self.paused));
+        }
+
+        ctx.show_viewport_immediate(
+            *VIEWPORT_DEBUGGER,
+            egui::ViewportBuilder::default()
+                .with_title("Debugger")
+                .with_inner_size([700.0, 500.0]),
+            |ctx, class| {
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    self.show_debugger = false;
+                }
+
+                match class {
+                    egui::ViewportClass::Embedded => {
+                        egui::Window::new("Debugger").show(ctx, |ui| {
+                            self.draw_debugger_content(ui);
+                        });
+                    }
+                    _ => {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            self.draw_debugger_content(ui);
+                        });
+                    }
+                }
+            },
+        );
+    }
+
+    fn draw_debugger_content(&mut self, ui: &mut egui::Ui) {
+        let Some(snapshot) = self.debugger_snapshot.clone() else {
+            ui.label("Unable to access emulator state");
+            return;
+        };
+
+        self.draw_debugger_toolbar(ui, &snapshot);
+        ui.separator();
+
+        ui.columns(2, |columns| {
+            self.draw_disassembly_pane(&mut columns[0], &snapshot);
+            self.draw_state_panes(&mut columns[1], &snapshot);
+        });
+
+        if let Some(status) = self.debugger_state.status_line() {
+            ui.separator();
+            ui.label(egui::RichText::new(status).weak());
+        }
+    }
+
+    fn draw_debugger_toolbar(&mut self, ui: &mut egui::Ui, snapshot: &UiSnapshot) {
+        let paused = self.paused;
+
+        ui.horizontal(|ui| {
+            let run_label = if paused { "▶ Run" } else { "⏸ Pause" };
+            if ui.button(run_label).clicked() {
+                if paused {
+                    self.debugger_state.request_continue_and_focus_main();
+                    self.paused = false;
+                    let _ = self.emu_tx.send(EmuCommand::SetPaused(false));
+                } else {
+                    self.debugger_state.request_pause();
+                    self.paused = true;
+                    let _ = self.emu_tx.send(EmuCommand::SetPaused(true));
+                }
+            }
+
+            if ui.button("⏭ Step").clicked() && paused {
+                self.do_single_step();
+            }
+
+            if paused {
+                if ui.button("Step Over").clicked() {
+                    self.debugger_state.request_step_over();
+                }
+                if ui.button("Step Out").clicked() {
+                    self.debugger_state.request_step_out();
+                }
+                if ui.button("Jump").clicked() {
+                    self.debugger_state.request_jump_to_cursor();
+                }
+                if ui.button("Call").clicked() {
+                    self.debugger_state.request_call_cursor();
+                }
+            }
+
+            if let Some(reason) = self.debugger_state.pause_reason() {
+                ui.separator();
+                let reason_text = match reason {
+                    DebuggerPauseReason::Manual => "Paused (manual)".to_string(),
+                    DebuggerPauseReason::Step => "Paused (step)".to_string(),
+                    DebuggerPauseReason::DebuggerFocus => "Paused (debugger focus)".to_string(),
+                    DebuggerPauseReason::Breakpoint { bank, addr } => {
+                        format!("Paused (breakpoint {:02X}:{:04X})", bank, addr)
+                    }
+                    DebuggerPauseReason::Watchpoint {
+                        trigger,
+                        addr,
+                        value,
+                        pc,
+                    } => {
+                        let label = match trigger {
+                            vibe_emu_core::watchpoints::WatchpointTrigger::Read => "read",
+                            vibe_emu_core::watchpoints::WatchpointTrigger::Write => "write",
+                            vibe_emu_core::watchpoints::WatchpointTrigger::Execute => "execute",
+                            vibe_emu_core::watchpoints::WatchpointTrigger::Jump => "jump",
+                        };
+                        let value_str = value.map(|v| format!("=${v:02X} ")).unwrap_or_default();
+                        let pc_str = pc.map(|p| format!("pc={p:04X} ")).unwrap_or_default();
+                        format!("Paused (watchpoint {label} {pc_str}{value_str}@ {addr:04X})")
+                    }
+                };
+                ui.label(egui::RichText::new(reason_text).weak());
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("BP:");
+            let bp_resp = ui.add(
+                egui::TextEdit::singleline(&mut self.add_breakpoint_input)
+                    .desired_width(100.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            let bp_submitted =
+                bp_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (ui.button("Add").clicked() || bp_submitted)
+                && let Some(bp) = self
+                    .debugger_state
+                    .parse_breakpoint_input(&self.add_breakpoint_input, snapshot)
+            {
+                self.debugger_state.add_breakpoint(bp);
+                self.add_breakpoint_input.clear();
+            }
+            if ui.button("Clear").clicked() {
+                self.debugger_state.clear_breakpoints();
+            }
+
+            ui.separator();
+
+            ui.label("Go:");
+            let goto_resp = ui.add(
+                egui::TextEdit::singleline(&mut self.goto_disasm_input)
+                    .desired_width(120.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            let goto_submitted =
+                goto_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("Go##goto_btn").clicked() || goto_submitted {
+                self.debugger_state
+                    .goto_address(&self.goto_disasm_input, snapshot);
+                self.goto_disasm_input.clear();
+            }
+
+            if ui.button("Reload .sym").clicked() {
+                self.debugger_state.reload_symbols();
+            }
+        });
+    }
+
+    fn do_single_step(&mut self) {
+        if let Ok(mut gb) = self.gb.lock() {
+            let GameBoy { cpu, mmu, .. } = &mut *gb;
+            cpu.step(mmu);
+            // Update snapshot immediately after step so disassembly shows correct memory
+            self.debugger_snapshot = Some(UiSnapshot::from_gb(&mut gb, true));
+        }
+        self.debugger_state
+            .set_pause_reason(DebuggerPauseReason::Step);
+    }
+
+    fn draw_disassembly_pane(&mut self, ui: &mut egui::Ui, snapshot: &UiSnapshot) {
+        ui.heading("Disassembly");
+
+        let pc = snapshot.cpu.pc;
+        let dbg = &snapshot.debugger;
+        let active_bank = dbg.active_rom_bank.min(0xFF) as u8;
+
+        let start_addr = pc.saturating_sub(0x30);
+
+        let mem: Vec<u8> = if let Some(mem_image) = &dbg.mem_image {
+            (0..0x100)
+                .map(|i| {
+                    let addr = start_addr.wrapping_add(i);
+                    mem_image.get(addr as usize).copied().unwrap_or(0)
+                })
+                .collect()
+        } else {
+            vec![0; 0x100]
+        };
+
+        let mut bp_toggle: Option<BreakpointSpec> = None;
+        let mut cursor_click: Option<BreakpointSpec> = None;
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("disasm_grid")
+                    .num_columns(4)
+                    .spacing([8.0, 2.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("BP");
+                        ui.strong("Addr");
+                        ui.strong("Bytes");
+                        ui.strong("Instruction");
+                        ui.end_row();
+
+                        let mut addr = start_addr;
+                        while addr < start_addr.wrapping_add(0x80) {
+                            let rel_addr = addr.wrapping_sub(start_addr) as usize;
+                            if rel_addr >= mem.len() {
+                                break;
+                            }
+
+                            let (mnemonic, len) = ui::disasm::decode_sm83(&mem[rel_addr..], addr);
+                            let bytes = ui::disasm::format_bytes(&mem[rel_addr..], 0, len);
+
+                            let bp_bank = if (0x4000..=0x7FFF).contains(&addr) {
+                                active_bank
+                            } else if addr < 0x4000 {
+                                0
+                            } else {
+                                0xFF
+                            };
+
+                            let bp_spec = BreakpointSpec {
+                                bank: bp_bank,
+                                addr,
+                            };
+                            let bp_enabled = self.debugger_state.has_breakpoint(&bp_spec);
+                            let is_cursor = self.debugger_state.cursor() == Some(bp_spec);
+                            let is_pc = addr == pc;
+
+                            let bp_symbol = match bp_enabled {
+                                Some(true) => "●",
+                                Some(false) => "○",
+                                None => " ",
+                            };
+                            let bp_color = match bp_enabled {
+                                Some(true) => egui::Color32::RED,
+                                Some(false) => egui::Color32::DARK_RED,
+                                None => egui::Color32::GRAY,
+                            };
+
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(bp_symbol).color(bp_color),
+                                    )
+                                    .frame(false)
+                                    .min_size(egui::vec2(16.0, 0.0)),
+                                )
+                                .clicked()
+                            {
+                                bp_toggle = Some(bp_spec);
+                            }
+
+                            let display_bank = if addr < 0x4000 {
+                                0
+                            } else if (0x4000..=0x7FFF).contains(&addr) {
+                                active_bank
+                            } else {
+                                0xFF
+                            };
+
+                            let addr_text = if display_bank == 0xFF {
+                                format!("--:{:04X}", addr)
+                            } else {
+                                format!("{:02X}:{:04X}", display_bank, addr)
+                            };
+
+                            let text_color = if is_pc {
+                                egui::Color32::YELLOW
+                            } else if is_cursor {
+                                egui::Color32::LIGHT_BLUE
+                            } else {
+                                ui.style().visuals.text_color()
+                            };
+
+                            let addr_resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&addr_text)
+                                        .color(text_color)
+                                        .monospace(),
+                                )
+                                .sense(egui::Sense::click()),
+                            );
+                            if addr_resp.clicked() {
+                                cursor_click = Some(bp_spec);
+                            }
+
+                            let bytes_resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&bytes).color(text_color).monospace(),
+                                )
+                                .sense(egui::Sense::click()),
+                            );
+                            if bytes_resp.clicked() {
+                                cursor_click = Some(bp_spec);
+                            }
+
+                            let label = self.debugger_state.first_label_for(bp_bank, addr);
+                            let instr_text = if let Some(lbl) = label {
+                                format!("{lbl}: {mnemonic}")
+                            } else {
+                                mnemonic
+                            };
+
+                            let instr_resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&instr_text)
+                                        .color(text_color)
+                                        .monospace(),
+                                )
+                                .sense(egui::Sense::click()),
+                            );
+                            if instr_resp.clicked() {
+                                cursor_click = Some(bp_spec);
+                            }
+
+                            ui.end_row();
+                            addr = addr.wrapping_add(len);
+                        }
+                    });
+            });
+
+        if let Some(bp) = bp_toggle {
+            self.debugger_state.toggle_breakpoint(bp);
+        }
+        if let Some(bp) = cursor_click {
+            self.debugger_state.set_cursor(bp);
+        }
+    }
+
+    fn draw_state_panes(&mut self, ui: &mut egui::Ui, snapshot: &UiSnapshot) {
+        let cpu = &snapshot.cpu;
+
+        ui.heading("CPU");
+        egui::Grid::new("cpu_regs")
+            .num_columns(2)
+            .spacing([8.0, 2.0])
+            .show(ui, |ui| {
+                let af = ((cpu.a as u16) << 8) | cpu.f as u16;
+                let bc = ((cpu.b as u16) << 8) | cpu.c as u16;
+                let de = ((cpu.d as u16) << 8) | cpu.e as u16;
+                let hl = ((cpu.h as u16) << 8) | cpu.l as u16;
+
+                ui.monospace("AF");
+                ui.monospace(format!("{:04X}", af));
+                ui.end_row();
+                ui.monospace("BC");
+                ui.monospace(format!("{:04X}", bc));
+                ui.end_row();
+                ui.monospace("DE");
+                ui.monospace(format!("{:04X}", de));
+                ui.end_row();
+                ui.monospace("HL");
+                ui.monospace(format!("{:04X}", hl));
+                ui.end_row();
+                ui.monospace("SP");
+                ui.monospace(format!("{:04X}", cpu.sp));
+                ui.end_row();
+                ui.monospace("PC");
+                ui.monospace(format!("{:04X}", cpu.pc));
+                ui.end_row();
+
+                let f = cpu.f;
+                let z = if (f & 0x80) != 0 { 'Z' } else { '-' };
+                let n = if (f & 0x40) != 0 { 'N' } else { '-' };
+                let h = if (f & 0x20) != 0 { 'H' } else { '-' };
+                let c = if (f & 0x10) != 0 { 'C' } else { '-' };
+                ui.monospace("Flags");
+                ui.monospace(format!("{z}{n}{h}{c}"));
+                ui.end_row();
+
+                ui.monospace("IME");
+                ui.monospace(format!("{}", cpu.ime));
+                ui.end_row();
+                ui.monospace("Cycles");
+                ui.monospace(format!("{}", cpu.cycles));
+                ui.end_row();
+            });
+
+        ui.separator();
+        ui.heading("I/O");
+        egui::Grid::new("io_regs")
+            .num_columns(2)
+            .spacing([8.0, 2.0])
+            .show(ui, |ui| {
+                ui.monospace("LCDC");
+                ui.monospace(format!("{:02X}", snapshot.ppu.lcdc));
+                ui.end_row();
+                ui.monospace("STAT");
+                ui.monospace(format!("{:02X}", snapshot.ppu.stat));
+                ui.end_row();
+                ui.monospace("LY");
+                ui.monospace(format!("{:02X}", snapshot.ppu.ly));
+                ui.end_row();
+                ui.monospace("SCX");
+                ui.monospace(format!("{:02X}", snapshot.ppu.scx));
+                ui.end_row();
+                ui.monospace("SCY");
+                ui.monospace(format!("{:02X}", snapshot.ppu.scy));
+                ui.end_row();
+                ui.monospace("IF");
+                ui.monospace(format!("{:02X}", snapshot.debugger.if_reg));
+                ui.end_row();
+                ui.monospace("IE");
+                ui.monospace(format!("{:02X}", snapshot.debugger.ie_reg));
+                ui.end_row();
+            });
+
+        ui.separator();
+        ui.heading("Breakpoints");
+
+        let mut to_remove: Option<BreakpointSpec> = None;
+        let entries: Vec<(BreakpointSpec, bool)> = self
+            .debugger_state
+            .all_breakpoints()
+            .map(|(&bp, &en)| (bp, en))
+            .collect();
+
+        egui::ScrollArea::vertical()
+            .id_salt("bp_list")
+            .max_height(120.0)
+            .show(ui, |ui| {
+                for (bp, enabled) in entries {
+                    ui.horizontal(|ui| {
+                        let mut en = enabled;
+                        if ui.checkbox(&mut en, "").changed() {
+                            self.debugger_state.toggle_breakpoint(bp);
+                        }
+
+                        let sym_label = self.debugger_state.first_label_for(bp.bank, bp.addr);
+                        let label = if let Some(sym) = sym_label {
+                            format!("{:02X}:{:04X}  {sym}", bp.bank, bp.addr)
+                        } else {
+                            format!("{:02X}:{:04X}", bp.bank, bp.addr)
+                        };
+                        ui.monospace(&label);
+
+                        if ui.small_button("Remove").clicked() {
+                            to_remove = Some(bp);
+                        }
+                    });
+                }
+            });
+
+        if let Some(bp) = to_remove {
+            self.debugger_state.remove_breakpoint(&bp);
+        }
+
+        ui.separator();
+        ui.heading("Stack");
+
+        let base = snapshot.debugger.stack_base;
+        let bytes = &snapshot.debugger.stack_bytes;
+
+        egui::ScrollArea::vertical()
+            .id_salt("stack_view")
+            .max_height(100.0)
+            .show(ui, |ui| {
+                for (i, chunk) in bytes.chunks_exact(2).take(16).enumerate() {
+                    let addr = base.wrapping_add((i as u16) * 2);
+                    let val = (chunk[1] as u16) << 8 | (chunk[0] as u16);
+                    ui.monospace(format!("{addr:04X}: {val:04X}"));
+                }
+            });
+    }
+
+    fn draw_watchpoints_window(&mut self, ctx: &egui::Context) {
+        ctx.show_viewport_immediate(
+            *VIEWPORT_WATCHPOINTS,
+            egui::ViewportBuilder::default()
+                .with_title("Watchpoints")
+                .with_inner_size([400.0, 300.0]),
+            |ctx, class| {
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    self.show_watchpoints = false;
+                }
+
+                match class {
+                    egui::ViewportClass::Embedded => {
+                        egui::Window::new("Watchpoints").show(ctx, |ui| {
+                            self.draw_watchpoints_content(ui);
+                        });
+                    }
+                    _ => {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            self.draw_watchpoints_content(ui);
+                        });
+                    }
+                }
+            },
+        );
+    }
+
+    fn draw_watchpoints_content(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Add Watchpoint");
+        ui.horizontal(|ui| {
+            ui.label("Start:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.wp_edit_start_addr)
+                    .desired_width(60.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            ui.label("End:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.wp_edit_end_addr)
+                    .desired_width(60.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.wp_edit_on_read, "Read");
+            ui.checkbox(&mut self.wp_edit_on_write, "Write");
+            if ui.button("Add").clicked() {
+                let start_str = self.wp_edit_start_addr.trim();
+                let start_str = start_str
+                    .strip_prefix("$")
+                    .or_else(|| start_str.strip_prefix("0x"))
+                    .unwrap_or(start_str);
+                let end_str = self.wp_edit_end_addr.trim();
+                let end_str = end_str
+                    .strip_prefix("$")
+                    .or_else(|| end_str.strip_prefix("0x"))
+                    .unwrap_or(end_str);
+
+                if let Ok(start) = u16::from_str_radix(start_str, 16) {
+                    let end = u16::from_str_radix(end_str, 16).unwrap_or(start);
+                    let wp = vibe_emu_core::watchpoints::Watchpoint {
+                        id: self.next_watchpoint_id,
+                        enabled: true,
+                        range: start..=end,
+                        on_read: self.wp_edit_on_read,
+                        on_write: self.wp_edit_on_write,
+                        on_execute: false,
+                        on_jump: false,
+                        value_match: None,
+                        message: None,
                     };
-
-                    if ui.combo_simple_string("Window size", &mut current_idx, &items) {
-                        cfg.window_size = match current_idx {
-                            0 => WindowSize::X1,
-                            1 => WindowSize::X2,
-                            2 => WindowSize::X3,
-                            3 => WindowSize::X4,
-                            4 => WindowSize::X5,
-                            5 => WindowSize::X6,
-                            6 => WindowSize::Fullscreen,
-                            _ => WindowSize::FullscreenStretched,
-                        };
-                        state.pending_window_size = Some(cfg.window_size);
-                        state.pending_save_ui_config = true;
-                    }
+                    self.next_watchpoint_id += 1;
+                    self.watchpoints.push(wp);
+                    self.wp_edit_start_addr.clear();
+                    self.wp_edit_end_addr.clear();
                 }
             }
         });
-}
 
-fn configure_wgpu_backend(args: &Args) {
-    if let Some(choice) = args.wgpu_backend {
-        if let Some(value) = choice.as_env_value() {
-            // Ensure the backend is configured before wgpu initializes.
-            unsafe {
-                std::env::set_var("WGPU_BACKEND", value);
-            }
-        }
-    } else if std::env::var_os("WGPU_BACKEND").is_none() {
-        #[cfg(target_os = "windows")]
+        ui.separator();
+        ui.heading("Active Watchpoints");
+
+        let mut to_remove: Option<usize> = None;
+        let mut to_toggle: Option<usize> = None;
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("watchpoints_grid")
+                    .num_columns(5)
+                    .spacing([12.0, 4.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("En");
+                        ui.strong("Range");
+                        ui.strong("R");
+                        ui.strong("W");
+                        ui.strong("");
+                        ui.end_row();
+
+                        for (i, wp) in self.watchpoints.iter().enumerate() {
+                            let enabled_text = if wp.enabled { "✓" } else { "○" };
+                            if ui.button(enabled_text).clicked() {
+                                to_toggle = Some(i);
+                            }
+
+                            let start = *wp.range.start();
+                            let end = *wp.range.end();
+                            if start == end {
+                                ui.monospace(format!("${:04X}", start));
+                            } else {
+                                ui.monospace(format!("${:04X}-${:04X}", start, end));
+                            }
+
+                            ui.monospace(if wp.on_read { "R" } else { "-" });
+                            ui.monospace(if wp.on_write { "W" } else { "-" });
+
+                            if ui.button("✕").clicked() {
+                                to_remove = Some(i);
+                            }
+                            ui.end_row();
+                        }
+                    });
+            });
+
+        if let Some(i) = to_toggle
+            && let Some(wp) = self.watchpoints.get_mut(i)
         {
-            // Prefer DirectX on Windows to avoid Vulkan/ANGLE present-mode quirks on some setups.
-            unsafe {
-                std::env::set_var("WGPU_BACKEND", "dx12");
-            }
+            wp.enabled = !wp.enabled;
         }
-    }
-}
-
-fn log_wgpu_adapter_once(pixels: &Pixels) {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let adapter_info = pixels.adapter().get_info();
-        info!(
-            "WGPU adapter: {} (type={:?}, backend={:?}, vendor=0x{:X}, device=0x{:X}); driver='{}' driver_info='{}'",
-            adapter_info.name,
-            adapter_info.device_type,
-            adapter_info.backend,
-            adapter_info.vendor,
-            adapter_info.device,
-            adapter_info.driver,
-            adapter_info.driver_info
-        );
-
-        if let Some(forced) = std::env::var_os("WGPU_BACKEND") {
-            info!("WGPU_BACKEND={}", forced.to_string_lossy());
-        }
-    });
-}
-
-fn prime_audio_queue(gb: &mut GameBoy) -> (usize, usize) {
-    let capacity = gb.mmu.apu.max_queue_capacity().max(1);
-    let target_frames = ((capacity as f32) * AUDIO_WARMUP_TARGET_RATIO).ceil() as usize;
-
-    let mut queued = gb.mmu.apu.queued_frames();
-    if queued >= target_frames {
-        return (queued, target_frames);
-    }
-
-    let deadline = Instant::now() + Duration::from_millis(AUDIO_WARMUP_TIMEOUT_MS);
-    let mut steps = 0u32;
-    loop {
-        gb.cpu.step(&mut gb.mmu);
-        steps += 1;
-
-        if steps >= AUDIO_WARMUP_CHECK_INTERVAL {
-            steps = 0;
-            let now = Instant::now();
-            queued = gb.mmu.apu.queued_frames();
-            if queued >= target_frames || now >= deadline {
-                break;
-            }
+        if let Some(i) = to_remove {
+            self.watchpoints.remove(i);
         }
     }
 
-    if queued < target_frames {
-        queued = gb.mmu.apu.queued_frames();
-    }
-
-    (queued, target_frames)
-}
-
-fn prime_and_play_audio(gb: &mut GameBoy, audio_stream: &mut Option<cpal::Stream>) {
-    let primed = audio_stream.as_ref().map(|_| prime_audio_queue(gb));
-
-    if let Some((queued, target)) = &primed {
-        if *queued >= *target {
-            info!("Primed audio queue with {queued} / {target} frames before starting playback");
-        } else {
-            warn!(
-                "Audio warmup timed out after priming {queued} / {target} frames; startup may glitch"
-            );
+    fn draw_vram_viewer_window(&mut self, ctx: &egui::Context) {
+        // Use try_lock to avoid blocking the emulator thread during fast forward
+        if let Ok(mut gb) = self.gb.try_lock() {
+            self.cached_ppu_snapshot = Some(UiSnapshot::from_gb(&mut gb, self.paused).ppu);
         }
-    }
 
-    if let Some(stream) = audio_stream.as_ref() {
-        if let Err(e) = stream.play() {
-            warn!("Failed to start audio stream: {e}");
-            *audio_stream = None;
-        } else if let Some((queued, target)) = &primed {
-            info!("Audio playback started with {queued} primed frames (capacity {target})");
-        } else {
-            info!("Audio playback started");
-        }
-    }
-}
+        // Clone so we can pass it into the closure without borrowing self
+        let ppu_snapshot = self.cached_ppu_snapshot.clone();
 
-fn rebuild_audio_stream(gb: &mut GameBoy, speed: Speed, audio_stream: &mut Option<cpal::Stream>) {
-    if let Some(stream) = audio_stream.take() {
-        drop(stream);
-    }
-
-    gb.mmu.apu.set_speed(speed.factor);
-
-    *audio_stream = audio::start_stream(&mut gb.mmu.apu, false);
-    if audio_stream.is_none() {
-        warn!("Audio output disabled; continuing without sound");
-        return;
-    }
-
-    prime_and_play_audio(gb, audio_stream);
-}
-
-fn apply_ui_action(
-    action: UiAction,
-    gb: &mut GameBoy,
-    audio_stream: &mut Option<cpal::Stream>,
-    speed: Speed,
-    load_config: &LoadConfig,
-) {
-    match action {
-        UiAction::Reset => {
-            info!("Resetting Game Boy");
-            gb.reset();
-        }
-        UiAction::LoadPath(path) => {
-            info!("Loading new ROM");
-            match Cartridge::from_file(&path) {
-                Ok(cart) => {
-                    *gb = build_gameboy_for_cart(Some(cart), load_config);
+        ctx.show_viewport_immediate(
+            *VIEWPORT_VRAM_VIEWER,
+            egui::ViewportBuilder::default()
+                .with_title("VRAM Viewer")
+                .with_inner_size([520.0, 450.0]),
+            |ctx, class| {
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    self.show_vram_viewer = false;
                 }
-                Err(e) => {
-                    warn!("Failed to load ROM {}: {e}", path.display());
-                }
-            }
-        }
-    }
 
-    if gb.mmu.cart.is_some() {
-        rebuild_audio_stream(gb, speed, audio_stream);
-    }
-}
-
-fn build_gameboy_for_cart(cart: Option<Cartridge>, load_config: &LoadConfig) -> GameBoy {
-    let cart_is_cgb = cart.as_ref().is_some_and(|c| c.cgb);
-    let cgb_mode = match load_config.emulation_mode {
-        EmulationMode::ForceDmg => false,
-        EmulationMode::ForceCgb => true,
-        EmulationMode::Auto => cart_is_cgb,
-    };
-
-    let bootrom_data = if let Some(data) = load_config.bootrom_override.clone() {
-        Some(data)
-    } else {
-        let path = if cgb_mode {
-            load_config.cgb_bootrom_path.as_ref()
-        } else {
-            load_config.dmg_bootrom_path.as_ref()
-        };
-        match path {
-            Some(p) if !p.as_os_str().is_empty() => match std::fs::read(p) {
-                Ok(data) => Some(data),
-                Err(e) => {
-                    warn!("Failed to load boot ROM {}: {e}", p.display());
-                    None
+                match class {
+                    egui::ViewportClass::Embedded => {
+                        egui::Window::new("VRAM Viewer").show(ctx, |ui| {
+                            self.draw_vram_viewer_content(ui, ctx, ppu_snapshot.as_ref());
+                        });
+                    }
+                    _ => {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            self.draw_vram_viewer_content(ui, ctx, ppu_snapshot.as_ref());
+                        });
+                    }
                 }
             },
-            _ => None,
+        );
+    }
+
+    fn draw_vram_viewer_content(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        ppu_snapshot: Option<&ui::snapshot::PpuSnapshot>,
+    ) {
+        ui.horizontal(|ui| {
+            if ui
+                .selectable_label(self.vram_tab == VramTab::BgMap, "BG Map")
+                .clicked()
+            {
+                self.vram_tab = VramTab::BgMap;
+            }
+            if ui
+                .selectable_label(self.vram_tab == VramTab::Tiles, "Tiles")
+                .clicked()
+            {
+                self.vram_tab = VramTab::Tiles;
+            }
+            if ui
+                .selectable_label(self.vram_tab == VramTab::Oam, "OAM")
+                .clicked()
+            {
+                self.vram_tab = VramTab::Oam;
+            }
+            if ui
+                .selectable_label(self.vram_tab == VramTab::Palettes, "Palettes")
+                .clicked()
+            {
+                self.vram_tab = VramTab::Palettes;
+            }
+        });
+
+        ui.separator();
+
+        if let Some(ppu) = ppu_snapshot {
+            match self.vram_tab {
+                VramTab::BgMap => self.draw_bg_map_tab(ui, ctx, ppu),
+                VramTab::Tiles => self.draw_tiles_tab(ui, ctx, ppu),
+                VramTab::Oam => self.draw_oam_tab(ui, ctx, ppu),
+                VramTab::Palettes => self.draw_palettes_tab(ui, ppu),
+            }
+        } else {
+            ui.label("Unable to access emulator state");
         }
-    };
-
-    let mut gb = if bootrom_data.is_some() {
-        GameBoy::new_power_on_with_revision(cgb_mode, CgbRevision::default())
-    } else {
-        GameBoy::new_with_revision(cgb_mode, CgbRevision::default())
-    };
-
-    if let Some(cart) = cart {
-        gb.mmu.load_cart(cart);
     }
 
-    if !cgb_mode && load_config.dmg_neutral {
-        const NEUTRAL_DMG_PALETTE: [u32; 4] = [0x00E0F8D0, 0x0088C070, 0x00346856, 0x00081820];
-        gb.mmu.ppu.set_dmg_palette(NEUTRAL_DMG_PALETTE);
+    fn draw_bg_map_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        ppu: &ui::snapshot::PpuSnapshot,
+    ) {
+        const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
+        const MAP_W: usize = 32;
+        const MAP_H: usize = 32;
+        const TILE: usize = 8;
+        const IMG_W: usize = MAP_W * TILE;
+        const IMG_H: usize = MAP_H * TILE;
+
+        let frame = ppu.frame_counter;
+        if frame != self.vram_viewer.last_frame || self.vram_viewer.bg_map_tex.is_none() {
+            self.vram_viewer.last_frame = frame;
+            let rgba = &mut self.vram_viewer.bg_map_buf;
+            rgba.fill(0);
+
+            let lcdc = ppu.lcdc;
+            let map_base = if lcdc & 0x08 != 0 { 0x1C00 } else { 0x1800 };
+            let signed_mode = lcdc & 0x10 == 0;
+            let bgp = ppu.bgp;
+            let cgb = ppu.cgb;
+
+            for tile_y in 0..MAP_H {
+                for tile_x in 0..MAP_W {
+                    let tile_idx = ppu.vram0[map_base + tile_y * MAP_W + tile_x];
+                    let attr = if cgb {
+                        ppu.vram1[map_base + tile_y * MAP_W + tile_x]
+                    } else {
+                        0
+                    };
+                    let tile_num = if signed_mode {
+                        tile_idx as i8 as i16
+                    } else {
+                        tile_idx as i16
+                    };
+
+                    let tile_addr = if signed_mode {
+                        (0x1000i32 + (tile_num as i32) * 16) as usize
+                    } else {
+                        (tile_num as usize) * 16
+                    };
+
+                    let bank = if cgb && attr & 0x08 != 0 { 1 } else { 0 };
+                    let x_flip = cgb && attr & 0x20 != 0;
+                    let y_flip = cgb && attr & 0x40 != 0;
+                    let vram = ppu.vram_bank(bank);
+                    if tile_addr + 16 > vram.len() {
+                        continue;
+                    }
+                    for row in 0..TILE {
+                        let actual_row = if y_flip { 7 - row } else { row };
+                        let lo = vram[tile_addr + actual_row * 2];
+                        let hi = vram[tile_addr + actual_row * 2 + 1];
+                        for col in 0..TILE {
+                            let actual_col = if x_flip { col } else { 7 - col };
+                            let bit = actual_col;
+                            let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+                            let color = if cgb {
+                                let pal = (attr & 0x07) as usize;
+                                ppu.cgb_bg_colors[pal][idx as usize]
+                            } else {
+                                let shade = (bgp >> (idx * 2)) & 0x03;
+                                DMG_COLORS[shade as usize]
+                            };
+                            let x = tile_x * TILE + col;
+                            let y = tile_y * TILE + row;
+                            let off = (y * IMG_W + x) * 4;
+                            rgba[off] = ((color >> 16) & 0xFF) as u8;
+                            rgba[off + 1] = ((color >> 8) & 0xFF) as u8;
+                            rgba[off + 2] = (color & 0xFF) as u8;
+                            rgba[off + 3] = 0xFF;
+                        }
+                    }
+                }
+            }
+
+            let pixels: Vec<egui::Color32> = rgba
+                .chunks_exact(4)
+                .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]))
+                .collect();
+            let image = egui::ColorImage {
+                size: [IMG_W, IMG_H],
+                pixels,
+            };
+            match &mut self.vram_viewer.bg_map_tex {
+                Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+                None => {
+                    self.vram_viewer.bg_map_tex =
+                        Some(ctx.load_texture("bg_map", image, egui::TextureOptions::NEAREST));
+                }
+            }
+        }
+
+        if let Some(tex) = &self.vram_viewer.bg_map_tex {
+            let avail = ui.available_size();
+            let scale = (avail.x / 256.0).min(avail.y / 256.0).clamp(1.0, 2.0);
+            let draw_size = egui::vec2(256.0 * scale, 256.0 * scale);
+
+            let (response, painter) = ui.allocate_painter(draw_size, egui::Sense::hover());
+            let rect = response.rect;
+
+            painter.image(
+                tex.id(),
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+
+            // Draw viewport rectangle(s) with wrapping support
+            let scx = ppu.scx as f32;
+            let scy = ppu.scy as f32;
+            let vp_w = 160.0;
+            let vp_h = 144.0;
+            let map_size = 256.0;
+
+            let stroke = egui::Stroke::new(1.0, egui::Color32::RED);
+
+            // Calculate wrapped regions
+            let x_wraps = scx + vp_w > map_size;
+            let y_wraps = scy + vp_h > map_size;
+
+            if !x_wraps && !y_wraps {
+                // Simple case: no wrapping
+                let viewport_rect = egui::Rect::from_min_size(
+                    rect.min + egui::vec2(scx * scale, scy * scale),
+                    egui::vec2(vp_w * scale, vp_h * scale),
+                );
+                painter.rect_stroke(viewport_rect, 0.0, stroke);
+            } else {
+                // Draw up to 4 rectangles for wrapped viewport
+                let x1_start = scx;
+                let x1_end = if x_wraps { map_size } else { scx + vp_w };
+                let x1_w = x1_end - x1_start;
+
+                let x2_start = 0.0;
+                let x2_w = if x_wraps {
+                    (scx + vp_w) - map_size
+                } else {
+                    0.0
+                };
+
+                let y1_start = scy;
+                let y1_end = if y_wraps { map_size } else { scy + vp_h };
+                let y1_h = y1_end - y1_start;
+
+                let y2_start = 0.0;
+                let y2_h = if y_wraps {
+                    (scy + vp_h) - map_size
+                } else {
+                    0.0
+                };
+
+                // Top-left region (always present)
+                let r1 = egui::Rect::from_min_size(
+                    rect.min + egui::vec2(x1_start * scale, y1_start * scale),
+                    egui::vec2(x1_w * scale, y1_h * scale),
+                );
+                painter.rect_stroke(r1, 0.0, stroke);
+
+                // Top-right region (if x wraps)
+                if x_wraps {
+                    let r2 = egui::Rect::from_min_size(
+                        rect.min + egui::vec2(x2_start * scale, y1_start * scale),
+                        egui::vec2(x2_w * scale, y1_h * scale),
+                    );
+                    painter.rect_stroke(r2, 0.0, stroke);
+                }
+
+                // Bottom-left region (if y wraps)
+                if y_wraps {
+                    let r3 = egui::Rect::from_min_size(
+                        rect.min + egui::vec2(x1_start * scale, y2_start * scale),
+                        egui::vec2(x1_w * scale, y2_h * scale),
+                    );
+                    painter.rect_stroke(r3, 0.0, stroke);
+                }
+
+                // Bottom-right region (if both wrap)
+                if x_wraps && y_wraps {
+                    let r4 = egui::Rect::from_min_size(
+                        rect.min + egui::vec2(x2_start * scale, y2_start * scale),
+                        egui::vec2(x2_w * scale, y2_h * scale),
+                    );
+                    painter.rect_stroke(r4, 0.0, stroke);
+                }
+            }
+        }
     }
 
-    if let Some(data) = bootrom_data {
-        gb.mmu.load_boot_rom(data);
-        gb.cpu.pc = 0x0000;
+    fn draw_tiles_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        ppu: &ui::snapshot::PpuSnapshot,
+    ) {
+        const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
+        const TILE_W: usize = 8;
+        const TILE_H: usize = 8;
+        const TILES_PER_ROW: usize = 16;
+        const ROWS: usize = 24;
+
+        let banks: usize = if ppu.cgb { 2 } else { 1 };
+        let img_w = TILES_PER_ROW * TILE_W * banks;
+        let img_h = ROWS * TILE_H;
+
+        if banks != self.vram_viewer.tiles_banks as usize {
+            self.vram_viewer.tiles_banks = banks as u8;
+            self.vram_viewer.tiles_tex = None;
+        }
+
+        let frame = ppu.frame_counter;
+        if frame != self.vram_viewer.last_frame || self.vram_viewer.tiles_tex.is_none() {
+            let buf = &mut self.vram_viewer.tiles_buf[..img_w * img_h * 4];
+            buf.fill(0);
+
+            let bgp = ppu.bgp;
+
+            for bank in 0..banks {
+                for tile_idx in 0..384 {
+                    let col = tile_idx % TILES_PER_ROW;
+                    let row = tile_idx / TILES_PER_ROW;
+                    let tile_addr = tile_idx * 16;
+
+                    for y in 0..TILE_H {
+                        let vram = ppu.vram_bank(bank);
+                        let lo = vram[tile_addr + y * 2];
+                        let hi = vram[tile_addr + y * 2 + 1];
+
+                        for x in 0..TILE_W {
+                            let bit = 7 - x;
+                            let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+
+                            let rgb = if ppu.cgb {
+                                ppu.cgb_bg_colors[0][idx as usize]
+                            } else {
+                                let shade = (bgp >> (idx * 2)) & 0x03;
+                                DMG_COLORS[shade as usize]
+                            };
+
+                            let px = (bank * 128) + (col * TILE_W) + x;
+                            let py = row * TILE_H + y;
+                            let off = (py * img_w + px) * 4;
+
+                            buf[off] = ((rgb >> 16) & 0xFF) as u8;
+                            buf[off + 1] = ((rgb >> 8) & 0xFF) as u8;
+                            buf[off + 2] = (rgb & 0xFF) as u8;
+                            buf[off + 3] = 0xFF;
+                        }
+                    }
+                }
+            }
+
+            let pixels: Vec<egui::Color32> = buf
+                .chunks_exact(4)
+                .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]))
+                .collect();
+            let image = egui::ColorImage {
+                size: [img_w, img_h],
+                pixels,
+            };
+            match &mut self.vram_viewer.tiles_tex {
+                Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+                None => {
+                    self.vram_viewer.tiles_tex =
+                        Some(ctx.load_texture("tiles", image, egui::TextureOptions::NEAREST));
+                }
+            }
+        }
+
+        if let Some(tex) = &self.vram_viewer.tiles_tex {
+            let avail = ui.available_size();
+            let tex_w = img_w as f32;
+            let tex_h = img_h as f32;
+            let scale = (avail.x / tex_w).min(avail.y / tex_h).clamp(1.0, 3.0);
+            let draw_size = egui::vec2(tex_w * scale, tex_h * scale);
+            ui.image((tex.id(), draw_size));
+        }
     }
 
-    gb
-}
+    fn draw_oam_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        _ctx: &egui::Context,
+        ppu: &ui::snapshot::PpuSnapshot,
+    ) {
+        let sprite_h: u8 = if ppu.lcdc & 0x04 != 0 { 16 } else { 8 };
 
-fn build_load_config(
-    cfg: &UiConfig,
-    dmg_neutral: bool,
-    bootrom_override: Option<Vec<u8>>,
-) -> LoadConfig {
-    LoadConfig {
-        emulation_mode: cfg.emulation_mode,
-        dmg_neutral,
-        bootrom_override,
-        dmg_bootrom_path: cfg.dmg_bootrom_path.clone(),
-        cgb_bootrom_path: cfg.cgb_bootrom_path.clone(),
+        if sprite_h != self.vram_viewer.oam_sprite_h {
+            self.vram_viewer.oam_sprite_h = sprite_h;
+        }
+
+        ui.columns(2, |columns| {
+            columns[0].heading("OAM Entries");
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(&mut columns[0], |ui| {
+                    egui::Grid::new("oam_grid")
+                        .num_columns(6)
+                        .spacing([8.0, 4.0])
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.strong("#");
+                            ui.strong("Y");
+                            ui.strong("X");
+                            ui.strong("Tile");
+                            ui.strong("Attr");
+                            ui.strong("");
+                            ui.end_row();
+
+                            for i in 0..40 {
+                                let base = i * 4;
+                                let y_pos = ppu.oam[base];
+                                let x_pos = ppu.oam[base + 1];
+                                let tile_num = ppu.oam[base + 2];
+                                let attr = ppu.oam[base + 3];
+
+                                let selected = self.vram_viewer.oam_selected == i;
+                                if ui.selectable_label(selected, format!("{:02}", i)).clicked() {
+                                    self.vram_viewer.oam_selected = i;
+                                }
+                                ui.monospace(format!("{:02X}", y_pos));
+                                ui.monospace(format!("{:02X}", x_pos));
+                                ui.monospace(format!("{:02X}", tile_num));
+                                ui.monospace(format!("{:02X}", attr));
+                                ui.label("");
+                                ui.end_row();
+                            }
+                        });
+                });
+
+            columns[1].heading("Details");
+            columns[1].separator();
+
+            let i = self.vram_viewer.oam_selected;
+            if i < 40 {
+                let base = i * 4;
+                let y_pos = ppu.oam[base];
+                let x_pos = ppu.oam[base + 1];
+                let tile_num = ppu.oam[base + 2];
+                let attr = ppu.oam[base + 3];
+
+                let x_flip = attr & 0x20 != 0;
+                let y_flip = attr & 0x40 != 0;
+                let priority = attr & 0x80 != 0;
+
+                columns[1].monospace(format!("Sprite #{}", i));
+                columns[1].monospace(format!("Position: ({}, {})", x_pos, y_pos));
+                columns[1].monospace(format!("Tile: ${:02X}", tile_num));
+                columns[1].monospace(format!("Attr: ${:02X}", attr));
+                columns[1].add_space(4.0);
+                columns[1].monospace(format!("X-flip: {}", x_flip));
+                columns[1].monospace(format!("Y-flip: {}", y_flip));
+                columns[1].monospace(format!("Priority: {}", priority));
+                if ppu.cgb {
+                    columns[1].monospace(format!("Palette: OBJ{}", attr & 0x07));
+                    columns[1].monospace(format!("Bank: {}", if attr & 0x08 != 0 { 1 } else { 0 }));
+                } else {
+                    columns[1].monospace(format!(
+                        "Palette: OBP{}",
+                        if attr & 0x10 != 0 { 1 } else { 0 }
+                    ));
+                }
+            }
+        });
     }
-}
 
-fn apply_window_size_setting(window: &winit::window::Window, mode: WindowSize) {
-    use winit::dpi::PhysicalSize;
-    use winit::window::Fullscreen;
+    fn draw_palettes_tab(&mut self, ui: &mut egui::Ui, ppu: &ui::snapshot::PpuSnapshot) {
+        const DMG_COLORS: [u32; 4] = [0x009BBC0F, 0x008BAC0F, 0x00306230, 0x000F380F];
+        let bg_pals = if ppu.cgb { 8 } else { 1 };
+        let ob_pals = if ppu.cgb { 8 } else { 2 };
 
-    if mode.is_fullscreen() {
-        window.set_fullscreen(Some(Fullscreen::Borderless(None)));
-        return;
-    }
+        ui.columns(3, |columns| {
+            columns[0].heading("BG Palettes");
+            for pal in 0..bg_pals {
+                columns[0].horizontal(|ui| {
+                    ui.label(format!("{}:", pal));
+                    for col in 0..4 {
+                        let rgb = if ppu.cgb {
+                            ppu.cgb_bg_colors[pal][col]
+                        } else {
+                            let shade = (ppu.bgp >> (col * 2)) & 0x03;
+                            DMG_COLORS[shade as usize]
+                        };
+                        let r = ((rgb >> 16) & 0xFF) as u8;
+                        let g = ((rgb >> 8) & 0xFF) as u8;
+                        let b = (rgb & 0xFF) as u8;
+                        let color = egui::Color32::from_rgb(r, g, b);
 
-    window.set_fullscreen(None);
-    if let Some(scale) = mode.scale_factor_px() {
-        let size = PhysicalSize::new(160 * scale, 144 * scale + DEFAULT_MENU_BAR_HEIGHT_PX);
-        let _ = window.request_inner_size(size);
+                        let selected = self.vram_viewer.palette_sel_is_bg
+                            && self.vram_viewer.palette_sel_pal as usize == pal
+                            && self.vram_viewer.palette_sel_col as usize == col;
+
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+                        if response.clicked() {
+                            self.vram_viewer.palette_sel_is_bg = true;
+                            self.vram_viewer.palette_sel_pal = pal as u8;
+                            self.vram_viewer.palette_sel_col = col as u8;
+                        }
+                        ui.painter().rect_filled(rect, 0.0, color);
+                        let stroke_color = if selected {
+                            egui::Color32::YELLOW
+                        } else {
+                            egui::Color32::GRAY
+                        };
+                        ui.painter()
+                            .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, stroke_color));
+                    }
+                });
+            }
+
+            columns[1].heading("OBJ Palettes");
+            for pal in 0..ob_pals {
+                columns[1].horizontal(|ui| {
+                    ui.label(format!("{}:", pal));
+                    for col in 0..4 {
+                        let rgb = if ppu.cgb {
+                            ppu.cgb_ob_colors[pal][col]
+                        } else {
+                            let obp = if pal == 0 { ppu.obp0 } else { ppu.obp1 };
+                            let shade = (obp >> (col * 2)) & 0x03;
+                            DMG_COLORS[shade as usize]
+                        };
+                        let r = ((rgb >> 16) & 0xFF) as u8;
+                        let g = ((rgb >> 8) & 0xFF) as u8;
+                        let b = (rgb & 0xFF) as u8;
+                        let color = egui::Color32::from_rgb(r, g, b);
+
+                        let selected = !self.vram_viewer.palette_sel_is_bg
+                            && self.vram_viewer.palette_sel_pal as usize == pal
+                            && self.vram_viewer.palette_sel_col as usize == col;
+
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+                        if response.clicked() {
+                            self.vram_viewer.palette_sel_is_bg = false;
+                            self.vram_viewer.palette_sel_pal = pal as u8;
+                            self.vram_viewer.palette_sel_col = col as u8;
+                        }
+                        ui.painter().rect_filled(rect, 0.0, color);
+                        let stroke_color = if selected {
+                            egui::Color32::YELLOW
+                        } else {
+                            egui::Color32::GRAY
+                        };
+                        ui.painter()
+                            .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, stroke_color));
+                    }
+                });
+            }
+
+            columns[2].heading("Selected Color");
+            let is_bg = self.vram_viewer.palette_sel_is_bg;
+            let pal = self.vram_viewer.palette_sel_pal as usize;
+            let col = self.vram_viewer.palette_sel_col as usize;
+
+            let rgb = if is_bg {
+                if ppu.cgb {
+                    ppu.cgb_bg_colors.get(pal).and_then(|p| p.get(col)).copied()
+                } else {
+                    let shade = (ppu.bgp >> (col * 2)) & 0x03;
+                    Some(DMG_COLORS[shade as usize])
+                }
+            } else if ppu.cgb {
+                ppu.cgb_ob_colors.get(pal).and_then(|p| p.get(col)).copied()
+            } else {
+                let obp = if pal == 0 { ppu.obp0 } else { ppu.obp1 };
+                let shade = (obp >> (col * 2)) & 0x03;
+                Some(DMG_COLORS[shade as usize])
+            };
+
+            if let Some(rgb) = rgb {
+                let r = ((rgb >> 16) & 0xFF) as u8;
+                let g = ((rgb >> 8) & 0xFF) as u8;
+                let b = (rgb & 0xFF) as u8;
+                let color = egui::Color32::from_rgb(r, g, b);
+
+                let (rect, _) =
+                    columns[2].allocate_exact_size(egui::vec2(48.0, 48.0), egui::Sense::hover());
+                columns[2].painter().rect_filled(rect, 0.0, color);
+                columns[2].painter().rect_stroke(
+                    rect,
+                    0.0,
+                    egui::Stroke::new(1.0, egui::Color32::WHITE),
+                );
+
+                let r5 = (r >> 3) as u16;
+                let g5 = (g >> 3) as u16;
+                let b5 = (b >> 3) as u16;
+                let word = r5 | (g5 << 5) | (b5 << 10);
+
+                columns[2].add_space(4.0);
+                columns[2].monospace(format!(
+                    "{} Pal {} Col {}",
+                    if is_bg { "BG" } else { "OBJ" },
+                    pal,
+                    col
+                ));
+                columns[2].monospace(format!("RGB: ({}, {}, {})", r, g, b));
+                columns[2].monospace(format!("GBC: ${:04X}", word));
+            }
+        });
     }
 }
 
 fn main() {
     let args = Args::parse();
-
-    configure_wgpu_backend(&args);
-
     init_logging(&args);
-
-    info!("Starting emulator");
 
     let headless = args.headless;
     let rom_path = args.rom.clone();
+    let _debug_enabled = args.debug;
 
-    let ui_config_path = ui_config::default_ui_config_path();
-    let mut ui_config = if ui_config_path.exists() {
-        ui_config::load_from_file(&ui_config_path)
+    let emulation_mode = if args.dmg {
+        EmulationMode::ForceDmg
+    } else if args.cgb {
+        EmulationMode::ForceCgb
     } else {
-        UiConfig::default()
+        EmulationMode::Auto
     };
 
-    let bootrom_data = match args.bootrom.as_ref() {
-        Some(path) => match std::fs::read(path) {
+    let bootrom_data = args
+        .bootrom
+        .as_ref()
+        .and_then(|path| match std::fs::read(path) {
             Ok(data) => Some(data),
             Err(e) => {
-                error!("Failed to load boot ROM {}: {e}", path.display());
-                return;
+                warn!("Failed to read bootrom: {e}");
+                None
             }
-        },
-        None => None,
+        });
+
+    let load_config = LoadConfig {
+        emulation_mode,
+        dmg_neutral: args.dmg_neutral,
+        bootrom_override: bootrom_data,
+        dmg_bootrom_path: None,
+        cgb_bootrom_path: None,
     };
 
-    let mut load_config = build_load_config(&ui_config, args.dmg_neutral, bootrom_data);
-    if args.dmg {
-        load_config.emulation_mode = EmulationMode::ForceDmg;
-    } else if args.cgb {
-        load_config.emulation_mode = EmulationMode::ForceCgb;
-    }
-
-    let cart = match rom_path.as_ref() {
-        Some(path) => match Cartridge::from_file(path) {
-            Ok(c) => Some(c),
+    let cart: Option<Cartridge> = rom_path
+        .as_ref()
+        .and_then(|p| match Cartridge::from_file(p) {
+            Ok(cart) => Some(cart),
             Err(e) => {
                 error!("Failed to load ROM: {e}");
-                return;
+                None
             }
-        },
-        None => None,
-    };
+        });
 
     if headless && cart.is_none() {
         error!("No ROM supplied (required for --headless)");
-        return;
+        std::process::exit(1);
     }
 
-    let cart_is_cgb = cart.as_ref().is_some_and(|c| c.cgb);
     let cgb_mode = match load_config.emulation_mode {
         EmulationMode::ForceDmg => false,
         EmulationMode::ForceCgb => true,
-        EmulationMode::Auto => cart_is_cgb,
+        EmulationMode::Auto => cart.as_ref().is_some_and(|c| c.cgb),
     };
 
-    let mut gb = build_gameboy_for_cart(cart, &load_config);
-
-    info!(
-        "Emulator initialized in {} mode",
-        if cgb_mode { "CGB" } else { "DMG" }
-    );
-    let debug_enabled = args.debug;
-    let frame_limit = args.frames;
-    let cycle_limit = args.cycles;
-    let second_limit = args.seconds.map(Duration::from_secs);
-
-    // UI frames are stored as u32 in a byte layout matching Pixels' RGBA8 buffer.
-    let mut frame = vec![0u32; 160 * 144];
-
-    let keybinds_path = {
-        let from_args = args.keybinds.clone();
-        let from_env = std::env::var_os("VIBEEMU_KEYBINDS").map(std::path::PathBuf::from);
-        from_args.or(from_env).unwrap_or_else(default_keybinds_path)
-    };
-
-    let mut keybinds = if keybinds_path.exists() {
-        KeyBindings::load_from_file(&keybinds_path)
-    } else {
-        KeyBindings::defaults()
-    };
-
-    if !keybinds_path.exists()
-        && let Err(e) = keybinds.save_to_file(&keybinds_path)
-    {
-        warn!(
-            "Failed to write default keybinds file {}: {e}",
-            keybinds_path.display()
-        );
+    let mut gb = GameBoy::new_with_mode(cgb_mode);
+    if let Some(c) = cart {
+        gb.mmu.load_cart(c);
     }
 
-    let mut serial_peripheral = if args.mobile {
-        SerialPeripheral::MobileAdapter
-    } else {
-        SerialPeripheral::None
-    };
+    if headless {
+        enum Limit {
+            Frames(usize),
+            Seconds(u64),
+        }
 
-    let config_path = args
-        .mobile_config
-        .clone()
-        .or_else(|| rom_path.as_ref().map(|p| p.with_extension("mobile")))
-        .unwrap_or_else(|| std::path::PathBuf::from("vibeemu.mobile"));
-
-    let mobile = {
-        let base_host: Box<dyn MobileHost> = Box::new(StdMobileHost::new(config_path));
-        let host: Box<dyn MobileHost> = if args.mobile_diag {
-            Box::new(DiagMobileHost::new(base_host))
+        let limit = if let Some(s) = args.seconds {
+            Limit::Seconds(s)
         } else {
-            base_host
+            Limit::Frames(args.frames.unwrap_or(600))
         };
 
-        match MobileAdapter::new(host) {
-            Ok(mut adapter) => {
-                let mut cfg = MobileConfig {
-                    device: args.mobile_device.into(),
-                    unmetered: args.mobile_unmetered,
-                    p2p_port: args.mobile_p2p_port,
-                    ..Default::default()
-                };
-
-                if let Some(s) = args.mobile_dns1.as_deref() {
-                    match parse_mobile_addr(s) {
-                        Ok(addr) => cfg.dns1 = addr,
-                        Err(e) => warn!("Ignoring --mobile-dns1: {e}"),
+        match limit {
+            Limit::Frames(n) => {
+                info!("Running headless for {n} frames");
+                for _ in 0..n {
+                    gb.mmu.ppu.clear_frame_flag();
+                    while !gb.mmu.ppu.frame_ready() {
+                        gb.cpu.step(&mut gb.mmu);
                     }
                 }
-                if let Some(s) = args.mobile_dns2.as_deref() {
-                    match parse_mobile_addr(s) {
-                        Ok(addr) => cfg.dns2 = addr,
-                        Err(e) => warn!("Ignoring --mobile-dns2: {e}"),
-                    }
-                }
-                if let Some(s) = args.mobile_relay.as_deref() {
-                    match parse_mobile_addr(s) {
-                        Ok(addr) => cfg.relay = addr,
-                        Err(e) => warn!("Ignoring --mobile-relay: {e}"),
-                    }
-                }
-
-                let _ = adapter.apply_config(&cfg);
-                Some(Arc::new(Mutex::new(adapter)))
             }
-            Err(e) => {
-                warn!("Mobile Adapter backend unavailable: {e}");
-                None
+            Limit::Seconds(s) => {
+                let target_frames = (s as f64 * GB_FPS).ceil() as usize;
+                info!("Running headless for {s} seconds (~{target_frames} frames)");
+                for _ in 0..target_frames {
+                    gb.mmu.ppu.clear_frame_flag();
+                    while !gb.mmu.ppu.frame_ready() {
+                        gb.cpu.step(&mut gb.mmu);
+                    }
+                }
             }
         }
-    };
 
-    match serial_peripheral {
-        SerialPeripheral::None => {
-            gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
-        }
-        SerialPeripheral::MobileAdapter => {
-            if let Some(mobile) = mobile.as_ref() {
-                if let Ok(mut adapter) = mobile.lock()
-                    && let Err(e) = adapter.start()
-                {
-                    warn!("Failed to start Mobile Adapter: {e}");
-                    gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
-                    serial_peripheral = SerialPeripheral::None;
-                }
-
-                if serial_peripheral == SerialPeripheral::MobileAdapter {
-                    if args.mobile_diag {
-                        gb.mmu
-                            .serial
-                            .connect(Box::new(DiagMobileLinkPort::new(Arc::clone(mobile))));
-                    } else {
-                        gb.mmu
-                            .serial
-                            .connect(Box::new(MobileLinkPort::new(Arc::clone(mobile))));
-                    }
-                }
-            } else {
-                warn!("Mobile Adapter selected but backend not available");
-                gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
-                serial_peripheral = SerialPeripheral::None;
-            }
-        }
+        info!("Headless run complete");
+        return;
     }
 
-    if !headless {
-        let initial_paused = rom_path.is_none();
-
-        let gb = Arc::new(Mutex::new(gb));
-        let ui_snapshot = Arc::new(RwLock::new(UiSnapshot::default()));
-        let mut speed = Speed {
-            factor: 1.0,
-            fast: false,
-        };
-        let mut ui_state = UiState {
-            serial_peripheral,
-            ..Default::default()
-        };
-        ui_state.current_rom_path = rom_path.clone();
-        ui_state.paused = initial_paused;
-        ui_state
-            .debugger
-            .load_symbols_for_rom_path(ui_state.current_rom_path.as_deref());
-
-        let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
-            Ok(el) => el,
-            Err(e) => {
-                error!("Failed to initialize winit event loop: {e}");
-                return;
-            }
-        };
-        let wake_proxy = event_loop.create_proxy();
-
-        let (to_emu_tx, to_emu_rx) = mpsc::channel();
-        // Bounded channels so UI stalls can't grow memory without bound.
-        let (from_emu_frame_tx, from_emu_frame_rx) = cb::bounded(1);
-        let (from_emu_serial_tx, from_emu_serial_rx) = cb::bounded(64);
-        // Buffer pool to avoid per-frame allocations in the emulator thread.
-        let (frame_pool_tx, frame_pool_rx) = cb::bounded::<Vec<u32>>(2);
-        for _ in 0..2 {
-            let _ = frame_pool_tx.send(vec![0u32; 160 * 144]);
-        }
-
-        let exec_trace = Arc::new(Mutex::new(Vec::<ui::code_data::ExecutedInstruction>::new()));
-        let emu_gb = Arc::clone(&gb);
-        let emu_snapshot = Arc::clone(&ui_snapshot);
-        let emu_mobile = mobile.clone();
-        let emu_serial_peripheral = serial_peripheral;
-        let emu_mobile_diag = args.mobile_diag;
-        let emu_load_config = load_config.clone();
-        let emu_frame_pool_tx = frame_pool_tx.clone();
-        let emu_exec_trace = Arc::clone(&exec_trace);
-        let emu_handle = thread::spawn(move || {
-            run_emulator_thread(
-                emu_gb,
-                emu_snapshot,
-                speed,
-                initial_paused,
-                debug_enabled,
-                emu_mobile,
-                emu_serial_peripheral,
-                emu_mobile_diag,
-                emu_load_config,
-                EmuThreadChannels {
-                    rx: to_emu_rx,
-                    frame_tx: from_emu_frame_tx,
-                    serial_tx: from_emu_serial_tx,
-                    frame_pool_tx: emu_frame_pool_tx,
-                    frame_pool_rx,
-                    wake_proxy,
-                    exec_trace: emu_exec_trace,
-                },
-            );
-        });
-        let mut emu_handle = Some(emu_handle);
-        let mut sent_shutdown = false;
-
-        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::UpdateInput(0xFF)));
-
-        let initial_scale = ui_config
-            .window_size
-            .scale_factor_px()
-            .unwrap_or(DEFAULT_WINDOW_SCALE);
-        let attrs = enforce_square_corners(
-            Window::default_attributes()
-                .with_title("vibeEmu")
-                .with_window_icon(load_window_icon())
-                .with_resizable(false)
-                .with_inner_size(winit::dpi::LogicalSize::new(
-                    (160 * initial_scale) as f64,
-                    (144 * initial_scale + DEFAULT_MENU_BAR_HEIGHT_PX) as f64,
-                )),
-        );
-        #[allow(deprecated)]
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => w,
-            Err(e) => {
-                error!("Failed to create main window: {e}");
-                return;
-            }
-        };
-
-        let size = window.inner_size();
-        let surface = SurfaceTexture::new(size.width, size.height, &window);
-        let pixels = match Pixels::new(160, 144, surface) {
-            Ok(p) => p,
-            Err(e) => {
-                error!("Pixels init failed (main window): {e}");
-                return;
-            }
-        };
-
-        log_wgpu_adapter_once(&pixels);
-
-        let mut windows = HashMap::new();
-        let main_win = UiWindow::new(WindowKind::Main, window, pixels, (160, 144));
-        let main_id = main_win.win.id();
-        windows.insert(main_id, main_win);
-        if let Some(win) = windows.get_mut(&main_id) {
-            win.resize(win.win.inner_size());
-        }
-
-        if let Some(main) = windows.get(&main_id) {
-            apply_window_size_setting(&main.win, ui_config.window_size);
-        }
-        ui_state.last_main_inner_size = None;
-
-        let mut state = 0xFFu8;
-
-        if initial_paused {
-            let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
-        }
-
-        #[allow(deprecated)]
-        let _ = event_loop.run(move |event, target| {
-            target.set_control_flow(if ui_state.paused {
-                ControlFlow::Wait
-            } else {
-                ControlFlow::WaitUntil(Instant::now() + FRAME_TIME)
-            });
-            match &event {
-                Event::UserEvent(UserEvent::EmuWake) => {
-                    if let Ok(mut trace) = exec_trace.lock()
-                        && !trace.is_empty()
-                    {
-                        let drained = std::mem::take(&mut *trace);
-                        ui_state
-                            .debugger
-                            .note_executed_instructions(drained.as_slice());
-                    }
-
-                    let mut got_frame = false;
-
-                    while let Ok(evt) = from_emu_frame_rx.try_recv() {
-                        if let EmuEvent::Frame {
-                            frame: mut incoming,
-                            frame_index: _,
-                        } = evt
-                            && incoming.len() == frame.len()
-                        {
-                            std::mem::swap(&mut frame, &mut incoming);
-                            let _ = frame_pool_tx.send_timeout(incoming, Duration::ZERO);
-                            got_frame = true;
-                        }
-                    }
-
-                    while let Ok(evt) = from_emu_serial_rx.try_recv() {
-                        if let EmuEvent::Serial { data, frame_index } = evt
-                            && !data.is_empty()
-                        {
-                            debug!(
-                                target: "vibe_emu_ui::serial",
-                                "[SERIAL {frame_index}] {}",
-                                format_serial_bytes(&data)
-                            );
-                        }
-                    }
-
-                    if got_frame {
-                        for win in windows.values() {
-                            win.win.request_redraw();
-                        }
-                    }
-                }
-                Event::UserEvent(UserEvent::DebuggerWake) => {
-                    if let Ok(mut trace) = exec_trace.lock()
-                        && !trace.is_empty()
-                    {
-                        let drained = std::mem::take(&mut *trace);
-                        ui_state
-                            .debugger
-                            .note_executed_instructions(drained.as_slice());
-                    }
-                    for win in windows.values() {
-                        win.win.request_redraw();
-                    }
-                }
-                Event::UserEvent(UserEvent::DebuggerAck { cmd_id }) => {
-                    ui_state.debugger.ack_debug_cmd(*cmd_id);
-                    for win in windows.values() {
-                        win.win.request_redraw();
-                    }
-                }
-                Event::UserEvent(UserEvent::DebuggerBreak { bank, addr }) => {
-                    ui_state.paused = true;
-                    ui_state.pending_pause = Some(true);
-                    ui_state.menu_resume_armed = false;
-                    ui_state.debugger_animate_active = false;
-                    ui_state.spawn_debugger = true;
-                    ui_state.debugger_pending_focus = true;
-                    ui_state.debugger.note_breakpoint_hit(*bank, *addr);
-                    for win in windows.values() {
-                        win.win.request_redraw();
-                    }
-                }
-                Event::UserEvent(UserEvent::DebuggerWatchpoint { hit }) => {
-                    ui_state.paused = true;
-                    ui_state.pending_pause = Some(true);
-                    ui_state.menu_resume_armed = false;
-                    ui_state.debugger_animate_active = false;
-                    ui_state.spawn_debugger = true;
-                    ui_state.debugger_pending_focus = true;
-                    ui_state.debugger.note_watchpoint_hit(hit);
-                    ui_state.watchpoints.note_watchpoint_hit(hit);
-                    for win in windows.values() {
-                        win.win.request_redraw();
-                    }
-                }
-                Event::WindowEvent {
-                    window_id,
-                    event: win_event,
-                    ..
-                } => {
-                    if let Some(win) = windows.get_mut(window_id) {
-                        let (want_capture_mouse, want_capture_keyboard, want_text_input) = {
-                            let ui::window::UiWindow {
-                                win: window,
-                                imgui,
-                                platform,
-                                ..
-                            } = win;
-
-                            let suspended = imgui
-                                .take()
-                                .expect("UiWindow missing imgui context (internal error)");
-                            let mut ctx = suspended.activate().expect(
-                                "no ImGui context should be active while handling a window event",
-                            );
-
-                            platform.handle_event(ctx.io_mut(), window, &event);
-                            let io = ctx.io();
-                            let res = (
-                                io.want_capture_mouse,
-                                io.want_capture_keyboard,
-                                io.want_text_input,
-                            );
-                            *imgui = Some(ctx.suspend());
-                            res
-                        };
-
-                        // Ensure auxiliary windows (debugger/VRAM) stay responsive even if
-                        // emulation frames are being dropped due to backpressure.
-                        if matches!(
-                            win_event,
-                            WindowEvent::CursorMoved { .. }
-                                | WindowEvent::MouseInput { .. }
-                                | WindowEvent::MouseWheel { .. }
-                                | WindowEvent::KeyboardInput { .. }
-                        ) {
-                            // When paused, the UI must still redraw on input so menu bars and
-                            // auxiliary tools remain interactive.
-                            if !matches!(win.kind, WindowKind::Main)
-                                || ui_state.paused
-                                || want_capture_mouse
-                                || want_capture_keyboard
-                            {
-                                win.win.request_redraw();
-                            }
-                        }
-                        match win_event {
-                            WindowEvent::ModifiersChanged(mods) => {
-                                ui_state.key_modifiers = mods.state();
-                            }
-                            WindowEvent::CloseRequested => {
-                                if matches!(win.kind, WindowKind::Main) {
-                                    if !sent_shutdown {
-                                        let _ =
-                                            to_emu_tx.send(UiToEmu::Command(EmuCommand::Shutdown));
-                                        sent_shutdown = true;
-                                    }
-                                    target.exit();
-                                    #[allow(clippy::needless_return)]
-                                    return;
-                                } else {
-                                    windows.remove(window_id);
-                                }
-                            }
-                            WindowEvent::Resized(size) => {
-                                win.resize(*size);
-                                win.win.request_redraw();
-                            }
-                            WindowEvent::ScaleFactorChanged { .. } => {
-                                // winit 0.30 provides an InnerSizeWriter; the current physical
-                                // size can be queried from the window.
-                                win.resize(win.win.inner_size());
-                                win.win.request_redraw();
-                            }
-                            WindowEvent::Focused(focused) => {
-                                let focused = *focused;
-
-                                if matches!(win.kind, WindowKind::Debugger) {
-                                    if focused {
-                                        // Always request a paused snapshot on focus so the
-                                        // disassembly highlights the current paused PC.
-                                        ui_state.pending_pause = Some(true);
-
-                                        if !ui_state.debugger_focus_pause_active {
-                                            ui_state.debugger_focus_pause_active = true;
-                                            ui_state.debugger_focus_resume_armed = !ui_state.paused;
-                                            if !ui_state.paused {
-                                                ui_state
-                                                    .debugger
-                                                    .set_pause_reason(ui::debugger::DebuggerPauseReason::DebuggerFocus);
-                                                ui_state.paused = true;
-                                                ui_state.pending_pause = Some(true);
-                                            }
-                                        }
-                                    } else if ui_state.debugger_focus_pause_active {
-                                        ui_state.debugger_focus_pause_active = false;
-                                        if ui_state.debugger_focus_resume_armed {
-                                            ui_state.debugger_focus_resume_armed = false;
-                                            ui_state.paused = false;
-                                            ui_state.pending_pause = Some(false);
-                                        }
-                                    }
-                                }
-                            }
-                            WindowEvent::KeyboardInput { event, .. }
-                                if matches!(win.kind, WindowKind::Main | WindowKind::Options) =>
-                            {
-                                if let PhysicalKey::Code(code) = event.physical_key {
-                                    let pressed = event.state == ElementState::Pressed;
-
-                                    // Key rebinding takes precedence over all bindings.
-                                    if pressed && let Some(target) = ui_state.rebinding.take() {
-                                        match target {
-                                            RebindTarget::Joypad(mask) => {
-                                                keybinds.set_joypad_binding(mask, code);
-                                            }
-                                            RebindTarget::Pause => {
-                                                keybinds.set_pause_key(code);
-                                            }
-                                            RebindTarget::FastForward => {
-                                                keybinds.set_fast_forward_key(code);
-                                            }
-                                            RebindTarget::Quit => {
-                                                keybinds.set_quit_key(code);
-                                            }
-                                        }
-
-                                        if let Err(e) = keybinds.save_to_file(&keybinds_path) {
-                                            warn!(
-                                                "Failed to save keybinds file {}: {e}",
-                                                keybinds_path.display()
-                                            );
-                                        }
-
-                                        win.win.request_redraw();
-                                        return;
-                                    }
-
-                                    // In the Options window we only care about rebinding capture.
-                                    if matches!(win.kind, WindowKind::Options) {
-                                        return;
-                                    }
-
-                                    // Quit is always honored.
-                                    if code == keybinds.quit_key() {
-                                        if pressed {
-                                            ui_state.pending_exit = true;
-                                        }
-                                        return;
-                                    }
-
-                                    // Pause toggle is always honored (unless ImGui is typing into a widget).
-                                    if code == keybinds.pause_key()
-                                        && pressed
-                                        && !want_text_input
-                                        && !ui_state.menu_pause_active
-                                    {
-                                        ui_state.paused = !ui_state.paused;
-                                        let _ = to_emu_tx.send(UiToEmu::Command(
-                                            EmuCommand::SetPaused(ui_state.paused),
-                                        ));
-                                        win.win.request_redraw();
-                                        return;
-                                    }
-
-                                    // Fast-forward is a hold action.
-                                    if code == keybinds.fast_forward_key() {
-                                        speed.fast = pressed;
-                                        speed.factor = if speed.fast { FF_MULT } else { 1.0 };
-                                        let _ = to_emu_tx
-                                            .send(UiToEmu::Command(EmuCommand::SetSpeed(speed)));
-                                        return;
-                                    }
-
-                                    // Joypad input is disabled while paused or while ImGui is consuming text.
-                                    if ui_state.paused || want_text_input {
-                                        return;
-                                    }
-
-                                    if let Some(mask) = keybinds.joypad_mask_for(code) {
-                                        if pressed {
-                                            state &= !mask;
-                                        } else {
-                                            state |= mask;
-                                        }
-                                        let _ = to_emu_tx
-                                            .send(UiToEmu::Command(EmuCommand::UpdateInput(state)));
-                                    }
-                                }
-                            }
-                            WindowEvent::KeyboardInput { event, .. }
-                                if matches!(win.kind, WindowKind::Debugger) =>
-                            {
-                                if let PhysicalKey::Code(code) = event.physical_key {
-                                    let pressed = event.state == ElementState::Pressed;
-                                    let shift = ui_state
-                                        .key_modifiers
-                                        .contains(winit::keyboard::ModifiersState::SHIFT);
-                                    let ctrl = ui_state
-                                        .key_modifiers
-                                        .contains(winit::keyboard::ModifiersState::CONTROL);
-                                    let alt = ui_state
-                                        .key_modifiers
-                                        .contains(winit::keyboard::ModifiersState::ALT);
-
-                                    if pressed && code == keybinds.quit_key() {
-                                        ui_state.pending_exit = true;
-                                        return;
-                                    }
-
-                                    if want_text_input {
-                                        return;
-                                    }
-
-                                    if pressed
-                                        && code == winit::keyboard::KeyCode::NumpadMultiply
-                                    {
-                                        ui_state.pending_action = Some(UiAction::Reset);
-                                        win.win.request_redraw();
-                                    }
-
-                                    if pressed && code == winit::keyboard::KeyCode::F5 {
-                                        ui_state.debugger.request_continue_and_focus_main();
-                                        win.win.request_redraw();
-                                    }
-
-                                    if pressed && code == winit::keyboard::KeyCode::F9 {
-                                        if ctrl {
-                                            ui_state
-                                                .debugger
-                                                .request_run_not_this_break_and_focus_main();
-                                        } else if shift {
-                                            ui_state
-                                                .debugger
-                                                .request_continue_no_break_and_focus_main();
-                                        } else {
-                                            ui_state
-                                                .debugger
-                                                .request_continue_and_focus_main();
-                                        }
-                                        win.win.request_redraw();
-                                    }
-
-                                    if pressed && code == winit::keyboard::KeyCode::F7 {
-                                        ui_state.debugger.request_step();
-                                        win.win.request_redraw();
-                                    }
-
-                                    if pressed && code == winit::keyboard::KeyCode::F3 {
-                                        ui_state.debugger.request_step_over();
-                                        win.win.request_redraw();
-                                    }
-
-                                    if pressed && code == winit::keyboard::KeyCode::F4 {
-                                        if shift {
-                                            ui_state
-                                                .debugger
-                                                .request_run_to_cursor_no_break();
-                                        } else {
-                                            ui_state.debugger.request_run_to_cursor();
-                                        }
-                                        win.win.request_redraw();
-                                    }
-
-                                    if pressed && code == winit::keyboard::KeyCode::F6 {
-                                        ui_state.debugger.request_jump_to_cursor();
-                                        win.win.request_redraw();
-                                    }
-
-                                    if pressed && code == winit::keyboard::KeyCode::F8 {
-                                        ui_state.debugger.request_step_out();
-                                        win.win.request_redraw();
-                                    }
-
-                                    if pressed && alt && code == winit::keyboard::KeyCode::KeyA {
-                                        ui_state.debugger.request_toggle_animate();
-                                        win.win.request_redraw();
-                                    }
-
-                                    if pressed && code == winit::keyboard::KeyCode::F10 {
-                                        ui_state.debugger.request_step();
-                                        win.win.request_redraw();
-                                    }
-                                }
-                            }
-                            WindowEvent::RedrawRequested => {
-                                // Ensure the Pixels surface matches the actual window size.
-                                // In some multi-window + DPI scenarios we can miss/lose a resize event,
-                                // which otherwise leads to wgpu validation panics on scissor.
-                                win.ensure_surface_matches_window();
-
-                                let (surface_w, surface_h) = win.surface_size();
-                                let is_main = matches!(win.kind, WindowKind::Main);
-                                let use_integer_scaling =
-                                    ui_config.window_size.use_integer_scaling();
-                                let game_scaler = if is_main && use_integer_scaling {
-                                    win.game_scaler.clone()
-                                } else {
-                                    None
-                                };
-                                let (buffer_w, buffer_h) = win.buffer_size();
-
-                                let ui::window::UiWindow {
-                                    win: window,
-                                    imgui,
-                                    platform,
-                                    pixels,
-                                    renderer,
-                                    kind,
-                                    vram_viewer,
-                                    ..
-                                } = win;
-
-                                let suspended = imgui
-                                    .take()
-                                    .expect("UiWindow missing imgui context (internal error)");
-                                let mut ctx = suspended
-                                    .activate()
-                                    .expect("no ImGui context should be active while rendering");
-
-                                if let Err(e) = platform.prepare_frame(ctx.io_mut(), window) {
-                                    error!("imgui prepare_frame failed: {e}");
-                                    *imgui = Some(ctx.suspend());
-                                    return;
-                                }
-
-                                let fb_scale_y = ctx.io().display_framebuffer_scale[1];
-                                let ui = ctx.frame();
-
-                                let top_padding_px = if matches!(*kind, WindowKind::Main) {
-                                    (ui.frame_height() * fb_scale_y).ceil().max(0.0) as u32
-                                } else {
-                                    0
-                                };
-
-                                if matches!(*kind, WindowKind::Main)
-                                    && !ui_config.window_size.is_fullscreen()
-                                    && enforce_main_window_inner_size(
-                                        &mut ui_state,
-                                        window,
-                                        ui_config
-                                            .window_size
-                                            .scale_factor_px()
-                                            .unwrap_or(DEFAULT_WINDOW_SCALE),
-                                        top_padding_px,
-                                    )
-                                {
-                                    platform.prepare_render(ui, window);
-                                    let _ = ctx.render();
-                                    *imgui = Some(ctx.suspend());
-                                    window.request_redraw();
-                                    return;
-                                }
-
-                                match *kind {
-                                    WindowKind::Main => {
-                                        build_ui(
-                                            &mut ui_state,
-                                            &mut ui_config,
-                                            ui,
-                                            mobile.is_some(),
-                                        );
-                                        draw_game_screen(pixels, &frame);
-                                    }
-                                    WindowKind::Debugger => {
-                                        let snap =
-                                            ui_snapshot.read().unwrap_or_else(|e| e.into_inner());
-                                        let _ = pixels.frame_mut();
-                                        ui_state.debugger.ui(ui, &snap);
-                                    }
-                                    WindowKind::VramViewer => {
-                                        let snap =
-                                            ui_snapshot.read().unwrap_or_else(|e| e.into_inner());
-                                        draw_vram(vram_viewer.as_mut(), renderer, pixels, &snap, ui)
-                                    }
-                                    WindowKind::Watchpoints => {
-                                        let _ = pixels.frame_mut();
-                                        ui_state.watchpoints.ui(ui);
-                                    }
-                                    WindowKind::Options => {
-                                        draw_options_window(
-                                            &mut ui_state,
-                                            &mut ui_config,
-                                            &keybinds,
-                                            ui,
-                                        );
-                                    }
-                                }
-
-                                platform.prepare_render(ui, window);
-                                let draw_data = ctx.render();
-
-                                let render_result =
-                                    pixels.render_with(|encoder, render_target, context| {
-                                        if is_main {
-                                            if let Some(game_scaler) = game_scaler.as_deref() {
-                                                game_scaler.render(
-                                                    encoder,
-                                                    render_target,
-                                                    context,
-                                                    surface_w,
-                                                    surface_h,
-                                                    buffer_w,
-                                                    buffer_h,
-                                                    top_padding_px,
-                                                );
-                                            } else {
-                                                context
-                                                    .scaling_renderer
-                                                    .render(encoder, render_target);
-                                            }
-                                        } else {
-                                            context.scaling_renderer.render(encoder, render_target);
-                                        }
-
-                                        if draw_data.total_vtx_count > 0 {
-                                            let mut rpass = encoder.begin_render_pass(
-                                                &wgpu::RenderPassDescriptor {
-                                                    label: Some("imgui_pass"),
-                                                    color_attachments: &[Some(
-                                                        wgpu::RenderPassColorAttachment {
-                                                            view: render_target,
-                                                            resolve_target: None,
-                                                            ops: wgpu::Operations {
-                                                                load: wgpu::LoadOp::Load,
-                                                                store: true,
-                                                            },
-                                                        },
-                                                    )],
-                                                    depth_stencil_attachment: None,
-                                                },
-                                            );
-
-                                            let (clip_x, clip_y, clip_w, clip_h) =
-                                                context.scaling_renderer.clip_rect();
-
-                                            let max_w = surface_w;
-                                            let max_h = surface_h;
-
-                                            if max_w == 0
-                                                || max_h == 0
-                                                || clip_w == 0
-                                                || clip_h == 0
-                                                || clip_x >= max_w
-                                                || clip_y >= max_h
-                                            {
-                                                return Ok(());
-                                            }
-
-                                            let clip_x2 =
-                                                (clip_x.saturating_add(clip_w)).min(max_w);
-                                            let clip_y2 =
-                                                (clip_y.saturating_add(clip_h)).min(max_h);
-                                            let clip_w = clip_x2.saturating_sub(clip_x);
-                                            let clip_h = clip_y2.saturating_sub(clip_y);
-
-                                            if clip_w == 0 || clip_h == 0 {
-                                                return Ok(());
-                                            }
-
-                                            rpass.set_scissor_rect(clip_x, clip_y, clip_w, clip_h);
-
-                                            if let Err(e) = renderer.render_clamped(
-                                                draw_data,
-                                                pixels.queue(),
-                                                pixels.device(),
-                                                &mut rpass,
-                                                [surface_w, surface_h],
-                                            ) {
-                                                error!("imgui render failed: {e}");
-                                                return Ok(());
-                                            }
-                                        }
-                                        Ok(())
-                                    });
-
-                                if let Err(e) = render_result {
-                                    error!("Pixels render failed: {e}");
-                                    target.exit();
-                                }
-
-                                *imgui = Some(ctx.suspend());
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Event::AboutToWait => {
-                    let mut got_frame = false;
-
-                    while let Ok(evt) = from_emu_frame_rx.try_recv() {
-                        if let EmuEvent::Frame {
-                            frame: mut incoming,
-                            frame_index: _,
-                        } = evt
-                            && incoming.len() == frame.len()
-                        {
-                            std::mem::swap(&mut frame, &mut incoming);
-                            let _ = frame_pool_tx.send_timeout(incoming, Duration::ZERO);
-                            got_frame = true;
-                        }
-                    }
-
-                    while let Ok(evt) = from_emu_serial_rx.try_recv() {
-                        if let EmuEvent::Serial { data, frame_index } = evt
-                            && !data.is_empty()
-                        {
-                            debug!(
-                                target: "vibe_emu_ui::serial",
-                                "[SERIAL {frame_index}] {}",
-                                format_serial_bytes(&data)
-                            );
-                        }
-                    }
-
-                    if got_frame {
-                        for win in windows.values() {
-                            win.win.request_redraw();
-                        }
-                    }
-
-                    if ui_state.spawn_debugger
-                        && !windows
-                            .values()
-                            .any(|w| matches!(w.kind, WindowKind::Debugger))
-                    {
-                        spawn_debugger_window(target, &mut windows);
-                        ui_state.paused = true;
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
-                        ui_state.spawn_debugger = false;
-                    }
-
-                    if ui_state.debugger_pending_focus {
-                        if let Some(dbg) = windows
-                            .values()
-                            .find(|w| matches!(w.kind, WindowKind::Debugger))
-                        {
-                            request_attention_and_focus(&dbg.win);
-                        }
-                        ui_state.debugger_pending_focus = false;
-                    }
-                    if ui_state.spawn_vram
-                        && !windows
-                            .values()
-                            .any(|w| matches!(w.kind, WindowKind::VramViewer))
-                    {
-                        spawn_vram_window(target, &mut windows);
-                        ui_state.paused = true;
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
-                        ui_state.spawn_vram = false;
-                    }
-
-                    if ui_state.spawn_options
-                        && !windows
-                            .values()
-                            .any(|w| matches!(w.kind, WindowKind::Options))
-                    {
-                        spawn_options_window(target, &mut windows);
-                        ui_state.spawn_options = false;
-                    }
-
-                    if ui_state.spawn_watchpoints
-                        && !windows
-                            .values()
-                            .any(|w| matches!(w.kind, WindowKind::Watchpoints))
-                    {
-                        spawn_watchpoints_window(target, &mut windows);
-                        ui_state.paused = true;
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(true)));
-                        ui_state.spawn_watchpoints = false;
-                    }
-
-                    if ui_state.pending_exit {
-                        ui_state.pending_exit = false;
-                        ui_state.pending_save_ui_config = true;
-                        if !sent_shutdown {
-                            let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::Shutdown));
-                            sent_shutdown = true;
-                        }
-                        target.exit();
-                        return;
-                    }
-
-                    if let Some(peripheral) = ui_state.pending_serial_peripheral.take() {
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetSerialPeripheral(
-                            peripheral,
-                        )));
-                    }
-
-                    let dbg_actions = ui_state.debugger.take_actions();
-                    let dbg_has_run_to = dbg_actions.request_run_to.is_some();
-                    if dbg_actions.breakpoints_updated {
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetBreakpoints(
-                            dbg_actions.breakpoints,
-                        )));
-                    }
-
-                    let wp_actions = ui_state.watchpoints.take_actions();
-                    if wp_actions.watchpoints_updated {
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetWatchpoints(
-                            wp_actions.watchpoints,
-                        )));
-                    }
-
-                    if dbg_actions.request_toggle_animate {
-                        ui_state.debugger_animate_active = !ui_state.debugger_animate_active;
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetAnimate(
-                            ui_state.debugger_animate_active,
-                        )));
-
-                        if ui_state.debugger_animate_active && ui_state.paused {
-                            ui_state.paused = false;
-                            ui_state.pending_pause = None;
-                            let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::Resume {
-                                ignore_breakpoints: false,
-                            }));
-                        }
-                    }
-
-                    if let Some(addr) = dbg_actions.request_jump_to_cursor {
-                        ui_state.paused = true;
-                        ui_state.pending_pause = None;
-                        ui_state.debugger_animate_active = false;
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::JumpTo { addr }));
-                    }
-
-                    if let Some(addr) = dbg_actions.request_call_cursor {
-                        ui_state.paused = true;
-                        ui_state.pending_pause = None;
-                        ui_state.debugger_animate_active = false;
-                        let _ =
-                            to_emu_tx.send(UiToEmu::Command(EmuCommand::CallCursor { addr }));
-                    }
-
-                    if dbg_actions.request_jump_sp {
-                        ui_state.paused = true;
-                        ui_state.pending_pause = None;
-                        ui_state.debugger_animate_active = false;
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::JumpSp));
-                    }
-
-                    if let Some(cmd_id) = dbg_actions.request_step {
-                        ui_state.paused = true;
-                        ui_state.pending_pause = Some(true);
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::Step {
-                            count: 1,
-                            cmd_id: Some(cmd_id),
-                            guarantee_snapshot: true,
-                        }));
-                    }
-                    if let Some(req) = dbg_actions.request_run_to {
-                        ui_state.paused = false;
-                        ui_state.pending_pause = None;
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::RunTo {
-                            target: req.target,
-                            ignore_breakpoints: req.ignore_breakpoints,
-                        }));
-                    }
-                    if dbg_actions.request_pause {
-                        ui_state.paused = true;
-                        ui_state.pending_pause = Some(true);
-                        ui_state.debugger_animate_active = false;
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetAnimate(false)));
-                    }
-                    if let Some(breakpoint) = dbg_actions.request_continue_ignore_once {
-                        if !dbg_has_run_to {
-                            ui_state.paused = false;
-                            ui_state.pending_pause = None;
-                            let _ = to_emu_tx.send(UiToEmu::Command(
-                                EmuCommand::ResumeIgnoreOnce { breakpoint },
-                            ));
-                        }
-
-                        if let Some(main) = windows
-                            .values()
-                            .find(|w| matches!(w.kind, WindowKind::Main))
-                        {
-                            request_attention_and_focus(&main.win);
-                        }
-                    } else if dbg_actions.request_continue || dbg_actions.request_continue_no_break {
-                        if !dbg_has_run_to {
-                            ui_state.paused = false;
-                            ui_state.pending_pause = None;
-                            let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::Resume {
-                                ignore_breakpoints: dbg_actions.request_continue_no_break,
-                            }));
-                        }
-
-                        if let Some(main) = windows
-                            .values()
-                            .find(|w| matches!(w.kind, WindowKind::Main))
-                        {
-                            request_attention_and_focus(&main.win);
-                        }
-                    }
-
-                    if let Some(paused) = ui_state.pending_pause.take() {
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(paused)));
-                    }
-
-                    if ui_state.pending_load_config_update {
-                        ui_state.pending_load_config_update = false;
-                        let updated = build_load_config(
-                            &ui_config,
-                            args.dmg_neutral,
-                            load_config.bootrom_override.clone(),
-                        );
-                        load_config = updated.clone();
-                        let _ =
-                            to_emu_tx.send(UiToEmu::Command(EmuCommand::UpdateLoadConfig(updated)));
-                    }
-
-                    if let Some(mode) = ui_state.pending_window_size.take() {
-                        if let Some(main) = windows
-                            .values()
-                            .find(|w| matches!(w.kind, WindowKind::Main))
-                        {
-                            apply_window_size_setting(&main.win, mode);
-                        }
-                        ui_state.last_main_inner_size = None;
-                    }
-
-                    if ui_state.pending_save_ui_config {
-                        ui_state.pending_save_ui_config = false;
-                        if let Err(e) = ui_config::save_to_file(&ui_config_path, &ui_config) {
-                            warn!("Failed to save UI config {}: {e}", ui_config_path.display());
-                        }
-                    }
-
-                    if let Some(action) = ui_state.pending_action.take() {
-                        let _ = to_emu_tx.send(UiToEmu::Action(action));
-                        ui_state.paused = false;
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetPaused(false)));
-                        got_frame = true;
-                    }
-
-                    if got_frame
-                        && let Some(main) = windows
-                            .values()
-                            .find(|w| matches!(w.kind, WindowKind::Main))
-                    {
-                        main.win.request_redraw();
-                    }
-                }
-                Event::LoopExiting => {
-                    if !sent_shutdown {
-                        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::Shutdown));
-                        sent_shutdown = true;
-                    }
-                    if let Some(handle) = emu_handle.take() {
-                        let _ = handle.join();
-                    }
-                }
-                _ => {}
-            }
-        });
-    } else {
-        let mut frame_count = 0u64;
-        let start = Instant::now();
-        let mut mobile_time_accum_ns: u128 = 0;
-        let mobile_active = serial_peripheral == SerialPeripheral::MobileAdapter;
-        'headless: loop {
-            while !gb.mmu.ppu.frame_ready() {
-                gb.cpu.step(&mut gb.mmu);
-                if let Some(max) = cycle_limit
-                    && gb.cpu.cycles >= max
-                {
-                    break 'headless;
-                }
-                if let Some(limit) = second_limit
-                    && start.elapsed() >= limit
-                {
-                    break 'headless;
-                }
-            }
-
-            frame.copy_from_slice(gb.mmu.ppu.framebuffer());
-            gb.mmu.ppu.clear_frame_flag();
-
-            if debug_enabled && frame_count.is_multiple_of(60) {
-                let serial = gb.mmu.take_serial();
-                if !serial.is_empty() {
-                    debug!(
-                        target: "vibe_emu_ui::serial",
-                        "[SERIAL] {}",
-                        format_serial_bytes(&serial)
-                    );
-                }
-
-                debug!(target: "vibe_emu_ui::cpu", "{}", gb.cpu.debug_state());
-            }
-
-            frame_count += 1;
-
-            if mobile_active && let Some(mobile) = mobile.as_ref() {
-                mobile_time_accum_ns += FRAME_TIME.as_nanos();
-                let delta_ms = (mobile_time_accum_ns / 1_000_000) as u32;
-                mobile_time_accum_ns %= 1_000_000;
-                if delta_ms != 0
-                    && let Ok(mut adapter) = mobile.lock()
-                {
-                    let _ = adapter.poll(delta_ms);
-                }
-            }
-
-            if let Some(max) = frame_limit
-                && frame_count >= max as u64
-            {
-                break;
-            }
-            if let Some(limit) = second_limit
-                && start.elapsed() >= limit
-            {
-                break;
-            }
-        }
-
-        if let Some(mobile) = mobile.as_ref()
-            && let Ok(mut adapter) = mobile.lock()
-        {
-            let _ = adapter.stop();
-        }
-    }
-}
-
-#[cfg(test)]
-mod run_to_regression_tests {
-    use super::*;
-    use std::time::Instant;
-    use vibe_emu_core::cartridge::Cartridge;
-    use vibe_emu_core::gameboy::GameBoy;
-
-    fn build_vblank_run_to_rom() -> Vec<u8> {
-        let mut rom = vec![0u8; 0x8000];
-
-        // Header: no MBC.
-        rom[0x0147] = 0x00;
-
-        // Main loop at 0x0100: EI; NOP; HALT; JP 0x0102.
-        rom[0x0100] = 0xFB;
-        rom[0x0101] = 0x00;
-        rom[0x0102] = 0x76;
-        rom[0x0103] = 0xC3;
-        rom[0x0104] = 0x02;
-        rom[0x0105] = 0x01;
-
-        // VBlank interrupt vector: JP 0x018E.
-        rom[0x0040] = 0xC3;
-        rom[0x0041] = 0x8E;
-        rom[0x0042] = 0x01;
-
-        // VBlank handler at 0x018E: NOP; NOP; NOP; NOP; RETI.
-        rom[0x018E] = 0x00;
-        rom[0x018F] = 0x00;
-        rom[0x0190] = 0x00;
-        rom[0x0191] = 0x00;
-        rom[0x0192] = 0xD9;
-
-        rom
-    }
-
-    fn snapshot_or_default(ui_snapshot: &Arc<RwLock<UiSnapshot>>) -> UiSnapshot {
-        ui_snapshot
-            .read()
-            .map(|s| s.clone())
-            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
-    }
-
-    fn wait_for_break_at(
-        ui_snapshot: &Arc<RwLock<UiSnapshot>>,
-        addr: u16,
-        timeout: Duration,
-    ) -> UiSnapshot {
-        let start = Instant::now();
-        loop {
-            let snap = snapshot_or_default(ui_snapshot);
-            if snap.debugger.paused && snap.cpu.pc == addr {
-                return snap;
-            }
-            if start.elapsed() > timeout {
-                panic!(
-                    "timed out waiting for break at {:04X} (last pc={:04X} paused={})",
-                    addr, snap.cpu.pc, snap.debugger.paused
-                );
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-    }
-
-    #[test]
-    fn run_to_cursor_does_not_take_a_frame_of_cycles() {
-        #[cfg(target_os = "linux")]
-        {
-            let has_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
-                || std::env::var_os("WAYLAND_SOCKET").is_some();
-            let has_x11 = std::env::var_os("DISPLAY").is_some();
-            if !(has_wayland || has_x11) {
-                return;
-            }
-        }
-
-        let rom = build_vblank_run_to_rom();
-        let cart = Cartridge::load(rom);
-
-        let mut gb = GameBoy::new();
-        gb.mmu.load_cart(cart);
-        gb.mmu.write_byte(0xFFFF, 0x01); // IE: VBlank
-        gb.mmu.write_byte(0xFF40, 0x91); // LCDC: LCD on
-
-        let gb = Arc::new(Mutex::new(gb));
-        let ui_snapshot = Arc::new(RwLock::new(UiSnapshot::default()));
-
-        let (to_emu_tx, to_emu_rx) = mpsc::channel::<UiToEmu>();
-        let (frame_tx, _frame_rx) = cb::unbounded::<EmuEvent>();
-        let (serial_tx, _serial_rx) = cb::unbounded::<EmuEvent>();
-        let (frame_pool_tx, frame_pool_rx) = cb::unbounded::<Vec<u32>>();
-        let _ = frame_pool_tx.send(vec![0u32; 160 * 144]);
-
-        let event_loop = {
-            let mut builder = EventLoop::<UserEvent>::with_user_event();
-
+    let keybinds_path = args
+        .keybinds
+        .clone()
+        .unwrap_or_else(keybinds::default_keybinds_path);
+    let keybinds = KeyBindings::load_from_file(&keybinds_path);
+
+    if args.mobile {
+        let config_path = args.mobile_config.clone().unwrap_or_else(|| {
             #[cfg(target_os = "windows")]
             {
-                use winit::platform::windows::EventLoopBuilderExtWindows;
-                builder.with_any_thread(true);
+                if let Some(appdata) = std::env::var_os("APPDATA") {
+                    return std::path::PathBuf::from(appdata)
+                        .join("vibeemu")
+                        .join("mobile.config");
+                }
             }
 
-            // winit enforces main-thread event loop creation on some Linux backends.
-            // Tests run on worker threads, so opt into the platform escape hatch.
-            #[cfg(target_os = "linux")]
-            {
-                #[allow(unused_imports)]
-                use winit::platform::wayland::EventLoopBuilderExtWayland;
-                #[allow(unused_imports)]
-                use winit::platform::x11::EventLoopBuilderExtX11;
-
-                let _ = winit::platform::wayland::EventLoopBuilderExtWayland::with_any_thread(
-                    &mut builder,
-                    true,
-                );
-                let _ = winit::platform::x11::EventLoopBuilderExtX11::with_any_thread(
-                    &mut builder,
-                    true,
-                );
+            if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+                return std::path::PathBuf::from(xdg)
+                    .join("vibeemu")
+                    .join("mobile.config");
             }
 
-            builder
-                .build()
-                .expect("failed to build winit event loop for tests")
-        };
-        let wake_proxy = event_loop.create_proxy();
+            if let Some(home) = std::env::var_os("HOME") {
+                return std::path::PathBuf::from(home)
+                    .join(".local")
+                    .join("share")
+                    .join("vibeemu")
+                    .join("mobile.config");
+            }
 
-        let exec_trace = Arc::new(Mutex::new(Vec::<ui::code_data::ExecutedInstruction>::new()));
+            std::path::PathBuf::from("mobile.config")
+        });
 
-        let channels = EmuThreadChannels {
-            rx: to_emu_rx,
-            frame_tx,
-            serial_tx,
-            frame_pool_tx,
-            frame_pool_rx,
-            wake_proxy,
-            exec_trace,
-        };
+        if let Some(parent) = config_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
 
-        let speed = Speed {
-            factor: 1.0,
-            fast: true,
-        };
+        match MobileAdapter::new_std(config_path) {
+            Ok(mut adapter) => {
+                let dns1 = args.mobile_dns1.as_ref().and_then(|dns| {
+                    dns.parse::<std::net::IpAddr>().ok().map(|ip| match ip {
+                        std::net::IpAddr::V4(v4) => MobileAddr::V4 {
+                            host: v4.octets(),
+                            port: 53,
+                        },
+                        std::net::IpAddr::V6(v6) => MobileAddr::V6 {
+                            host: v6.octets(),
+                            port: 53,
+                        },
+                    })
+                });
 
-        let load_config = LoadConfig {
-            emulation_mode: EmulationMode::ForceDmg,
-            dmg_neutral: false,
-            bootrom_override: None,
-            dmg_bootrom_path: None,
-            cgb_bootrom_path: None,
-        };
+                let dns2 = args.mobile_dns2.as_ref().and_then(|dns| {
+                    dns.parse::<std::net::IpAddr>().ok().map(|ip| match ip {
+                        std::net::IpAddr::V4(v4) => MobileAddr::V4 {
+                            host: v4.octets(),
+                            port: 53,
+                        },
+                        std::net::IpAddr::V6(v6) => MobileAddr::V6 {
+                            host: v6.octets(),
+                            port: 53,
+                        },
+                    })
+                });
 
-        let emu_thread = {
-            let gb = Arc::clone(&gb);
-            let ui_snapshot = Arc::clone(&ui_snapshot);
-            thread::spawn(move || {
-                run_emulator_thread(
-                    gb,
-                    ui_snapshot,
-                    speed,
-                    false,
-                    false,
-                    None,
-                    SerialPeripheral::None,
-                    false,
-                    load_config,
-                    channels,
-                )
-            })
-        };
+                let config = MobileConfig {
+                    device: args.mobile_device.into(),
+                    unmetered: args.mobile_unmetered,
+                    dns1: dns1.unwrap_or_default(),
+                    dns2: dns2.unwrap_or_default(),
+                    p2p_port: args.mobile_p2p_port,
+                    relay: MobileAddr::None,
+                    relay_token: None,
+                };
 
-        // Break at the start of the VBlank handler.
-        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetBreakpoints(vec![
-            ui::debugger::BreakpointSpec {
-                bank: 0x00,
-                addr: 0x018E,
+                if let Err(e) = adapter.apply_config(&config) {
+                    warn!("Failed to apply mobile adapter config: {e}");
+                }
+
+                if let Err(e) = adapter.start() {
+                    warn!("Failed to start mobile adapter: {e}");
+                } else {
+                    info!("Mobile Adapter enabled");
+                    let adapter = Arc::new(Mutex::new(adapter));
+                    let link_port = MobileLinkPort::new(Arc::clone(&adapter));
+                    gb.mmu.serial.connect(Box::new(link_port));
+                }
+            }
+            Err(e) => {
+                warn!("Failed to create mobile adapter: {e}");
+            }
+        }
+    }
+
+    let gb = Arc::new(Mutex::new(gb));
+
+    let (to_emu_tx, to_emu_rx) = mpsc::channel();
+    let (from_emu_frame_tx, from_emu_frame_rx) = cb::bounded(3);
+    let (frame_pool_tx, frame_pool_rx) = cb::bounded::<Vec<u32>>(4);
+    for _ in 0..4 {
+        let _ = frame_pool_tx.send(vec![0u32; 160 * 144]);
+    }
+
+    let emu_gb = Arc::clone(&gb);
+    let speed = Speed {
+        factor: 1.0,
+        fast: false,
+    };
+    let initial_paused = rom_path.is_none();
+    let frame_pool_tx_clone = frame_pool_tx.clone();
+
+    let _emu_handle = thread::spawn(move || {
+        run_emulator_thread(
+            emu_gb,
+            speed,
+            initial_paused,
+            EmuThreadChannels {
+                rx: to_emu_rx,
+                frame_tx: from_emu_frame_tx,
+                frame_pool_tx,
+                frame_pool_rx,
             },
-        ])));
-
-        let first = wait_for_break_at(&ui_snapshot, 0x018E, Duration::from_secs(2));
-        let cycles_at_018e = first.cpu.cycles;
-
-        // Clear the breakpoint so continue doesn't immediately re-break.
-        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::SetBreakpoints(Vec::new())));
-
-        // Run to a nearby instruction in the same handler.
-        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::RunTo {
-            target: ui::debugger::BreakpointSpec {
-                bank: 0x00,
-                addr: 0x0191,
-            },
-            ignore_breakpoints: false,
-        }));
-
-        let second = wait_for_break_at(&ui_snapshot, 0x0191, Duration::from_secs(2));
-        let delta_cycles = second.cpu.cycles.saturating_sub(cycles_at_018e);
-
-        assert!(
-            delta_cycles < 256,
-            "run-to took too long: delta_cycles={delta_cycles} (expected <256)"
         );
+    });
 
-        let _ = to_emu_tx.send(UiToEmu::Command(EmuCommand::Shutdown));
-        let _ = emu_thread.join();
-        drop(event_loop);
+    let scale = DEFAULT_WINDOW_SCALE as f32;
+    let initial_size = [
+        GB_WIDTH * scale,
+        GB_HEIGHT * scale + MENU_BAR_HEIGHT + STATUS_BAR_HEIGHT,
+    ];
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("vibeEmu")
+            .with_inner_size(initial_size)
+            .with_icon(load_window_icon().unwrap_or_default()),
+        ..Default::default()
+    };
+
+    let rom_path_clone = rom_path.clone();
+
+    if let Err(e) = eframe::run_native(
+        "vibeEmu",
+        native_options,
+        Box::new(move |cc| {
+            Ok(Box::new(VibeEmuApp::new(
+                cc,
+                gb,
+                to_emu_tx,
+                from_emu_frame_rx,
+                frame_pool_tx_clone,
+                rom_path_clone,
+                keybinds,
+                keybinds_path,
+                emulation_mode,
+            )))
+        }),
+    ) {
+        error!("eframe error: {e}");
     }
 }
