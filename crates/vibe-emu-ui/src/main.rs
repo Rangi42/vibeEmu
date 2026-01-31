@@ -314,6 +314,12 @@ enum TileDataSelect {
     Addr8000,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GuessedPalette {
+    Bg(usize),
+    Obj(usize),
+}
+
 struct VramViewerState {
     bg_map_tex: Option<egui::TextureHandle>,
     bg_map_buf: Vec<u8>,
@@ -337,6 +343,13 @@ struct VramViewerState {
     bg_selected_tile: Option<(u8, u8)>,
     bg_tile_preview_tex: Option<egui::TextureHandle>,
     bg_tile_preview_buf: Vec<u8>,
+
+    // Tiles tab options
+    tiles_show_grid: bool,
+    tiles_show_paletted: bool,
+    tiles_selected: Option<(u8, u16)>,
+    tiles_preview_tex: Option<egui::TextureHandle>,
+    tiles_preview_buf: Vec<u8>,
 }
 
 impl Default for VramViewerState {
@@ -362,6 +375,11 @@ impl Default for VramViewerState {
             bg_selected_tile: None,
             bg_tile_preview_tex: None,
             bg_tile_preview_buf: vec![0; 8 * 8 * 4],
+            tiles_show_grid: true,
+            tiles_show_paletted: true,
+            tiles_selected: None,
+            tiles_preview_tex: None,
+            tiles_preview_buf: vec![0; 8 * 8 * 4],
         }
     }
 }
@@ -2377,6 +2395,8 @@ impl VibeEmuApp {
         }
 
         let frame = ppu.frame_counter;
+        let show_paletted = self.vram_viewer.tiles_show_paletted;
+
         if frame != self.vram_viewer.last_frame || self.vram_viewer.tiles_tex.is_none() {
             let buf = &mut self.vram_viewer.tiles_buf[..img_w * img_h * 4];
             buf.fill(0);
@@ -2389,6 +2409,12 @@ impl VibeEmuApp {
                     let row = tile_idx / TILES_PER_ROW;
                     let tile_addr = tile_idx * 16;
 
+                    let pal_idx = if show_paletted && ppu.cgb {
+                        Self::guess_tile_palette(ppu, bank, tile_idx)
+                    } else {
+                        None
+                    };
+
                     for y in 0..TILE_H {
                         let vram = ppu.vram_bank(bank);
                         let lo = vram[tile_addr + y * 2];
@@ -2399,7 +2425,19 @@ impl VibeEmuApp {
                             let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
 
                             let rgb = if ppu.cgb {
-                                ppu.cgb_bg_colors[0][idx as usize]
+                                match pal_idx {
+                                    Some(GuessedPalette::Bg(pal)) => {
+                                        ppu.cgb_bg_colors[pal][idx as usize]
+                                    }
+                                    Some(GuessedPalette::Obj(pal)) => {
+                                        ppu.cgb_ob_colors[pal][idx as usize]
+                                    }
+                                    None => {
+                                        // Grayscale for tiles without a guessed palette
+                                        let gray = [0x00FFFFFF, 0x00AAAAAA, 0x00555555, 0x00000000];
+                                        gray[idx as usize]
+                                    }
+                                }
                             } else {
                                 let shade = (bgp >> (idx * 2)) & 0x03;
                                 DMG_COLORS[shade as usize]
@@ -2435,14 +2473,276 @@ impl VibeEmuApp {
             }
         }
 
-        if let Some(tex) = &self.vram_viewer.tiles_tex {
-            let avail = ui.available_size();
-            let tex_w = img_w as f32;
-            let tex_h = img_h as f32;
-            let scale = (avail.x / tex_w).min(avail.y / tex_h).clamp(1.0, 3.0);
-            let draw_size = egui::vec2(tex_w * scale, tex_h * scale);
-            ui.image((tex.id(), draw_size));
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                if let Some(tex) = &self.vram_viewer.tiles_tex {
+                    let scale = 2.0_f32;
+                    let tex_w = img_w as f32;
+                    let tex_h = img_h as f32;
+                    let draw_size = egui::vec2(tex_w * scale, tex_h * scale);
+
+                    let (response, painter) = ui.allocate_painter(draw_size, egui::Sense::click());
+                    let rect = response.rect;
+
+                    painter.image(
+                        tex.id(),
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+
+                    if self.vram_viewer.tiles_show_grid {
+                        let grid_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(80));
+                        let total_cols = TILES_PER_ROW * banks;
+                        for i in 1..total_cols {
+                            let x = rect.min.x + (i as f32) * 8.0 * scale;
+                            painter.line_segment(
+                                [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
+                                grid_stroke,
+                            );
+                        }
+                        for i in 1..ROWS {
+                            let y = rect.min.y + (i as f32) * 8.0 * scale;
+                            painter.line_segment(
+                                [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
+                                grid_stroke,
+                            );
+                        }
+                    }
+
+                    if let Some((sel_bank, sel_idx)) = self.vram_viewer.tiles_selected {
+                        let col = (sel_idx as usize) % TILES_PER_ROW;
+                        let row = (sel_idx as usize) / TILES_PER_ROW;
+                        let x_off = (sel_bank as usize) * TILES_PER_ROW + col;
+                        let sel_rect = egui::Rect::from_min_size(
+                            rect.min
+                                + egui::vec2(x_off as f32 * 8.0 * scale, row as f32 * 8.0 * scale),
+                            egui::vec2(8.0 * scale, 8.0 * scale),
+                        );
+                        painter.rect_stroke(
+                            sel_rect,
+                            0.0,
+                            egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                        );
+                    }
+
+                    if response.clicked()
+                        && let Some(pos) = response.interact_pointer_pos()
+                    {
+                        let rel = pos - rect.min;
+                        let tile_col = ((rel.x / scale) / 8.0) as usize;
+                        let tile_row = ((rel.y / scale) / 8.0) as usize;
+                        let bank = if tile_col >= TILES_PER_ROW { 1 } else { 0 };
+                        let col_in_bank = tile_col % TILES_PER_ROW;
+                        let tile_idx = tile_row * TILES_PER_ROW + col_in_bank;
+                        if tile_idx < 384 {
+                            self.vram_viewer.tiles_selected = Some((bank as u8, tile_idx as u16));
+                        }
+                    }
+
+                    if response.hovered()
+                        && let Some(pos) = ui.ctx().pointer_hover_pos()
+                        && rect.contains(pos)
+                    {
+                        let rel = pos - rect.min;
+                        let tile_col = ((rel.x / scale) / 8.0) as usize;
+                        let tile_row = ((rel.y / scale) / 8.0) as usize;
+                        response.on_hover_text(format!("Tile ({tile_col}, {tile_row})"));
+                    }
+                }
+            });
+
+            ui.add_space(8.0);
+
+            ui.vertical(|ui| {
+                if let Some((sel_bank, sel_idx)) = self.vram_viewer.tiles_selected {
+                    let tile_addr = (sel_idx as usize) * 16;
+                    let vram = ppu.vram_bank(sel_bank as usize);
+
+                    let pal_idx = if ppu.cgb {
+                        Self::guess_tile_palette(ppu, sel_bank as usize, sel_idx as usize)
+                    } else {
+                        None
+                    };
+
+                    let preview_buf = &mut self.vram_viewer.tiles_preview_buf;
+                    if tile_addr + 16 <= vram.len() {
+                        for row in 0..8 {
+                            let lo = vram[tile_addr + row * 2];
+                            let hi = vram[tile_addr + row * 2 + 1];
+                            for col in 0..8 {
+                                let bit = 7 - col;
+                                let idx = ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1);
+                                let color = if ppu.cgb {
+                                    match pal_idx {
+                                        Some(GuessedPalette::Bg(pal)) => {
+                                            ppu.cgb_bg_colors[pal][idx as usize]
+                                        }
+                                        Some(GuessedPalette::Obj(pal)) => {
+                                            ppu.cgb_ob_colors[pal][idx as usize]
+                                        }
+                                        None => {
+                                            let gray =
+                                                [0x00FFFFFF, 0x00AAAAAA, 0x00555555, 0x00000000];
+                                            gray[idx as usize]
+                                        }
+                                    }
+                                } else {
+                                    let shade = (ppu.bgp >> (idx * 2)) & 0x03;
+                                    DMG_COLORS[shade as usize]
+                                };
+                                let off = (row * 8 + col) * 4;
+                                preview_buf[off] = ((color >> 16) & 0xFF) as u8;
+                                preview_buf[off + 1] = ((color >> 8) & 0xFF) as u8;
+                                preview_buf[off + 2] = (color & 0xFF) as u8;
+                                preview_buf[off + 3] = 0xFF;
+                            }
+                        }
+                    }
+
+                    let pixels: Vec<egui::Color32> = preview_buf
+                        .chunks_exact(4)
+                        .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]))
+                        .collect();
+                    let image = egui::ColorImage {
+                        size: [8, 8],
+                        pixels,
+                    };
+                    match &mut self.vram_viewer.tiles_preview_tex {
+                        Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+                        None => {
+                            self.vram_viewer.tiles_preview_tex = Some(ctx.load_texture(
+                                "tiles_preview",
+                                image,
+                                egui::TextureOptions::NEAREST,
+                            ));
+                        }
+                    }
+
+                    if let Some(tex) = &self.vram_viewer.tiles_preview_tex {
+                        ui.image((tex.id(), egui::vec2(64.0, 64.0)));
+                    }
+                } else {
+                    ui.allocate_space(egui::vec2(64.0, 64.0));
+                }
+
+                ui.add_space(8.0);
+
+                egui::Grid::new("tiles_details")
+                    .num_columns(2)
+                    .spacing([12.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Tile Number");
+                        if let Some((_, sel_idx)) = self.vram_viewer.tiles_selected {
+                            ui.label(format!("{:02X}", sel_idx));
+                        } else {
+                            ui.label("--");
+                        }
+                        ui.end_row();
+
+                        ui.label("Tile Address");
+                        if let Some((sel_bank, sel_idx)) = self.vram_viewer.tiles_selected {
+                            let addr = 0x8000 + (sel_idx as usize) * 16;
+                            ui.label(format!("{}:{:04X}", sel_bank, addr));
+                        } else {
+                            ui.label("-:----");
+                        }
+                        ui.end_row();
+
+                        if ppu.cgb {
+                            ui.label("Guessed palette");
+                            if let Some((sel_bank, sel_idx)) = self.vram_viewer.tiles_selected {
+                                match Self::guess_tile_palette(
+                                    ppu,
+                                    sel_bank as usize,
+                                    sel_idx as usize,
+                                ) {
+                                    Some(GuessedPalette::Bg(pal)) => {
+                                        ui.label(format!("BG {}", pal));
+                                    }
+                                    Some(GuessedPalette::Obj(pal)) => {
+                                        ui.label(format!("OBJ {}", pal));
+                                    }
+                                    None => {
+                                        ui.label("");
+                                    }
+                                }
+                            } else {
+                                ui.label("--");
+                            }
+                            ui.end_row();
+                        }
+                    });
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.checkbox(&mut self.vram_viewer.tiles_show_paletted, "Show paletted");
+                ui.checkbox(&mut self.vram_viewer.tiles_show_grid, "Grid");
+            });
+        });
+    }
+
+    fn guess_tile_palette(
+        ppu: &ui::snapshot::PpuSnapshot,
+        bank: usize,
+        tile_idx: usize,
+    ) -> Option<GuessedPalette> {
+        // Check BG maps first
+        let map_bases = [0x1800_usize, 0x1C00_usize];
+        for &map_base in &map_bases {
+            for map_offset in 0..(32 * 32) {
+                let map_tile = ppu.vram0[map_base + map_offset];
+                let attr = ppu.vram1[map_base + map_offset];
+                let attr_bank = if attr & 0x08 != 0 { 1 } else { 0 };
+
+                let lcdc = ppu.lcdc;
+                let signed_mode = lcdc & 0x10 == 0;
+                let effective_tile = if signed_mode {
+                    // 8800 mode: base $9000 with signed offset
+                    // map value 0 → tile 256, value -128 (0x80) → tile 128
+                    ((map_tile as i8 as i32) + 256) as usize
+                } else {
+                    // 8000 mode: direct mapping to tiles 0-255
+                    map_tile as usize
+                };
+
+                if effective_tile == tile_idx && attr_bank == bank {
+                    return Some(GuessedPalette::Bg((attr & 0x07) as usize));
+                }
+            }
         }
+
+        // Check OAM entries
+        let tall_sprites = ppu.lcdc & 0x04 != 0;
+        for i in 0..40 {
+            let base = i * 4;
+            let oam_tile = ppu.oam[base + 2] as usize;
+            let attr = ppu.oam[base + 3];
+            let oam_bank = if ppu.cgb && attr & 0x08 != 0 { 1 } else { 0 };
+
+            // In 8x16 mode, the tile index has bit 0 ignored
+            let (tile_match, tile_match_bottom) = if tall_sprites {
+                let top_tile = oam_tile & 0xFE;
+                let bottom_tile = oam_tile | 0x01;
+                (tile_idx == top_tile, tile_idx == bottom_tile)
+            } else {
+                (tile_idx == oam_tile, false)
+            };
+
+            if (tile_match || tile_match_bottom) && oam_bank == bank {
+                let pal = if ppu.cgb {
+                    (attr & 0x07) as usize
+                } else {
+                    // DMG: bit 4 selects OBP0 or OBP1
+                    if attr & 0x10 != 0 { 1 } else { 0 }
+                };
+                return Some(GuessedPalette::Obj(pal));
+            }
+        }
+
+        None
     }
 
     fn draw_oam_tab(
