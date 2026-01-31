@@ -2919,7 +2919,7 @@ impl VibeEmuApp {
                     ui.allocate_painter(egui::vec2(grid_w, grid_h), egui::Sense::click());
                 let rect = response.rect;
 
-                painter.rect_filled(rect, 0.0, egui::Color32::from_gray(40));
+                painter.rect_filled(rect, 0.0, egui::Color32::WHITE);
 
                 for i in 0..40 {
                     let col = i % cols;
@@ -2941,14 +2941,14 @@ impl VibeEmuApp {
                         || screen_y >= 144;
 
                     if i == self.vram_viewer.oam_selected {
-                        painter.rect_filled(cell_rect, 0.0, egui::Color32::from_rgb(60, 80, 120));
+                        painter.rect_filled(cell_rect, 0.0, egui::Color32::from_rgb(180, 210, 255));
                     }
 
                     if let Some(tex) = &self.vram_viewer.oam_sprite_textures[i] {
                         let sprite_w = 8.0 * 2.0;
                         let sprite_h_scaled = sprite_h as f32 * 2.0;
                         let sprite_rect = egui::Rect::from_center_size(
-                            cell_rect.center() - egui::vec2(0.0, 2.0),
+                            cell_rect.center() + egui::vec2(0.0, 4.0),
                             egui::vec2(sprite_w, sprite_h_scaled),
                         );
                         painter.image(
@@ -2978,13 +2978,13 @@ impl VibeEmuApp {
                         }
                     }
 
-                    let label_pos = egui::pos2(cell_rect.left() + 2.0, cell_rect.bottom() - 10.0);
+                    let label_pos = egui::pos2(cell_rect.center().x, cell_rect.top() + 6.0);
                     painter.text(
                         label_pos,
-                        egui::Align2::LEFT_CENTER,
+                        egui::Align2::CENTER_CENTER,
                         format!("{:02}", i),
                         egui::FontId::monospace(8.0),
-                        egui::Color32::GRAY,
+                        egui::Color32::DARK_GRAY,
                     );
                 }
 
