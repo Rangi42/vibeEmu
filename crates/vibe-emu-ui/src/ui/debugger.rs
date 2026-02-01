@@ -136,6 +136,19 @@ impl DebuggerState {
         self.pause_reason = Some(reason);
     }
 
+    pub fn request_scroll_to_pc(&mut self) {
+        self.pending_scroll_to_pc = true;
+        self.pending_scroll_to_addr = None;
+    }
+
+    pub fn take_pending_scroll(&mut self) -> Option<u16> {
+        if self.pending_scroll_to_pc {
+            self.pending_scroll_to_pc = false;
+            return Some(u16::MAX); // Sentinel for "scroll to PC"
+        }
+        self.pending_scroll_to_addr.take()
+    }
+
     pub fn note_breakpoint_hit(&mut self, bank: u8, addr: u16) {
         self.pause_reason = Some(DebuggerPauseReason::Breakpoint { bank, addr });
         self.pending_scroll_to_addr = Some(addr);
@@ -161,6 +174,7 @@ impl DebuggerState {
 
     pub fn request_pause(&mut self) {
         self.pending_pause = true;
+        self.pending_scroll_to_pc = true;
     }
 
     pub fn request_step(&mut self) {
@@ -173,6 +187,7 @@ impl DebuggerState {
         self.pending_step_cmd_id = Some(cmd_id);
         self.waiting_debug_cmd_id = Some(cmd_id);
         self.pause_reason = Some(DebuggerPauseReason::Step);
+        self.pending_scroll_to_pc = true;
     }
 
     pub fn request_step_over(&mut self) {
@@ -180,6 +195,7 @@ impl DebuggerState {
             return;
         }
         self.pending_step_over = true;
+        self.pending_scroll_to_pc = true;
     }
 
     pub fn request_run_to_cursor(&mut self) {
@@ -527,7 +543,7 @@ impl DebuggerState {
         &mut self,
         paused: bool,
         pc: u16,
-        memory: impl Fn(u16) -> u8,
+        mut memory: impl FnMut(u16) -> u8,
         snapshot: &UiSnapshot,
     ) {
         if !self.pending_step_over || !paused {
@@ -593,7 +609,7 @@ impl DebuggerState {
         &mut self,
         paused: bool,
         sp: u16,
-        memory: impl Fn(u16) -> u8,
+        mut memory: impl FnMut(u16) -> u8,
         snapshot: &UiSnapshot,
     ) {
         if !self.pending_step_out || !paused {
@@ -759,6 +775,21 @@ impl RgbdsSymbols {
 
     pub fn labels_for(&self, bank: u8, addr: u16) -> Option<&[String]> {
         self.by_bank_addr.get(&(bank, addr)).map(|v| v.as_slice())
+    }
+
+    /// Find the nearest label at or before the given address within the same bank.
+    /// Returns (label_name, offset_from_label).
+    pub fn nearest_label_for(&self, bank: u8, addr: u16) -> Option<(&str, u16)> {
+        // Search backwards from addr to find the nearest label
+        for offset in 0..=addr {
+            let check_addr = addr.wrapping_sub(offset);
+            if let Some(labels) = self.by_bank_addr.get(&(bank, check_addr))
+                && let Some(label) = labels.first()
+            {
+                return Some((label.as_str(), offset));
+            }
+        }
+        None
     }
 }
 

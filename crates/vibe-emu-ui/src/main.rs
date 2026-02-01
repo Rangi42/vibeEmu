@@ -266,11 +266,24 @@ enum EmuCommand {
     SetPaused(bool),
     SetSpeed(Speed),
     UpdateInput(u8),
+    UpdateBreakpoints(Vec<ui::debugger::BreakpointSpec>),
+    SetRegister { reg: RegisterId, value: u16 },
     Shutdown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegisterId {
+    AF,
+    BC,
+    DE,
+    HL,
+    SP,
+    PC,
 }
 
 enum EmuEvent {
     Frame { frame: Vec<u32>, frame_index: u64 },
+    BreakpointHit { bank: u8, addr: u16 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -407,6 +420,8 @@ fn run_emulator_thread(
     initial_paused: bool,
     channels: EmuThreadChannels,
 ) {
+    use std::collections::HashSet;
+
     let EmuThreadChannels {
         rx,
         frame_tx,
@@ -417,6 +432,7 @@ fn run_emulator_thread(
     let mut paused = initial_paused;
     let mut frame_count = 0u64;
     let mut next_frame = Instant::now() + FRAME_TIME;
+    let mut breakpoints: HashSet<(u8, u16)> = HashSet::new();
 
     loop {
         while let Ok(cmd) = rx.try_recv() {
@@ -431,6 +447,36 @@ fn run_emulator_thread(
                 EmuCommand::UpdateInput(input) => {
                     if let Ok(mut gb) = gb.lock() {
                         gb.mmu.input.set_state(input);
+                    }
+                }
+                EmuCommand::UpdateBreakpoints(bps) => {
+                    breakpoints.clear();
+                    for bp in bps {
+                        breakpoints.insert((bp.bank, bp.addr));
+                    }
+                }
+                EmuCommand::SetRegister { reg, value } => {
+                    if let Ok(mut gb) = gb.lock() {
+                        match reg {
+                            RegisterId::AF => {
+                                gb.cpu.a = (value >> 8) as u8;
+                                gb.cpu.f = (value & 0xF0) as u8;
+                            }
+                            RegisterId::BC => {
+                                gb.cpu.b = (value >> 8) as u8;
+                                gb.cpu.c = (value & 0xFF) as u8;
+                            }
+                            RegisterId::DE => {
+                                gb.cpu.d = (value >> 8) as u8;
+                                gb.cpu.e = (value & 0xFF) as u8;
+                            }
+                            RegisterId::HL => {
+                                gb.cpu.h = (value >> 8) as u8;
+                                gb.cpu.l = (value & 0xFF) as u8;
+                            }
+                            RegisterId::SP => gb.cpu.sp = value,
+                            RegisterId::PC => gb.cpu.pc = value,
+                        }
                     }
                 }
                 EmuCommand::Shutdown => {
@@ -469,13 +515,40 @@ fn run_emulator_thread(
             .try_recv()
             .unwrap_or_else(|_| vec![0u32; 160 * 144]);
 
+        let mut bp_hit: Option<(u8, u16)> = None;
+
         if let Ok(mut gb) = gb.lock() {
             let GameBoy { cpu, mmu, .. } = &mut *gb;
             mmu.ppu.clear_frame_flag();
             while !mmu.ppu.frame_ready() {
+                // Check breakpoints before executing
+                if !breakpoints.is_empty() {
+                    let pc = cpu.pc;
+                    let bank = if (0x4000..=0x7FFF).contains(&pc) {
+                        mmu.cart
+                            .as_ref()
+                            .map(|c| c.current_rom_bank().min(0xFF) as u8)
+                            .unwrap_or(1)
+                    } else if pc < 0x4000 {
+                        0
+                    } else {
+                        0xFF
+                    };
+
+                    if breakpoints.contains(&(bank, pc)) || breakpoints.contains(&(0xFF, pc)) {
+                        bp_hit = Some((bank, pc));
+                        break;
+                    }
+                }
                 cpu.step(mmu);
             }
             frame_buf.copy_from_slice(mmu.ppu.framebuffer());
+        }
+
+        if let Some((bank, addr)) = bp_hit {
+            paused = true;
+            let _ = frame_tx.try_send(EmuEvent::BreakpointHit { bank, addr });
+            continue;
         }
 
         frame_count += 1;
@@ -529,10 +602,25 @@ struct VibeEmuApp {
     show_watchpoints: bool,
     watchpoints: Vec<vibe_emu_core::watchpoints::Watchpoint>,
     next_watchpoint_id: u32,
-    wp_edit_start_addr: String,
-    wp_edit_end_addr: String,
+    wp_edit_addr_range: String,
+    wp_edit_value: String,
     wp_edit_on_read: bool,
     wp_edit_on_write: bool,
+    wp_edit_on_execute: bool,
+    wp_edit_on_jump: bool,
+    wp_edit_debug_msg: String,
+    wp_selected_index: Option<usize>,
+
+    // Register editing popup state
+    reg_edit_popup: Option<RegisterId>,
+    reg_edit_value: String,
+
+    // Memory viewer state
+    mem_viewer_addr: u16,
+    mem_viewer_cursor: u16,
+    mem_viewer_goto: String,
+    mem_viewer_scroll_to: Option<usize>,
+    mem_viewer_display_bank: Option<u8>,
 
     // Mobile Adapter state
     mobile_enabled: bool,
@@ -603,10 +691,21 @@ impl VibeEmuApp {
             show_watchpoints: false,
             watchpoints: Vec::new(),
             next_watchpoint_id: 1,
-            wp_edit_start_addr: String::new(),
-            wp_edit_end_addr: String::new(),
-            wp_edit_on_read: true,
-            wp_edit_on_write: true,
+            wp_edit_addr_range: String::new(),
+            wp_edit_value: String::new(),
+            wp_edit_on_read: false,
+            wp_edit_on_write: false,
+            wp_edit_on_execute: true,
+            wp_edit_on_jump: false,
+            wp_edit_debug_msg: String::new(),
+            wp_selected_index: None,
+            reg_edit_popup: None,
+            reg_edit_value: String::new(),
+            mem_viewer_addr: 0,
+            mem_viewer_cursor: 0,
+            mem_viewer_goto: String::new(),
+            mem_viewer_scroll_to: None,
+            mem_viewer_display_bank: None,
             mobile_enabled: false,
             mobile_dns1: String::new(),
             mobile_dns2: String::new(),
@@ -668,13 +767,24 @@ impl VibeEmuApp {
 
     fn poll_frames(&mut self) {
         while let Ok(evt) = self.frame_rx.try_recv() {
-            let EmuEvent::Frame {
-                mut frame,
-                frame_index: _,
-            } = evt;
-            std::mem::swap(&mut self.framebuffer, &mut frame);
-            let _ = self.frame_pool_tx.try_send(frame);
-            self.frame_count_since_update += 1;
+            match evt {
+                EmuEvent::Frame {
+                    mut frame,
+                    frame_index: _,
+                } => {
+                    std::mem::swap(&mut self.framebuffer, &mut frame);
+                    let _ = self.frame_pool_tx.try_send(frame);
+                    self.frame_count_since_update += 1;
+                }
+                EmuEvent::BreakpointHit { bank, addr } => {
+                    self.paused = true;
+                    self.debugger_state.note_breakpoint_hit(bank, addr);
+                    if let Ok(mut gb) = self.gb.lock() {
+                        self.debugger_snapshot = Some(UiSnapshot::from_gb(&mut gb, true));
+                    }
+                    self.debugger_state.request_scroll_to_pc();
+                }
+            }
         }
 
         let elapsed = self.last_fps_update.elapsed();
@@ -823,6 +933,9 @@ impl eframe::App for VibeEmuApp {
                 ui.menu_button("Debug", |ui| {
                     if ui.button("Debugger").clicked() {
                         self.show_debugger = !self.show_debugger;
+                        if self.show_debugger {
+                            self.debugger_state.request_scroll_to_pc();
+                        }
                         ui.close_menu();
                     }
                     if ui.button("VRAM Viewer").clicked() {
@@ -1181,7 +1294,7 @@ impl VibeEmuApp {
             *VIEWPORT_DEBUGGER,
             egui::ViewportBuilder::default()
                 .with_title("Debugger")
-                .with_inner_size([700.0, 500.0]),
+                .with_inner_size([750.0, 550.0]),
             |ctx, class| {
                 if ctx.input(|i| i.viewport().close_requested()) {
                     self.show_debugger = false;
@@ -1204,6 +1317,9 @@ impl VibeEmuApp {
     }
 
     fn draw_debugger_content(&mut self, ui: &mut egui::Ui) {
+        // Process pending debugger actions first
+        self.process_debugger_actions();
+
         let Some(snapshot) = self.debugger_snapshot.clone() else {
             ui.label("Unable to access emulator state");
             return;
@@ -1212,10 +1328,34 @@ impl VibeEmuApp {
         self.draw_debugger_toolbar(ui, &snapshot);
         ui.separator();
 
-        ui.columns(2, |columns| {
-            self.draw_disassembly_pane(&mut columns[0], &snapshot);
-            self.draw_state_panes(&mut columns[1], &snapshot);
-        });
+        // Calculate space for top (disassembly/state) and bottom (memory viewer)
+        let available = ui.available_height();
+        let status_bar_height = 24.0;
+        let mem_viewer_height = ((available - status_bar_height) * 0.35).clamp(120.0, 280.0);
+        let top_height = available - mem_viewer_height - status_bar_height - 16.0;
+
+        // Top portion: disassembly and state panes
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), top_height),
+            egui::Layout::left_to_right(egui::Align::TOP),
+            |ui| {
+                ui.columns(2, |columns| {
+                    self.draw_disassembly_pane(&mut columns[0], &snapshot);
+                    self.draw_state_panes(&mut columns[1], &snapshot);
+                });
+            },
+        );
+
+        ui.separator();
+
+        // Bottom portion: memory viewer
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), mem_viewer_height),
+            egui::Layout::top_down(egui::Align::LEFT),
+            |ui| {
+                self.draw_memory_viewer(ui, &snapshot);
+            },
+        );
 
         if let Some(status) = self.debugger_state.status_line() {
             ui.separator();
@@ -1240,6 +1380,13 @@ impl VibeEmuApp {
                 }
             }
 
+            if paused && ui.button("Run*").on_hover_text("Run (no break)").clicked() {
+                self.debugger_state
+                    .request_continue_no_break_and_focus_main();
+                self.paused = false;
+                let _ = self.emu_tx.send(EmuCommand::SetPaused(false));
+            }
+
             if ui.button("⏭ Step").clicked() && paused {
                 self.do_single_step();
             }
@@ -1251,11 +1398,29 @@ impl VibeEmuApp {
                 if ui.button("Step Out").clicked() {
                     self.debugger_state.request_step_out();
                 }
-                if ui.button("Jump").clicked() {
+                if ui.button("Run To").on_hover_text("Run to cursor").clicked() {
+                    self.debugger_state.request_run_to_cursor();
+                }
+                if ui
+                    .button("Run To*")
+                    .on_hover_text("Run to cursor (no break)")
+                    .clicked()
+                {
+                    self.debugger_state.request_run_to_cursor_no_break();
+                }
+                ui.separator();
+                if ui.button("Jump").on_hover_text("Jump to cursor").clicked() {
                     self.debugger_state.request_jump_to_cursor();
                 }
-                if ui.button("Call").clicked() {
+                if ui.button("Call").on_hover_text("Call cursor").clicked() {
                     self.debugger_state.request_call_cursor();
+                }
+                if ui
+                    .button("Jump(SP)")
+                    .on_hover_text("Jump to address on stack")
+                    .clicked()
+                {
+                    self.debugger_state.request_jump_sp();
                 }
             }
 
@@ -1341,163 +1506,430 @@ impl VibeEmuApp {
         }
         self.debugger_state
             .set_pause_reason(DebuggerPauseReason::Step);
+        self.debugger_state.request_scroll_to_pc();
+    }
+
+    fn process_debugger_actions(&mut self) {
+        let Some(snapshot) = self.debugger_snapshot.clone() else {
+            return;
+        };
+
+        // Process step over request
+        if let Ok(mut gb) = self.gb.lock() {
+            let pc = snapshot.cpu.pc;
+            self.debugger_state.handle_step_over_request(
+                self.paused,
+                pc,
+                |addr| gb.mmu.read_byte(addr),
+                &snapshot,
+            );
+        }
+
+        // Process run to cursor request
+        self.debugger_state
+            .handle_run_to_cursor_request(self.paused);
+
+        // Process step out request
+        if let Ok(mut gb) = self.gb.lock() {
+            self.debugger_state.handle_step_out_request(
+                self.paused,
+                snapshot.cpu.sp,
+                |addr| gb.mmu.read_byte(addr),
+                &snapshot,
+            );
+        }
+
+        // Process jump to cursor request
+        self.debugger_state
+            .handle_jump_to_cursor_request(self.paused);
+
+        // Process call cursor request
+        self.debugger_state.handle_call_cursor_request(self.paused);
+
+        // Get pending actions (includes request_jump_sp)
+        let actions = self.debugger_state.take_actions();
+
+        // Handle run_to: run until we hit the target or a breakpoint
+        if let Some(run_to) = actions.request_run_to {
+            self.execute_run_to(run_to);
+        }
+
+        // Handle jump to addr (change PC directly)
+        if let Some(addr) = actions.request_jump_to_cursor
+            && let Ok(mut gb) = self.gb.lock()
+        {
+            gb.cpu.pc = addr;
+            self.debugger_snapshot = Some(UiSnapshot::from_gb(&mut gb, true));
+            self.debugger_state.request_scroll_to_pc();
+        }
+
+        // Handle call addr (push return, then jump)
+        if let Some(addr) = actions.request_call_cursor
+            && let Ok(mut gb) = self.gb.lock()
+        {
+            let pc = gb.cpu.pc;
+            let sp = gb.cpu.sp.wrapping_sub(2);
+            gb.cpu.sp = sp;
+            gb.mmu.write_byte(sp, (pc & 0xFF) as u8);
+            gb.mmu.write_byte(sp.wrapping_add(1), (pc >> 8) as u8);
+            gb.cpu.pc = addr;
+            self.debugger_snapshot = Some(UiSnapshot::from_gb(&mut gb, true));
+            self.debugger_state.request_scroll_to_pc();
+        }
+
+        // Handle jump SP (pop return address)
+        if actions.request_jump_sp
+            && let Ok(mut gb) = self.gb.lock()
+        {
+            let sp = gb.cpu.sp;
+            let lo = gb.mmu.read_byte(sp);
+            let hi = gb.mmu.read_byte(sp.wrapping_add(1));
+            let addr = (hi as u16) << 8 | lo as u16;
+            gb.cpu.sp = sp.wrapping_add(2);
+            gb.cpu.pc = addr;
+            self.debugger_snapshot = Some(UiSnapshot::from_gb(&mut gb, true));
+            self.debugger_state.request_scroll_to_pc();
+        }
+
+        // Sync breakpoints to emulator thread if changed
+        if actions.breakpoints_updated {
+            let _ = self
+                .emu_tx
+                .send(EmuCommand::UpdateBreakpoints(actions.breakpoints));
+        }
+    }
+
+    fn execute_run_to(&mut self, run_to: ui::debugger::DebuggerRunToRequest) {
+        let target_bank = run_to.target.bank;
+        let target_addr = run_to.target.addr;
+        let ignore_breakpoints = run_to.ignore_breakpoints;
+
+        // Run until we hit target or breakpoint (max iterations to prevent infinite loop)
+        const MAX_STEPS: u32 = 10_000_000;
+
+        if let Ok(mut gb) = self.gb.lock() {
+            for _ in 0..MAX_STEPS {
+                let pc = gb.cpu.pc;
+                let current_bank = if (0x4000..=0x7FFF).contains(&pc) {
+                    gb.mmu
+                        .cart
+                        .as_ref()
+                        .map(|c| c.current_rom_bank().min(0xFF) as u8)
+                        .unwrap_or(1)
+                } else if pc < 0x4000 {
+                    0
+                } else {
+                    0xFF
+                };
+
+                // Check if we hit target
+                if pc == target_addr && (current_bank == target_bank || target_bank == 0xFF) {
+                    break;
+                }
+
+                // Check breakpoints (if not ignoring them)
+                if !ignore_breakpoints {
+                    let bp_spec = ui::debugger::BreakpointSpec {
+                        bank: current_bank,
+                        addr: pc,
+                    };
+                    if self.debugger_state.has_breakpoint(&bp_spec) == Some(true) {
+                        self.debugger_state.note_breakpoint_hit(current_bank, pc);
+                        break;
+                    }
+                }
+
+                let GameBoy { cpu, mmu, .. } = &mut *gb;
+                cpu.step(mmu);
+            }
+
+            self.debugger_snapshot = Some(UiSnapshot::from_gb(&mut gb, true));
+        }
+
+        self.debugger_state
+            .set_pause_reason(DebuggerPauseReason::Step);
+        self.debugger_state.request_scroll_to_pc();
     }
 
     fn draw_disassembly_pane(&mut self, ui: &mut egui::Ui, snapshot: &UiSnapshot) {
-        ui.heading("Disassembly");
+        // Fast instruction length lookup (avoids full disassembly for indexing)
+        fn instruction_length(opcode: u8, _get_next: impl FnOnce() -> u8) -> u16 {
+            match opcode {
+                0xCB => 2,                             // CB prefix always 2 bytes
+                0x01 | 0x08 | 0x11 | 0x21 | 0x31 => 3, // LD r16,nn / LD (nn),SP
+                0xC2 | 0xC3 | 0xC4 | 0xCA | 0xCC | 0xCD | 0xD2 | 0xD4 | 0xDA | 0xDC => 3, // JP/CALL
+                0xEA | 0xFA => 3,                      // LD (nn),A / LD A,(nn)
+                0x06 | 0x0E | 0x16 | 0x1E | 0x26 | 0x2E | 0x36 | 0x3E => 2, // LD r,n
+                0xC6 | 0xCE | 0xD6 | 0xDE | 0xE6 | 0xEE | 0xF6 | 0xFE => 2, // ALU A,n
+                0x18 | 0x20 | 0x28 | 0x30 | 0x38 => 2, // JR
+                0xE0 | 0xF0 => 2,                      // LDH
+                0xE8 | 0xF8 => 2,                      // ADD SP,e / LD HL,SP+e
+                _ => 1,
+            }
+        }
 
         let pc = snapshot.cpu.pc;
         let dbg = &snapshot.debugger;
         let active_bank = dbg.active_rom_bank.min(0xFF) as u8;
 
-        let start_addr = pc.saturating_sub(0x30);
-
-        let mem: Vec<u8> = if let Some(mem_image) = &dbg.mem_image {
-            (0..0x100)
-                .map(|i| {
-                    let addr = start_addr.wrapping_add(i);
-                    mem_image.get(addr as usize).copied().unwrap_or(0)
-                })
-                .collect()
-        } else {
-            vec![0; 0x100]
+        let Some(mem_image) = &dbg.mem_image else {
+            ui.label("Memory not available (emulator running)");
+            return;
         };
 
         let mut bp_toggle: Option<BreakpointSpec> = None;
         let mut cursor_click: Option<BreakpointSpec> = None;
 
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                egui::Grid::new("disasm_grid")
-                    .num_columns(4)
-                    .spacing([8.0, 2.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        ui.strong("BP");
-                        ui.strong("Addr");
-                        ui.strong("Bytes");
-                        ui.strong("Instruction");
-                        ui.end_row();
+        // Build instruction address index with display row tracking
+        // Each entry is (addr, display_row) where display_row accounts for labels
+        let mut instr_addrs: Vec<u16> = Vec::with_capacity(32768);
+        let mut instr_display_rows: Vec<usize> = Vec::with_capacity(32768);
+        let mut addr: u16 = 0;
+        let mut pc_display_row: Option<usize> = None;
+        let mut current_display_row: usize = 0;
 
-                        let mut addr = start_addr;
-                        while addr < start_addr.wrapping_add(0x80) {
-                            let rel_addr = addr.wrapping_sub(start_addr) as usize;
-                            if rel_addr >= mem.len() {
-                                break;
-                            }
+        loop {
+            let bp_bank = if (0x4000..=0x7FFF).contains(&addr) {
+                active_bank
+            } else if addr < 0x4000 {
+                0
+            } else {
+                0xFF
+            };
 
-                            let (mnemonic, len) = ui::disasm::decode_sm83(&mem[rel_addr..], addr);
-                            let bytes = ui::disasm::format_bytes(&mem[rel_addr..], 0, len);
+            // Check if this address has a label (adds a row)
+            if self.debugger_state.first_label_for(bp_bank, addr).is_some() {
+                current_display_row += 1;
+            }
 
-                            let bp_bank = if (0x4000..=0x7FFF).contains(&addr) {
-                                active_bank
-                            } else if addr < 0x4000 {
-                                0
-                            } else {
-                                0xFF
-                            };
+            if addr == pc {
+                pc_display_row = Some(current_display_row);
+            }
 
-                            let bp_spec = BreakpointSpec {
-                                bank: bp_bank,
-                                addr,
-                            };
-                            let bp_enabled = self.debugger_state.has_breakpoint(&bp_spec);
-                            let is_cursor = self.debugger_state.cursor() == Some(bp_spec);
-                            let is_pc = addr == pc;
+            instr_addrs.push(addr);
+            instr_display_rows.push(current_display_row);
+            current_display_row += 1;
 
-                            let bp_symbol = match bp_enabled {
-                                Some(true) => "●",
-                                Some(false) => "○",
-                                None => " ",
-                            };
-                            let bp_color = match bp_enabled {
-                                Some(true) => egui::Color32::RED,
-                                Some(false) => egui::Color32::DARK_RED,
-                                None => egui::Color32::GRAY,
-                            };
-
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(bp_symbol).color(bp_color),
-                                    )
-                                    .frame(false)
-                                    .min_size(egui::vec2(16.0, 0.0)),
-                                )
-                                .clicked()
-                            {
-                                bp_toggle = Some(bp_spec);
-                            }
-
-                            let display_bank = if addr < 0x4000 {
-                                0
-                            } else if (0x4000..=0x7FFF).contains(&addr) {
-                                active_bank
-                            } else {
-                                0xFF
-                            };
-
-                            let addr_text = if display_bank == 0xFF {
-                                format!("--:{:04X}", addr)
-                            } else {
-                                format!("{:02X}:{:04X}", display_bank, addr)
-                            };
-
-                            let text_color = if is_pc {
-                                egui::Color32::YELLOW
-                            } else if is_cursor {
-                                egui::Color32::LIGHT_BLUE
-                            } else {
-                                ui.style().visuals.text_color()
-                            };
-
-                            let addr_resp = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&addr_text)
-                                        .color(text_color)
-                                        .monospace(),
-                                )
-                                .sense(egui::Sense::click()),
-                            );
-                            if addr_resp.clicked() {
-                                cursor_click = Some(bp_spec);
-                            }
-
-                            let bytes_resp = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&bytes).color(text_color).monospace(),
-                                )
-                                .sense(egui::Sense::click()),
-                            );
-                            if bytes_resp.clicked() {
-                                cursor_click = Some(bp_spec);
-                            }
-
-                            let label = self.debugger_state.first_label_for(bp_bank, addr);
-                            let instr_text = if let Some(lbl) = label {
-                                format!("{lbl}: {mnemonic}")
-                            } else {
-                                mnemonic
-                            };
-
-                            let instr_resp = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&instr_text)
-                                        .color(text_color)
-                                        .monospace(),
-                                )
-                                .sense(egui::Sense::click()),
-                            );
-                            if instr_resp.clicked() {
-                                cursor_click = Some(bp_spec);
-                            }
-
-                            ui.end_row();
-                            addr = addr.wrapping_add(len);
-                        }
-                    });
+            let opcode = mem_image[addr as usize];
+            let len = instruction_length(opcode, || {
+                mem_image
+                    .get(addr.wrapping_add(1) as usize)
+                    .copied()
+                    .unwrap_or(0)
             });
+
+            let next_addr = addr.wrapping_add(len);
+            if next_addr <= addr && addr != 0 {
+                break;
+            }
+            addr = next_addr;
+            if addr == 0 {
+                break;
+            }
+        }
+
+        let total_rows = current_display_row;
+        let row_height = 16.0;
+
+        // Check if we need to scroll to a specific address
+        let scroll_target = self.debugger_state.take_pending_scroll();
+        let scroll_to_display_row = scroll_target.and_then(|target| {
+            if target == u16::MAX {
+                // Scroll to PC
+                pc_display_row
+            } else {
+                // Find display row for target address
+                instr_addrs
+                    .iter()
+                    .position(|&a| a == target)
+                    .map(|idx| instr_display_rows[idx])
+            }
+        });
+
+        // Get available height to center the target row
+        let available_height = ui.available_height();
+
+        let mut scroll_area = egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .id_salt("disasm_scroll");
+
+        if let Some(display_row) = scroll_to_display_row {
+            // Center the target row in the view
+            let target_offset = (display_row as f32 * row_height - available_height / 2.0).max(0.0);
+            scroll_area = scroll_area.vertical_scroll_offset(target_offset);
+        }
+
+        scroll_area.show(ui, |ui| {
+            // Get current scroll position
+            let scroll_offset = ui.clip_rect().top() - ui.min_rect().top();
+            let visible_start_row = (scroll_offset / row_height).floor() as usize;
+            let visible_rows = (available_height / row_height).ceil() as usize + 2;
+            let visible_end_row = (visible_start_row + visible_rows).min(total_rows);
+
+            // Add spacing for rows before visible area
+            if visible_start_row > 0 {
+                ui.add_space(visible_start_row as f32 * row_height);
+            }
+
+            // Find which instructions to render based on display rows
+            let start_instr = instr_display_rows
+                .iter()
+                .position(|&r| r >= visible_start_row)
+                .unwrap_or(0);
+            let end_instr = instr_display_rows
+                .iter()
+                .position(|&r| r >= visible_end_row)
+                .unwrap_or(instr_addrs.len());
+
+            for instr_idx in start_instr..end_instr {
+                let Some(&addr) = instr_addrs.get(instr_idx) else {
+                    continue;
+                };
+
+                let bp_bank = if (0x4000..=0x7FFF).contains(&addr) {
+                    active_bank
+                } else if addr < 0x4000 {
+                    0
+                } else {
+                    0xFF
+                };
+
+                // Show label on its own line if present
+                if let Some(lbl) = self.debugger_state.first_label_for(bp_bank, addr) {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!("{}:", lbl))
+                                .color(egui::Color32::from_rgb(180, 180, 255))
+                                .monospace(),
+                        )
+                        .wrap_mode(egui::TextWrapMode::Extend),
+                    );
+                }
+
+                // Decode instruction
+                let mem_slice: Vec<u8> = (0..4)
+                    .map(|i| {
+                        mem_image
+                            .get(addr.wrapping_add(i) as usize)
+                            .copied()
+                            .unwrap_or(0)
+                    })
+                    .collect();
+
+                let (mut mnemonic, _len, target_addr) = ui::disasm::decode_sm83(&mem_slice, addr);
+
+                // Resolve target address to symbol name
+                if let Some(target) = target_addr {
+                    let target_bank = if target < 0x4000 {
+                        0
+                    } else if (0x4000..=0x7FFF).contains(&target) {
+                        active_bank
+                    } else {
+                        0xFF
+                    };
+
+                    let sym_name = self
+                        .debugger_state
+                        .first_label_for(target_bank, target)
+                        .or_else(|| self.debugger_state.first_label_for(0, target));
+
+                    if let Some(sym_name) = sym_name {
+                        let hex_target = format!("${target:04X}");
+                        mnemonic = mnemonic.replace(&hex_target, sym_name);
+                    }
+                }
+
+                let bp_spec = BreakpointSpec {
+                    bank: bp_bank,
+                    addr,
+                };
+                let bp_enabled = self.debugger_state.has_breakpoint(&bp_spec);
+                let is_cursor = self.debugger_state.cursor() == Some(bp_spec);
+                let is_pc = addr == pc;
+
+                let bg_color = if is_pc {
+                    Some(egui::Color32::from_rgb(60, 60, 100))
+                } else if is_cursor {
+                    Some(egui::Color32::from_rgb(40, 60, 80))
+                } else {
+                    None
+                };
+
+                let text_color = if is_pc {
+                    egui::Color32::YELLOW
+                } else if is_cursor {
+                    egui::Color32::LIGHT_BLUE
+                } else {
+                    ui.style().visuals.text_color()
+                };
+
+                let display_bank = if addr < 0x4000 {
+                    0
+                } else if (0x4000..=0x7FFF).contains(&addr) {
+                    active_bank
+                } else {
+                    0xFF
+                };
+
+                let addr_text = if display_bank == 0xFF {
+                    format!("  {:04X}", addr)
+                } else {
+                    format!("{:02X}:{:04X}", display_bank, addr)
+                };
+
+                let pc_marker = if is_pc { "►" } else { " " };
+                let line = format!("{} {}  {:<20}", pc_marker, addr_text, mnemonic);
+
+                ui.horizontal(|ui| {
+                    let bp_symbol = match bp_enabled {
+                        Some(true) => "●",
+                        Some(false) => "○",
+                        None => " ",
+                    };
+                    let bp_color = match bp_enabled {
+                        Some(true) => egui::Color32::RED,
+                        Some(false) => egui::Color32::DARK_RED,
+                        None => egui::Color32::TRANSPARENT,
+                    };
+
+                    if ui
+                        .add(
+                            egui::Button::new(egui::RichText::new(bp_symbol).color(bp_color))
+                                .frame(false)
+                                .min_size(egui::vec2(12.0, 0.0)),
+                        )
+                        .clicked()
+                    {
+                        bp_toggle = Some(bp_spec);
+                    }
+
+                    let label =
+                        egui::Label::new(egui::RichText::new(&line).color(text_color).monospace())
+                            .sense(egui::Sense::click());
+
+                    let resp = if let Some(bg) = bg_color {
+                        ui.scope(|ui| {
+                            let rect = ui.available_rect_before_wrap();
+                            ui.painter().rect_filled(rect, 0.0, bg);
+                            ui.add(label)
+                        })
+                        .inner
+                    } else {
+                        ui.add(label)
+                    };
+
+                    if resp.clicked() {
+                        cursor_click = Some(bp_spec);
+                    }
+                });
+            }
+
+            // Add spacing for rows after visible area
+            let remaining_rows = total_rows.saturating_sub(visible_end_row);
+            if remaining_rows > 0 {
+                ui.add_space(remaining_rows as f32 * row_height);
+            }
+        });
 
         if let Some(bp) = bp_toggle {
             self.debugger_state.toggle_breakpoint(bp);
@@ -1509,84 +1941,191 @@ impl VibeEmuApp {
 
     fn draw_state_panes(&mut self, ui: &mut egui::Ui, snapshot: &UiSnapshot) {
         let cpu = &snapshot.cpu;
+        let ppu = &snapshot.ppu;
+        let dbg = &snapshot.debugger;
 
-        ui.heading("CPU");
-        egui::Grid::new("cpu_regs")
-            .num_columns(2)
-            .spacing([8.0, 2.0])
+        let af = ((cpu.a as u16) << 8) | cpu.f as u16;
+        let bc = ((cpu.b as u16) << 8) | cpu.c as u16;
+        let de = ((cpu.d as u16) << 8) | cpu.e as u16;
+        let hl = ((cpu.h as u16) << 8) | cpu.l as u16;
+
+        // Helper macro for editable register labels
+        let mut pending_edit: Option<(RegisterId, u16)> = None;
+
+        // BGB-style compact register display with right-click editing
+        egui::Grid::new("cpu_regs_bgb")
+            .num_columns(4)
+            .spacing([12.0, 2.0])
             .show(ui, |ui| {
-                let af = ((cpu.a as u16) << 8) | cpu.f as u16;
-                let bc = ((cpu.b as u16) << 8) | cpu.c as u16;
-                let de = ((cpu.d as u16) << 8) | cpu.e as u16;
-                let hl = ((cpu.h as u16) << 8) | cpu.l as u16;
-
-                ui.monospace("AF");
-                ui.monospace(format!("{:04X}", af));
-                ui.end_row();
-                ui.monospace("BC");
-                ui.monospace(format!("{:04X}", bc));
-                ui.end_row();
-                ui.monospace("DE");
-                ui.monospace(format!("{:04X}", de));
-                ui.end_row();
-                ui.monospace("HL");
-                ui.monospace(format!("{:04X}", hl));
-                ui.end_row();
-                ui.monospace("SP");
-                ui.monospace(format!("{:04X}", cpu.sp));
-                ui.end_row();
-                ui.monospace("PC");
-                ui.monospace(format!("{:04X}", cpu.pc));
+                // AF register (right-click to edit)
+                let af_resp = ui.add(
+                    egui::Label::new(egui::RichText::new(format!("af= {:04X}", af)).monospace())
+                        .sense(egui::Sense::click()),
+                );
+                if af_resp.secondary_clicked() {
+                    self.reg_edit_popup = Some(RegisterId::AF);
+                    self.reg_edit_value = format!("{:04X}", af);
+                }
+                ui.monospace(format!("lcdc={:02X}", ppu.lcdc));
                 ui.end_row();
 
-                let f = cpu.f;
-                let z = if (f & 0x80) != 0 { 'Z' } else { '-' };
-                let n = if (f & 0x40) != 0 { 'N' } else { '-' };
-                let h = if (f & 0x20) != 0 { 'H' } else { '-' };
-                let c = if (f & 0x10) != 0 { 'C' } else { '-' };
-                ui.monospace("Flags");
-                ui.monospace(format!("{z}{n}{h}{c}"));
+                // BC register
+                let bc_resp = ui.add(
+                    egui::Label::new(egui::RichText::new(format!("bc= {:04X}", bc)).monospace())
+                        .sense(egui::Sense::click()),
+                );
+                if bc_resp.secondary_clicked() {
+                    self.reg_edit_popup = Some(RegisterId::BC);
+                    self.reg_edit_value = format!("{:04X}", bc);
+                }
+                ui.monospace(format!("stat={:02X}", ppu.stat));
                 ui.end_row();
 
-                ui.monospace("IME");
-                ui.monospace(format!("{}", cpu.ime));
+                // DE register
+                let de_resp = ui.add(
+                    egui::Label::new(egui::RichText::new(format!("de= {:04X}", de)).monospace())
+                        .sense(egui::Sense::click()),
+                );
+                if de_resp.secondary_clicked() {
+                    self.reg_edit_popup = Some(RegisterId::DE);
+                    self.reg_edit_value = format!("{:04X}", de);
+                }
+                ui.monospace(format!("ly=  {:02X}", ppu.ly));
                 ui.end_row();
-                ui.monospace("Cycles");
-                ui.monospace(format!("{}", cpu.cycles));
+
+                // HL register
+                let hl_resp = ui.add(
+                    egui::Label::new(egui::RichText::new(format!("hl= {:04X}", hl)).monospace())
+                        .sense(egui::Sense::click()),
+                );
+                if hl_resp.secondary_clicked() {
+                    self.reg_edit_popup = Some(RegisterId::HL);
+                    self.reg_edit_value = format!("{:04X}", hl);
+                }
+                ui.monospace(format!("ie=  {:02X}", dbg.ie_reg));
+                ui.end_row();
+
+                // SP register
+                let sp_resp = ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("sp= {:04X}", cpu.sp)).monospace(),
+                    )
+                    .sense(egui::Sense::click()),
+                );
+                if sp_resp.secondary_clicked() {
+                    self.reg_edit_popup = Some(RegisterId::SP);
+                    self.reg_edit_value = format!("{:04X}", cpu.sp);
+                }
+                ui.monospace(format!("if=  {:02X}", dbg.if_reg));
+                ui.end_row();
+
+                // PC register
+                let pc_resp = ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("pc= {:04X}", cpu.pc)).monospace(),
+                    )
+                    .sense(egui::Sense::click()),
+                );
+                if pc_resp.secondary_clicked() {
+                    self.reg_edit_popup = Some(RegisterId::PC);
+                    self.reg_edit_value = format!("{:04X}", cpu.pc);
+                }
+                ui.monospace(format!("ime= {}", if cpu.ime { 1 } else { 0 }));
                 ui.end_row();
             });
 
-        ui.separator();
-        ui.heading("I/O");
-        egui::Grid::new("io_regs")
-            .num_columns(2)
-            .spacing([8.0, 2.0])
-            .show(ui, |ui| {
-                ui.monospace("LCDC");
-                ui.monospace(format!("{:02X}", snapshot.ppu.lcdc));
-                ui.end_row();
-                ui.monospace("STAT");
-                ui.monospace(format!("{:02X}", snapshot.ppu.stat));
-                ui.end_row();
-                ui.monospace("LY");
-                ui.monospace(format!("{:02X}", snapshot.ppu.ly));
-                ui.end_row();
-                ui.monospace("SCX");
-                ui.monospace(format!("{:02X}", snapshot.ppu.scx));
-                ui.end_row();
-                ui.monospace("SCY");
-                ui.monospace(format!("{:02X}", snapshot.ppu.scy));
-                ui.end_row();
-                ui.monospace("IF");
-                ui.monospace(format!("{:02X}", snapshot.debugger.if_reg));
-                ui.end_row();
-                ui.monospace("IE");
-                ui.monospace(format!("{:02X}", snapshot.debugger.ie_reg));
-                ui.end_row();
-            });
+        // Register edit popup
+        if let Some(reg) = self.reg_edit_popup {
+            let popup_id = ui.make_persistent_id("reg_edit_popup");
+            let reg_name = match reg {
+                RegisterId::AF => "AF",
+                RegisterId::BC => "BC",
+                RegisterId::DE => "DE",
+                RegisterId::HL => "HL",
+                RegisterId::SP => "SP",
+                RegisterId::PC => "PC",
+            };
+
+            egui::Window::new(format!("Edit {}", reg_name))
+                .id(popup_id)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Value:");
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.reg_edit_value)
+                                .desired_width(60.0)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            if let Ok(val) = u16::from_str_radix(&self.reg_edit_value, 16) {
+                                pending_edit = Some((reg, val));
+                            }
+                            self.reg_edit_popup = None;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("OK").clicked() {
+                            if let Ok(val) = u16::from_str_radix(&self.reg_edit_value, 16) {
+                                pending_edit = Some((reg, val));
+                            }
+                            self.reg_edit_popup = None;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.reg_edit_popup = None;
+                        }
+                    });
+                });
+        }
+
+        // Send register edit command if needed
+        if let Some((reg, value)) = pending_edit {
+            let _ = self.emu_tx.send(EmuCommand::SetRegister { reg, value });
+        }
+
+        ui.add_space(4.0);
+
+        // Flags as checkboxes
+        let f = cpu.f;
+        let mut z_flag = (f & 0x80) != 0;
+        let mut n_flag = (f & 0x40) != 0;
+        let mut h_flag = (f & 0x20) != 0;
+        let mut c_flag = (f & 0x10) != 0;
+
+        ui.horizontal(|ui| {
+            let mut flags_changed = false;
+            if ui.checkbox(&mut z_flag, "Z").changed() {
+                flags_changed = true;
+            }
+            if ui.checkbox(&mut n_flag, "N").changed() {
+                flags_changed = true;
+            }
+            if ui.checkbox(&mut h_flag, "H").changed() {
+                flags_changed = true;
+            }
+            if ui.checkbox(&mut c_flag, "C").changed() {
+                flags_changed = true;
+            }
+            if flags_changed {
+                let new_f = (if z_flag { 0x80 } else { 0 })
+                    | (if n_flag { 0x40 } else { 0 })
+                    | (if h_flag { 0x20 } else { 0 })
+                    | (if c_flag { 0x10 } else { 0 });
+                let new_af = ((cpu.a as u16) << 8) | (new_f as u16);
+                let _ = self.emu_tx.send(EmuCommand::SetRegister {
+                    reg: RegisterId::AF,
+                    value: new_af,
+                });
+            }
+            ui.monospace(format!("rom= {:02X}", dbg.active_rom_bank));
+        });
 
         ui.separator();
-        ui.heading("Breakpoints");
+
+        // Breakpoints section
+        ui.strong("Breakpoints");
 
         let mut to_remove: Option<BreakpointSpec> = None;
         let entries: Vec<(BreakpointSpec, bool)> = self
@@ -1597,7 +2136,7 @@ impl VibeEmuApp {
 
         egui::ScrollArea::vertical()
             .id_salt("bp_list")
-            .max_height(120.0)
+            .max_height(100.0)
             .show(ui, |ui| {
                 for (bp, enabled) in entries {
                     ui.horizontal(|ui| {
@@ -1614,7 +2153,7 @@ impl VibeEmuApp {
                         };
                         ui.monospace(&label);
 
-                        if ui.small_button("Remove").clicked() {
+                        if ui.small_button("×").clicked() {
                             to_remove = Some(bp);
                         }
                     });
@@ -1626,7 +2165,9 @@ impl VibeEmuApp {
         }
 
         ui.separator();
-        ui.heading("Stack");
+
+        // Stack view
+        ui.strong("Stack");
 
         let base = snapshot.debugger.stack_base;
         let bytes = &snapshot.debugger.stack_bytes;
@@ -1671,110 +2212,426 @@ impl VibeEmuApp {
     }
 
     fn draw_watchpoints_content(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Add Watchpoint");
+        let mut to_remove: Option<usize> = None;
+
+        // Watchpoint list (top portion, scrollable)
+        let list_height = ui.available_height() - 140.0;
+        egui::ScrollArea::vertical()
+            .id_salt("wp_list")
+            .max_height(list_height.max(80.0))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (i, wp) in self.watchpoints.iter().enumerate() {
+                    let is_selected = self.wp_selected_index == Some(i);
+                    let start = *wp.range.start();
+
+                    // Build type string (r/w/x/j)
+                    let mut type_str = String::new();
+                    if wp.on_read {
+                        type_str.push('r');
+                    }
+                    if wp.on_write {
+                        type_str.push('w');
+                    }
+                    if wp.on_execute {
+                        type_str.push('x');
+                    }
+                    if wp.on_jump {
+                        type_str.push('j');
+                    }
+                    if type_str.is_empty() {
+                        type_str = "-".to_string();
+                    }
+
+                    // Get label for address
+                    let label_str = self
+                        .debugger_state
+                        .first_label_for(0, start)
+                        .map(|s| format!("{:04X}+{}", 0, s))
+                        .unwrap_or_default();
+
+                    let text = format!(
+                        "{}:{:04X}    {}    {}",
+                        if wp.enabled { "0" } else { "-" },
+                        start,
+                        type_str,
+                        label_str
+                    );
+
+                    let resp =
+                        ui.selectable_label(is_selected, egui::RichText::new(text).monospace());
+                    if resp.clicked() {
+                        self.wp_selected_index = Some(i);
+                        // Populate edit fields with selected watchpoint
+                        let start = *wp.range.start();
+                        let end = *wp.range.end();
+                        self.wp_edit_addr_range = if start == end {
+                            format!("{:04X}", start)
+                        } else {
+                            format!("{:04X}-{:04X}", start, end)
+                        };
+                        self.wp_edit_value = wp
+                            .value_match
+                            .map(|v| format!("{:02X}", v))
+                            .unwrap_or_default();
+                        self.wp_edit_on_read = wp.on_read;
+                        self.wp_edit_on_write = wp.on_write;
+                        self.wp_edit_on_execute = wp.on_execute;
+                        self.wp_edit_on_jump = wp.on_jump;
+                        self.wp_edit_debug_msg = wp.message.clone().unwrap_or_default();
+                    }
+                }
+            });
+
+        ui.add_space(8.0);
+
+        // Input fields row
         ui.horizontal(|ui| {
-            ui.label("Start:");
+            ui.label("addr range");
             ui.add(
-                egui::TextEdit::singleline(&mut self.wp_edit_start_addr)
-                    .desired_width(60.0)
+                egui::TextEdit::singleline(&mut self.wp_edit_addr_range)
+                    .desired_width(80.0)
                     .font(egui::TextStyle::Monospace),
             );
-            ui.label("End:");
+            ui.label("value");
             ui.add(
-                egui::TextEdit::singleline(&mut self.wp_edit_end_addr)
-                    .desired_width(60.0)
+                egui::TextEdit::singleline(&mut self.wp_edit_value)
+                    .desired_width(40.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            ui.checkbox(&mut self.wp_edit_on_read, "on read");
+            ui.checkbox(&mut self.wp_edit_on_execute, "on execute");
+        });
+
+        ui.horizontal(|ui| {
+            ui.add_space(148.0); // Align with value field
+            ui.checkbox(&mut self.wp_edit_on_write, "on write");
+            ui.checkbox(&mut self.wp_edit_on_jump, "on jump");
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Debug msg:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.wp_edit_debug_msg)
+                    .desired_width(ui.available_width() - 10.0)
                     .font(egui::TextStyle::Monospace),
             );
         });
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut self.wp_edit_on_read, "Read");
-            ui.checkbox(&mut self.wp_edit_on_write, "Write");
-            if ui.button("Add").clicked() {
-                let start_str = self.wp_edit_start_addr.trim();
-                let start_str = start_str
-                    .strip_prefix("$")
-                    .or_else(|| start_str.strip_prefix("0x"))
-                    .unwrap_or(start_str);
-                let end_str = self.wp_edit_end_addr.trim();
-                let end_str = end_str
-                    .strip_prefix("$")
-                    .or_else(|| end_str.strip_prefix("0x"))
-                    .unwrap_or(end_str);
 
-                if let Ok(start) = u16::from_str_radix(start_str, 16) {
-                    let end = u16::from_str_radix(end_str, 16).unwrap_or(start);
-                    let wp = vibe_emu_core::watchpoints::Watchpoint {
-                        id: self.next_watchpoint_id,
-                        enabled: true,
-                        range: start..=end,
-                        on_read: self.wp_edit_on_read,
-                        on_write: self.wp_edit_on_write,
-                        on_execute: false,
-                        on_jump: false,
-                        value_match: None,
-                        message: None,
+        ui.add_space(4.0);
+
+        // Button row
+        ui.horizontal(|ui| {
+            if ui.button("Add").clicked()
+                && let Some((start, end)) =
+                    self.parse_watchpoint_range(&self.wp_edit_addr_range.clone())
+            {
+                let value_match = if self.wp_edit_value.is_empty() {
+                    None
+                } else {
+                    u8::from_str_radix(self.wp_edit_value.trim(), 16).ok()
+                };
+                let wp = vibe_emu_core::watchpoints::Watchpoint {
+                    id: self.next_watchpoint_id,
+                    enabled: true,
+                    range: start..=end,
+                    on_read: self.wp_edit_on_read,
+                    on_write: self.wp_edit_on_write,
+                    on_execute: self.wp_edit_on_execute,
+                    on_jump: self.wp_edit_on_jump,
+                    value_match,
+                    message: if self.wp_edit_debug_msg.is_empty() {
+                        None
+                    } else {
+                        Some(self.wp_edit_debug_msg.clone())
+                    },
+                };
+                self.next_watchpoint_id += 1;
+                self.watchpoints.push(wp);
+            }
+
+            if ui.button("Delete").clicked()
+                && let Some(i) = self.wp_selected_index
+            {
+                to_remove = Some(i);
+            }
+
+            if ui.button("Replace").clicked()
+                && let Some(i) = self.wp_selected_index
+                && let Some((start, end)) =
+                    self.parse_watchpoint_range(&self.wp_edit_addr_range.clone())
+            {
+                let value_match = if self.wp_edit_value.is_empty() {
+                    None
+                } else {
+                    u8::from_str_radix(self.wp_edit_value.trim(), 16).ok()
+                };
+                if let Some(wp) = self.watchpoints.get_mut(i) {
+                    wp.range = start..=end;
+                    wp.on_read = self.wp_edit_on_read;
+                    wp.on_write = self.wp_edit_on_write;
+                    wp.on_execute = self.wp_edit_on_execute;
+                    wp.on_jump = self.wp_edit_on_jump;
+                    wp.value_match = value_match;
+                    wp.message = if self.wp_edit_debug_msg.is_empty() {
+                        None
+                    } else {
+                        Some(self.wp_edit_debug_msg.clone())
                     };
-                    self.next_watchpoint_id += 1;
-                    self.watchpoints.push(wp);
-                    self.wp_edit_start_addr.clear();
-                    self.wp_edit_end_addr.clear();
                 }
+            }
+
+            ui.add_space(20.0);
+
+            if ui.button("Disable").clicked()
+                && let Some(i) = self.wp_selected_index
+                && let Some(wp) = self.watchpoints.get_mut(i)
+            {
+                wp.enabled = false;
+            }
+
+            if ui.button("Enable").clicked()
+                && let Some(i) = self.wp_selected_index
+                && let Some(wp) = self.watchpoints.get_mut(i)
+            {
+                wp.enabled = true;
+            }
+        });
+
+        // Handle deletion
+        if let Some(i) = to_remove {
+            self.watchpoints.remove(i);
+            self.wp_selected_index = None;
+        }
+    }
+
+    fn parse_watchpoint_range(&self, input: &str) -> Option<(u16, u16)> {
+        let trimmed = input.trim();
+        let trimmed = trimmed
+            .strip_prefix("$")
+            .or_else(|| trimmed.strip_prefix("0x"))
+            .unwrap_or(trimmed);
+
+        if let Some((start_str, end_str)) = trimmed.split_once('-') {
+            let start = u16::from_str_radix(start_str.trim(), 16).ok()?;
+            let end = u16::from_str_radix(end_str.trim(), 16).ok()?;
+            Some((start, end))
+        } else {
+            let addr = u16::from_str_radix(trimmed, 16).ok()?;
+            Some((addr, addr))
+        }
+    }
+
+    fn draw_memory_viewer(&mut self, ui: &mut egui::Ui, snapshot: &UiSnapshot) {
+        let Some(mem) = snapshot.debugger.mem_image.as_ref() else {
+            ui.label("Memory not available (run paused to capture)");
+            return;
+        };
+
+        // Top bar with go-to address
+        ui.horizontal(|ui| {
+            ui.label("Go:");
+            let goto_resp = ui.add(
+                egui::TextEdit::singleline(&mut self.mem_viewer_goto)
+                    .desired_width(80.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            let submitted = goto_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("Go").clicked() || submitted {
+                if let Some(addr) =
+                    self.parse_mem_viewer_address(&self.mem_viewer_goto.clone(), snapshot)
+                {
+                    self.mem_viewer_addr = addr & 0xFFF0; // Align to 16-byte row
+                    self.mem_viewer_cursor = addr;
+                    self.mem_viewer_scroll_to = Some((addr as usize) / 16);
+                }
+                self.mem_viewer_goto.clear();
             }
         });
 
         ui.separator();
-        ui.heading("Active Watchpoints");
 
-        let mut to_remove: Option<usize> = None;
-        let mut to_toggle: Option<usize> = None;
+        // Render all rows - egui's ScrollArea handles virtualization
+        // show_rows expects row_height_sans_spacing - it adds item_spacing.y internally
+        let text_height = ui.text_style_height(&egui::TextStyle::Monospace);
+        let spacing = ui.spacing();
+        let row_height_sans_spacing = text_height.max(spacing.interact_size.y);
+        let row_height_with_spacing = row_height_sans_spacing + spacing.item_spacing.y;
+        let bytes_per_row = 16usize;
+        let total_rows = 0x10000usize.div_ceil(bytes_per_row);
 
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                egui::Grid::new("watchpoints_grid")
-                    .num_columns(5)
-                    .spacing([12.0, 4.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        ui.strong("En");
-                        ui.strong("Range");
-                        ui.strong("R");
-                        ui.strong("W");
-                        ui.strong("");
-                        ui.end_row();
+        let scroll_to_row = self.mem_viewer_scroll_to.take();
 
-                        for (i, wp) in self.watchpoints.iter().enumerate() {
-                            let enabled_text = if wp.enabled { "✓" } else { "○" };
-                            if ui.button(enabled_text).clicked() {
-                                to_toggle = Some(i);
-                            }
+        let mut scroll_area = egui::ScrollArea::vertical()
+            .id_salt("mem_viewer_scroll")
+            .auto_shrink([false, false]);
 
-                            let start = *wp.range.start();
-                            let end = *wp.range.end();
-                            if start == end {
-                                ui.monospace(format!("${:04X}", start));
-                            } else {
-                                ui.monospace(format!("${:04X}-${:04X}", start, end));
-                            }
-
-                            ui.monospace(if wp.on_read { "R" } else { "-" });
-                            ui.monospace(if wp.on_write { "W" } else { "-" });
-
-                            if ui.button("✕").clicked() {
-                                to_remove = Some(i);
-                            }
-                            ui.end_row();
-                        }
-                    });
-            });
-
-        if let Some(i) = to_toggle
-            && let Some(wp) = self.watchpoints.get_mut(i)
-        {
-            wp.enabled = !wp.enabled;
+        // Set scroll offset using the same row height that show_rows uses internally
+        if let Some(target_row) = scroll_to_row {
+            let target_offset = target_row as f32 * row_height_with_spacing;
+            scroll_area = scroll_area.vertical_scroll_offset(target_offset);
         }
-        if let Some(i) = to_remove {
-            self.watchpoints.remove(i);
+
+        scroll_area.show_rows(ui, row_height_sans_spacing, total_rows, |ui, row_range| {
+            for row_idx in row_range {
+                let row_addr = (row_idx * bytes_per_row) as u16;
+                let region = self.mem_region_prefix(row_addr, snapshot);
+
+                ui.horizontal(|ui| {
+                    ui.monospace(format!("{}:{:04X}", region, row_addr));
+                    ui.add_space(8.0);
+
+                    for col in 0..bytes_per_row {
+                        let addr = row_addr.wrapping_add(col as u16);
+                        let byte = mem[addr as usize];
+
+                        let is_cursor = addr == self.mem_viewer_cursor;
+                        let text = format!("{:02X}", byte);
+
+                        let label = if is_cursor {
+                            egui::RichText::new(text)
+                                .monospace()
+                                .background_color(egui::Color32::from_rgb(0, 80, 160))
+                        } else {
+                            egui::RichText::new(text).monospace()
+                        };
+
+                        if ui
+                            .add(egui::Label::new(label).sense(egui::Sense::click()))
+                            .clicked()
+                        {
+                            self.mem_viewer_cursor = addr;
+                        }
+
+                        if col == 7 {
+                            ui.add_space(4.0);
+                        }
+                    }
+
+                    ui.add_space(8.0);
+
+                    let mut ascii = String::with_capacity(bytes_per_row);
+                    for col in 0..bytes_per_row {
+                        let addr = row_addr.wrapping_add(col as u16);
+                        let byte = mem[addr as usize];
+                        let c = if (0x20..=0x7E).contains(&byte) {
+                            byte as char
+                        } else {
+                            '.'
+                        };
+                        ascii.push(c);
+                    }
+                    ui.monospace(ascii);
+                });
+            }
+        });
+
+        ui.separator();
+
+        // Status bar showing label at cursor
+        let cursor_addr = self.mem_viewer_cursor;
+        let cursor_bank = self.bank_for_address(cursor_addr, snapshot);
+
+        let label_info = if let Some(sym) = self.debugger_state.symbols() {
+            if let Some((label, offset)) = sym.nearest_label_for(cursor_bank, cursor_addr) {
+                if offset == 0 {
+                    label.to_string()
+                } else {
+                    format!("{}+${:X}", label, offset)
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        ui.horizontal(|ui| {
+            ui.monospace(format!(
+                "{:04X}  {:02X}:{:04X}",
+                cursor_addr, cursor_bank, cursor_addr
+            ));
+            if !label_info.is_empty() {
+                ui.monospace(format!("  {}", label_info));
+            }
+        });
+    }
+
+    fn parse_mem_viewer_address(&mut self, input: &str, _snapshot: &UiSnapshot) -> Option<u16> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Try parsing as bank:address format (e.g., 00:c000 or 05:4200)
+        if let Some((bank_str, addr_str)) = trimmed.split_once(':')
+            && let (Ok(bank), Ok(addr)) = (
+                u8::from_str_radix(bank_str.trim_start_matches('$'), 16),
+                u16::from_str_radix(addr_str.trim_start_matches('$'), 16),
+            )
+        {
+            // Store the display bank for switchable regions
+            match addr {
+                0x4000..=0x7FFF => self.mem_viewer_display_bank = Some(bank),
+                _ => self.mem_viewer_display_bank = None,
+            }
+            return Some(addr);
+        }
+
+        // Clear display bank override for non-bank:address input
+        self.mem_viewer_display_bank = None;
+
+        // Try parsing as hex number
+        if let Some(hex) = trimmed.strip_prefix("$").or(Some(trimmed))
+            && let Ok(addr) = u16::from_str_radix(hex, 16)
+        {
+            return Some(addr);
+        }
+
+        // Try symbol lookup
+        if let Some(sym) = self.debugger_state.symbols()
+            && let Some((_, addr)) = sym.lookup_name(trimmed)
+        {
+            return Some(addr);
+        }
+
+        None
+    }
+
+    fn mem_region_prefix(&self, addr: u16, snapshot: &UiSnapshot) -> String {
+        match addr {
+            0x0000..=0x3FFF => "RO00".to_string(),
+            0x4000..=0x7FFF => {
+                let bank = self
+                    .mem_viewer_display_bank
+                    .unwrap_or(snapshot.debugger.active_rom_bank.min(0xFF) as u8);
+                format!("RO{:02X}", bank)
+            }
+            0x8000..=0x9FFF => format!("VR{:02X}", snapshot.debugger.vram_bank),
+            0xA000..=0xBFFF => format!("SR{:02X}", snapshot.debugger.sram_bank),
+            0xC000..=0xCFFF => "WR00".to_string(),
+            0xD000..=0xDFFF => {
+                let bank = snapshot.debugger.wram_bank.max(1);
+                format!("WR{:02X}", bank)
+            }
+            0xE000..=0xFDFF => "ECHO".to_string(),
+            0xFE00..=0xFE9F => "OAM ".to_string(),
+            0xFEA0..=0xFEFF => "----".to_string(),
+            0xFF00..=0xFF7F => "I/O ".to_string(),
+            0xFF80..=0xFFFE => "HRAM".to_string(),
+            0xFFFF => "IE  ".to_string(),
+        }
+    }
+
+    fn bank_for_address(&self, addr: u16, snapshot: &UiSnapshot) -> u8 {
+        match addr {
+            0x0000..=0x3FFF => 0,
+            0x4000..=0x7FFF => snapshot.debugger.active_rom_bank.min(0xFF) as u8,
+            0x8000..=0x9FFF => snapshot.debugger.vram_bank,
+            0xA000..=0xBFFF => snapshot.debugger.sram_bank,
+            0xC000..=0xCFFF => 0,
+            0xD000..=0xDFFF => snapshot.debugger.wram_bank,
+            _ => 0,
         }
     }
 
@@ -2909,7 +3766,7 @@ impl VibeEmuApp {
                 ui.heading("Sprites");
 
                 let cell_w = 24.0;
-                let cell_h = if is_8x16 { 40.0 } else { 28.0 };
+                let cell_h = if is_8x16 { 48.0 } else { 28.0 };
                 let cols = 10;
                 let rows = 4;
                 let grid_w = cols as f32 * cell_w;
@@ -3081,11 +3938,11 @@ impl VibeEmuApp {
                         .num_columns(2)
                         .spacing([8.0, 2.0])
                         .show(ui, |ui| {
-                            ui.label("X-loc:");
+                            ui.label("X coord:");
                             ui.monospace(format!("{} (${:02X})", screen_x, x_pos));
                             ui.end_row();
 
-                            ui.label("Y-loc:");
+                            ui.label("Y coord:");
                             ui.monospace(format!("{} (${:02X})", screen_y, y_pos));
                             ui.end_row();
 
@@ -3097,23 +3954,15 @@ impl VibeEmuApp {
                             ui.monospace(format!("${:02X}", attr));
                             ui.end_row();
 
-                            ui.label("OAM addr:");
-                            ui.monospace(format!("${:04X}", oam_addr));
-                            ui.end_row();
-
-                            ui.label("Tile addr:");
-                            ui.monospace(format!("${:04X}", tile_addr));
-                            ui.end_row();
-
-                            ui.label("X-flip:");
+                            ui.label("   X-flip:");
                             ui.checkbox(&mut x_flip.clone(), "");
                             ui.end_row();
 
-                            ui.label("Y-flip:");
+                            ui.label("   Y-flip:");
                             ui.checkbox(&mut y_flip.clone(), "");
                             ui.end_row();
 
-                            ui.label("Palette:");
+                            ui.label("   Palette:");
                             if ppu.cgb {
                                 ui.monospace(format!("OBJ {}", attr & 0x07));
                             } else {
@@ -3125,13 +3974,21 @@ impl VibeEmuApp {
                             ui.end_row();
 
                             if ppu.cgb {
-                                ui.label("Bank:");
+                                ui.label("   Bank:");
                                 ui.monospace(format!("{}", if attr & 0x08 != 0 { 1 } else { 0 }));
                                 ui.end_row();
                             }
 
-                            ui.label("Priority:");
+                            ui.label("   Priority:");
                             ui.checkbox(&mut priority.clone(), "BG over OBJ");
+                            ui.end_row();
+
+                            ui.label("OAM addr:");
+                            ui.monospace(format!("${:04X}", oam_addr));
+                            ui.end_row();
+
+                            ui.label("Tile addr:");
+                            ui.monospace(format!("${:04X}", tile_addr));
                             ui.end_row();
                         });
                 }
