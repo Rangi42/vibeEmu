@@ -2349,6 +2349,15 @@ impl Apu {
 
     /// Tick sweep-related countdowns. Called during APU run with 1 MHz cycles.
     fn tick_sweep(&mut self, cycles: u8) {
+        // ch1_restart_hold must decrement in parallel with other timers
+        if self.ch1_restart_hold > 0 {
+            if self.ch1_restart_hold > cycles {
+                self.ch1_restart_hold -= cycles;
+            } else {
+                self.ch1_restart_hold = 0;
+            }
+        }
+
         if self.sweep_calc_reload_timer > 0 {
             if self.sweep_calc_reload_timer > cycles {
                 self.sweep_calc_reload_timer -= cycles;
@@ -2382,15 +2391,6 @@ impl Apu {
             } else {
                 self.sweep_calc_countdown = 0;
                 self.sweep_calculation_done();
-            }
-        }
-
-        // Tick channel 1 restart hold
-        if self.ch1_restart_hold > 0 {
-            if self.ch1_restart_hold > cycles {
-                self.ch1_restart_hold -= cycles;
-            } else {
-                self.ch1_restart_hold = 0;
             }
         }
     }
