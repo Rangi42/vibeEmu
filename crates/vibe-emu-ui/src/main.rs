@@ -3,6 +3,7 @@
 
 mod audio;
 mod keybinds;
+mod network_link;
 mod ui;
 mod ui_config;
 
@@ -13,6 +14,7 @@ use log::{debug, error, info, warn};
 use rfd::FileDialog;
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::net::TcpStream;
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,6 +27,7 @@ use vibe_emu_mobile::{
 
 use crossbeam_channel as cb;
 use keybinds::KeyBindings;
+use network_link::{LinkCommand, LinkEvent, NetworkLinkPort};
 use ui::debugger::{BreakpointSpec, DebuggerPauseReason, DebuggerState};
 use ui::snapshot::UiSnapshot;
 use ui_config::{EmulationMode, UiConfig, WindowSize};
@@ -245,6 +248,16 @@ enum SerialPeripheral {
     #[default]
     None,
     MobileAdapter,
+    LinkCable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum LinkCableState {
+    #[default]
+    Disconnected,
+    Listening,
+    Connecting,
+    Connected,
 }
 
 #[derive(Clone)]
@@ -299,7 +312,6 @@ enum OptionsTab {
     #[default]
     Keybinds,
     Emulation,
-    MobileAdapter,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -414,11 +426,16 @@ struct EmuThreadChannels {
     frame_pool_rx: cb::Receiver<Vec<u32>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_emulator_thread(
     gb: Arc<Mutex<GameBoy>>,
     mut speed: Speed,
     initial_paused: bool,
     channels: EmuThreadChannels,
+    external_clock_pending: Arc<network_link::ExternalClockPending>,
+    slave_ready: Arc<network_link::SlaveReadyState>,
+    link_timestamp: Arc<std::sync::atomic::AtomicU32>,
+    link_doublespeed: Arc<std::sync::atomic::AtomicBool>,
 ) {
     use std::collections::HashSet;
 
@@ -433,6 +450,7 @@ fn run_emulator_thread(
     let mut frame_count = 0u64;
     let mut next_frame = Instant::now() + FRAME_TIME;
     let mut breakpoints: HashSet<(u8, u16)> = HashSet::new();
+    let mut cumulative_bgb_timestamp: u32 = 0;
 
     loop {
         while let Ok(cmd) = rx.try_recv() {
@@ -520,6 +538,12 @@ fn run_emulator_thread(
         if let Ok(mut gb) = gb.lock() {
             let GameBoy { cpu, mmu, .. } = &mut *gb;
             mmu.ppu.clear_frame_flag();
+
+            let mut ext_clock_active = false;
+            let mut ext_clock_bits_remaining: u8 = 0;
+            let mut ext_clock_cycle_accum: u32 = 0;
+            let mut ext_clock_dot_cycles_per_bit: u32 = 512;
+
             while !mmu.ppu.frame_ready() {
                 // Check breakpoints before executing
                 if !breakpoints.is_empty() {
@@ -540,7 +564,75 @@ fn run_emulator_thread(
                         break;
                     }
                 }
+
+                let prev_dot_div = mmu.dot_div;
                 cpu.step(mmu);
+                let dot_div_delta = mmu.dot_div.wrapping_sub(prev_dot_div) as u32;
+
+                // Update cumulative timestamp for BGB protocol (2 MiHz = dot_div / 2)
+                // BGB expects a 31-bit timestamp that grows continuously, not a wrapped 16-bit value
+                cumulative_bgb_timestamp = cumulative_bgb_timestamp.wrapping_add(dot_div_delta / 2);
+                let bgb_ts = cumulative_bgb_timestamp & 0x7FFF_FFFF;
+                link_timestamp.store(bgb_ts, std::sync::atomic::Ordering::Release);
+                link_doublespeed.store(cpu.double_speed, std::sync::atomic::Ordering::Release);
+
+                // Update slave ready state for the network thread
+                if let Some(byte) = mmu.serial.pending_external_clock_outgoing() {
+                    slave_ready.set_ready(byte);
+                } else {
+                    slave_ready.set_not_ready();
+                }
+
+                // Poll for pending external clock transfers (link cable slave mode)
+                // Check if the network received a byte from master AND the game has set up
+                // an external clock transfer
+                let ext_pending = external_clock_pending.is_pending();
+                let has_transfer = mmu.serial.has_external_clock_transfer_pending();
+                if ext_pending && has_transfer {
+                    if !ext_clock_active {
+                        ext_clock_active = true;
+                        ext_clock_bits_remaining = 8;
+                        ext_clock_cycle_accum = 0;
+                        ext_clock_dot_cycles_per_bit =
+                            external_clock_pending.dot_cycles_per_bit().max(1);
+                        log::debug!(
+                            "External clock transfer armed; pacing clock pulses at {} dot cycles/bit",
+                            ext_clock_dot_cycles_per_bit
+                        );
+                    }
+
+                    ext_clock_cycle_accum = ext_clock_cycle_accum.saturating_add(dot_div_delta);
+
+                    while ext_clock_bits_remaining != 0
+                        && ext_clock_cycle_accum >= ext_clock_dot_cycles_per_bit
+                    {
+                        ext_clock_cycle_accum -= ext_clock_dot_cycles_per_bit;
+                        mmu.serial.external_clock_pulse(1, &mut mmu.if_reg);
+
+                        if !mmu.serial.has_external_clock_transfer_pending() {
+                            break;
+                        }
+
+                        ext_clock_bits_remaining = ext_clock_bits_remaining.saturating_sub(1);
+                    }
+
+                    if !mmu.serial.has_external_clock_transfer_pending()
+                        || ext_clock_bits_remaining == 0
+                    {
+                        ext_clock_active = false;
+                        ext_clock_bits_remaining = 0;
+                        ext_clock_cycle_accum = 0;
+                        ext_clock_dot_cycles_per_bit = 512;
+                        external_clock_pending.clear();
+                        log::debug!("External clock transfer completed");
+                    }
+                } else {
+                    // Reset pacing state if the pending flag clears or the transfer disappears.
+                    ext_clock_active = false;
+                    ext_clock_bits_remaining = 0;
+                    ext_clock_cycle_accum = 0;
+                    ext_clock_dot_cycles_per_bit = 512;
+                }
             }
             frame_buf.copy_from_slice(mmu.ppu.framebuffer());
         }
@@ -623,10 +715,25 @@ struct VibeEmuApp {
     mem_viewer_display_bank: Option<u8>,
 
     // Mobile Adapter state
-    mobile_enabled: bool,
     mobile_dns1: String,
     mobile_dns2: String,
     mobile_relay: String,
+    mobile_adapter: Option<Arc<Mutex<MobileAdapter>>>,
+
+    // Serial peripheral state
+    serial_peripheral: SerialPeripheral,
+    link_cable_state: LinkCableState,
+    link_cmd_tx: Option<mpsc::Sender<LinkCommand>>,
+    link_event_rx: Option<cb::Receiver<LinkEvent>>,
+    link_network_state: Option<Arc<Mutex<network_link::NetworkState>>>,
+    link_transfer_condvar: Option<Arc<network_link::TransferCondvar>>,
+    link_timestamp: Arc<std::sync::atomic::AtomicU32>,
+    link_doublespeed: Arc<std::sync::atomic::AtomicBool>,
+    link_external_clock_pending: Arc<network_link::ExternalClockPending>,
+    link_pending_timestamp: Arc<network_link::PendingTimestamp>,
+    link_slave_ready: Arc<network_link::SlaveReadyState>,
+    link_host: String,
+    link_port: String,
 
     // Status bar state
     last_fps_update: std::time::Instant,
@@ -646,6 +753,11 @@ impl VibeEmuApp {
         keybinds: KeyBindings,
         keybinds_path: std::path::PathBuf,
         emulation_mode: EmulationMode,
+        external_clock_pending: Arc<network_link::ExternalClockPending>,
+        pending_timestamp: Arc<network_link::PendingTimestamp>,
+        local_timestamp: Arc<std::sync::atomic::AtomicU32>,
+        link_doublespeed: Arc<std::sync::atomic::AtomicBool>,
+        slave_ready: Arc<network_link::SlaveReadyState>,
     ) -> Self {
         let paused = rom_path.is_none();
         if paused {
@@ -706,10 +818,23 @@ impl VibeEmuApp {
             mem_viewer_goto: String::new(),
             mem_viewer_scroll_to: None,
             mem_viewer_display_bank: None,
-            mobile_enabled: false,
             mobile_dns1: String::new(),
             mobile_dns2: String::new(),
             mobile_relay: String::new(),
+            mobile_adapter: None,
+            serial_peripheral: SerialPeripheral::None,
+            link_cable_state: LinkCableState::Disconnected,
+            link_cmd_tx: None,
+            link_event_rx: None,
+            link_network_state: None,
+            link_transfer_condvar: None,
+            link_timestamp: local_timestamp,
+            link_doublespeed,
+            link_external_clock_pending: external_clock_pending,
+            link_pending_timestamp: pending_timestamp,
+            link_slave_ready: slave_ready,
+            link_host: "127.0.0.1".to_string(),
+            link_port: "5000".to_string(),
             last_fps_update: std::time::Instant::now(),
             frame_count_since_update: 0,
             current_fps: 0.0,
@@ -787,6 +912,8 @@ impl VibeEmuApp {
             }
         }
 
+        self.poll_link_events();
+
         let elapsed = self.last_fps_update.elapsed();
         if elapsed >= Duration::from_secs(1) {
             let instant_fps = self.frame_count_since_update as f64 / elapsed.as_secs_f64();
@@ -794,6 +921,194 @@ impl VibeEmuApp {
             self.current_fps = self.current_fps * 0.7 + instant_fps * 0.3;
             self.frame_count_since_update = 0;
             self.last_fps_update = std::time::Instant::now();
+        }
+    }
+
+    fn poll_link_events(&mut self) {
+        if let Some(ref rx) = self.link_event_rx {
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    LinkEvent::Listening { port } => {
+                        info!("Link cable listening on port {}", port);
+                        self.link_cable_state = LinkCableState::Listening;
+                    }
+                    LinkEvent::Connected => {
+                        info!("Link cable connected");
+                        self.link_cable_state = LinkCableState::Connected;
+                        if let Some(net_state) = &self.link_network_state {
+                            let link_port = NetworkLinkPort::new_v2(
+                                Arc::clone(net_state),
+                                Arc::clone(&self.link_timestamp),
+                                Arc::clone(&self.link_doublespeed),
+                            );
+                            if let Ok(mut gb) = self.gb.lock() {
+                                gb.mmu.serial.connect(Box::new(link_port));
+                            }
+                        }
+                    }
+                    LinkEvent::Disconnected => {
+                        info!("Link cable disconnected");
+                        self.link_cable_state = LinkCableState::Disconnected;
+                        if let Ok(mut gb) = self.gb.lock() {
+                            gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
+                        }
+                    }
+                    LinkEvent::RemotePaused => {
+                        if !self.paused {
+                            info!("Remote emulator paused - pausing local");
+                            self.paused = true;
+                            let _ = self.emu_tx.send(EmuCommand::SetPaused(true));
+                        }
+                    }
+                    LinkEvent::RemoteResumed => {
+                        if self.paused {
+                            info!("Remote emulator resumed - resuming local");
+                            self.paused = false;
+                            let _ = self.emu_tx.send(EmuCommand::SetPaused(false));
+                        }
+                    }
+                    LinkEvent::SlaveTransferReady => {
+                        // External clock pending is polled in the emu thread
+                    }
+                    LinkEvent::Error(msg) => {
+                        warn!("Link cable error: {}", msg);
+                        self.link_cable_state = LinkCableState::Disconnected;
+                    }
+                }
+            }
+        }
+    }
+
+    fn disconnect_serial_peripheral(&mut self) {
+        if let Some(ref tx) = self.link_cmd_tx {
+            let _ = tx.send(LinkCommand::Disconnect);
+        }
+        self.link_cable_state = LinkCableState::Disconnected;
+        self.mobile_adapter = None;
+
+        if let Ok(mut gb) = self.gb.lock() {
+            gb.mmu.serial.connect(Box::new(NullLinkPort::default()));
+        }
+    }
+
+    fn init_link_cable_network(&mut self) {
+        if self.link_cmd_tx.is_none() {
+            let (cmd_tx, cmd_rx) = mpsc::channel();
+            let (event_tx, event_rx) = cb::bounded(16);
+            let ext_clock = Arc::clone(&self.link_external_clock_pending);
+            let pending_ts = Arc::clone(&self.link_pending_timestamp);
+            let local_ts = Arc::clone(&self.link_timestamp);
+            let slave_ready = Arc::clone(&self.link_slave_ready);
+            let (net_state, condvar, _shared_ts) = network_link::spawn_network_thread(
+                cmd_rx,
+                event_tx,
+                ext_clock,
+                pending_ts,
+                local_ts,
+                slave_ready,
+            );
+            self.link_cmd_tx = Some(cmd_tx);
+            self.link_event_rx = Some(event_rx);
+            self.link_network_state = Some(net_state);
+            self.link_transfer_condvar = Some(condvar);
+        }
+    }
+
+    fn connect_mobile_adapter(&mut self) {
+        let config_path = {
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(appdata) = std::env::var_os("APPDATA") {
+                    std::path::PathBuf::from(appdata)
+                        .join("vibeemu")
+                        .join("mobile.config")
+                } else {
+                    std::path::PathBuf::from("mobile.config")
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+                    std::path::PathBuf::from(xdg)
+                        .join("vibeemu")
+                        .join("mobile.config")
+                } else if let Some(home) = std::env::var_os("HOME") {
+                    std::path::PathBuf::from(home)
+                        .join(".local")
+                        .join("share")
+                        .join("vibeemu")
+                        .join("mobile.config")
+                } else {
+                    std::path::PathBuf::from("mobile.config")
+                }
+            }
+        };
+
+        if let Some(parent) = config_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match MobileAdapter::new_std(config_path) {
+            Ok(mut adapter) => {
+                let dns1 = self
+                    .mobile_dns1
+                    .parse::<std::net::IpAddr>()
+                    .ok()
+                    .map(|ip| match ip {
+                        std::net::IpAddr::V4(v4) => MobileAddr::V4 {
+                            host: v4.octets(),
+                            port: 53,
+                        },
+                        std::net::IpAddr::V6(v6) => MobileAddr::V6 {
+                            host: v6.octets(),
+                            port: 53,
+                        },
+                    });
+
+                let dns2 = self
+                    .mobile_dns2
+                    .parse::<std::net::IpAddr>()
+                    .ok()
+                    .map(|ip| match ip {
+                        std::net::IpAddr::V4(v4) => MobileAddr::V4 {
+                            host: v4.octets(),
+                            port: 53,
+                        },
+                        std::net::IpAddr::V6(v6) => MobileAddr::V6 {
+                            host: v6.octets(),
+                            port: 53,
+                        },
+                    });
+
+                let config = MobileConfig {
+                    device: MobileAdapterDevice::Blue,
+                    unmetered: false,
+                    dns1: dns1.unwrap_or_default(),
+                    dns2: dns2.unwrap_or_default(),
+                    p2p_port: None,
+                    relay: MobileAddr::None,
+                    relay_token: None,
+                };
+
+                if let Err(e) = adapter.apply_config(&config) {
+                    warn!("Failed to apply mobile adapter config: {e}");
+                }
+
+                if let Err(e) = adapter.start() {
+                    warn!("Failed to start mobile adapter: {e}");
+                } else {
+                    info!("Mobile Adapter connected");
+                    let adapter = Arc::new(Mutex::new(adapter));
+                    let link_port = MobileLinkPort::new(Arc::clone(&adapter));
+                    self.mobile_adapter = Some(adapter);
+                    if let Ok(mut gb) = self.gb.lock() {
+                        gb.mmu.serial.connect(Box::new(link_port));
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to create mobile adapter: {e}");
+            }
         }
     }
 
@@ -886,6 +1201,14 @@ impl eframe::App for VibeEmuApp {
                     {
                         self.paused = !self.paused;
                         let _ = self.emu_tx.send(EmuCommand::SetPaused(self.paused));
+                        if let Some(ref tx) = self.link_cmd_tx {
+                            let cmd = if self.paused {
+                                LinkCommand::NotifyPause
+                            } else {
+                                LinkCommand::NotifyResume
+                            };
+                            let _ = tx.send(cmd);
+                        }
                         ui.close_menu();
                     }
                     if ui.button("Reset").clicked() {
@@ -926,6 +1249,143 @@ impl eframe::App for VibeEmuApp {
                             .clicked()
                         {
                             ui.close_menu();
+                        }
+                    });
+                    ui.separator();
+                    ui.menu_button("Serial Peripheral", |ui| {
+                        let prev_peripheral = self.serial_peripheral;
+                        if ui
+                            .radio_value(
+                                &mut self.serial_peripheral,
+                                SerialPeripheral::None,
+                                "None",
+                            )
+                            .clicked()
+                        {
+                            if prev_peripheral != SerialPeripheral::None {
+                                self.disconnect_serial_peripheral();
+                            }
+                            ui.close_menu();
+                        }
+                        if ui
+                            .radio_value(
+                                &mut self.serial_peripheral,
+                                SerialPeripheral::MobileAdapter,
+                                "Mobile Adapter",
+                            )
+                            .clicked()
+                        {
+                            if prev_peripheral != SerialPeripheral::MobileAdapter {
+                                self.disconnect_serial_peripheral();
+                                self.connect_mobile_adapter();
+                            }
+                            ui.close_menu();
+                        }
+                        if ui
+                            .radio_value(
+                                &mut self.serial_peripheral,
+                                SerialPeripheral::LinkCable,
+                                "Link Cable (Network)",
+                            )
+                            .clicked()
+                        {
+                            if prev_peripheral != SerialPeripheral::LinkCable {
+                                self.disconnect_serial_peripheral();
+                                self.init_link_cable_network();
+                            }
+                            ui.close_menu();
+                        }
+
+                        if self.serial_peripheral == SerialPeripheral::LinkCable {
+                            ui.separator();
+                            let state_text = match self.link_cable_state {
+                                LinkCableState::Disconnected => "Disconnected",
+                                LinkCableState::Listening => "Listening...",
+                                LinkCableState::Connecting => "Connecting...",
+                                LinkCableState::Connected => "✓ Connected",
+                            };
+                            ui.label(format!("Status: {}", state_text));
+
+                            ui.horizontal(|ui| {
+                                ui.label("Host:");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.link_host)
+                                        .desired_width(100.0),
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Port:");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.link_port)
+                                        .desired_width(60.0),
+                                );
+                            });
+
+                            ui.horizontal(|ui| {
+                                let can_act =
+                                    matches!(self.link_cable_state, LinkCableState::Disconnected);
+                                if ui
+                                    .add_enabled(can_act, egui::Button::new("Listen"))
+                                    .clicked()
+                                    && let Ok(port) = self.link_port.parse::<u16>()
+                                    && let Some(ref tx) = self.link_cmd_tx
+                                {
+                                    let _ = tx.send(LinkCommand::Listen { port });
+                                    self.link_cable_state = LinkCableState::Listening;
+                                }
+                                if ui
+                                    .add_enabled(can_act, egui::Button::new("Connect"))
+                                    .clicked()
+                                    && let Ok(port) = self.link_port.parse::<u16>()
+                                    && let Some(ref tx) = self.link_cmd_tx
+                                {
+                                    let _ = tx.send(LinkCommand::Connect {
+                                        host: self.link_host.clone(),
+                                        port,
+                                    });
+                                    self.link_cable_state = LinkCableState::Connecting;
+                                }
+                            });
+
+                            let can_disconnect =
+                                !matches!(self.link_cable_state, LinkCableState::Disconnected);
+                            if ui
+                                .add_enabled(can_disconnect, egui::Button::new("Disconnect"))
+                                .clicked()
+                                && let Some(ref tx) = self.link_cmd_tx
+                            {
+                                let _ = tx.send(LinkCommand::Disconnect);
+                                self.link_cable_state = LinkCableState::Disconnected;
+                            }
+                        }
+
+                        if self.serial_peripheral == SerialPeripheral::MobileAdapter {
+                            ui.separator();
+                            ui.label("Mobile Adapter Settings:");
+                            ui.horizontal(|ui| {
+                                ui.label("DNS 1:");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.mobile_dns1)
+                                        .desired_width(120.0)
+                                        .hint_text("8.8.8.8"),
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("DNS 2:");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.mobile_dns2)
+                                        .desired_width(120.0)
+                                        .hint_text("8.8.4.4"),
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Relay:");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.mobile_relay)
+                                        .desired_width(180.0)
+                                        .hint_text("relay.example.com:port"),
+                                );
+                            });
                         }
                     });
                 });
@@ -973,6 +1433,29 @@ impl eframe::App for VibeEmuApp {
                         ("▶ Running", egui::Color32::GREEN)
                     };
                     ui.colored_label(status_text.1, status_text.0);
+
+                    // Serial peripheral status
+                    match self.serial_peripheral {
+                        SerialPeripheral::None => {}
+                        SerialPeripheral::MobileAdapter => {
+                            ui.separator();
+                            ui.colored_label(egui::Color32::LIGHT_BLUE, "📱 Mobile");
+                        }
+                        SerialPeripheral::LinkCable => {
+                            ui.separator();
+                            let (text, color) = match self.link_cable_state {
+                                LinkCableState::Disconnected => ("🔗 Link", egui::Color32::GRAY),
+                                LinkCableState::Listening => {
+                                    ("🔗 Listening", egui::Color32::YELLOW)
+                                }
+                                LinkCableState::Connecting => {
+                                    ("🔗 Connecting", egui::Color32::YELLOW)
+                                }
+                                LinkCableState::Connected => ("🔗 Connected", egui::Color32::GREEN),
+                            };
+                            ui.colored_label(color, text);
+                        }
+                    }
 
                     // Calculate space needed for FPS (approximate)
                     let fps_text = format!("{:.1} FPS", self.current_fps);
@@ -1094,15 +1577,6 @@ impl VibeEmuApp {
                 .clicked()
             {
                 self.options_tab = OptionsTab::Emulation;
-            }
-            if ui
-                .selectable_label(
-                    self.options_tab == OptionsTab::MobileAdapter,
-                    "Mobile Adapter",
-                )
-                .clicked()
-            {
-                self.options_tab = OptionsTab::MobileAdapter;
             }
         });
 
@@ -1244,41 +1718,6 @@ impl VibeEmuApp {
                             egui::ViewportCommand::InnerSize(new_size),
                         );
                     }
-                });
-            }
-            OptionsTab::MobileAdapter => {
-                ui.checkbox(&mut self.mobile_enabled, "Enable Mobile Adapter");
-
-                ui.add_enabled_ui(self.mobile_enabled, |ui| {
-                    ui.separator();
-                    ui.label("DNS Servers:");
-                    ui.horizontal(|ui| {
-                        ui.label("Primary:");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.mobile_dns1)
-                                .desired_width(150.0)
-                                .hint_text("e.g. 8.8.8.8"),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Secondary:");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.mobile_dns2)
-                                .desired_width(150.0)
-                                .hint_text("e.g. 8.8.4.4"),
-                        );
-                    });
-
-                    ui.separator();
-                    ui.label("Relay Server:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.mobile_relay)
-                            .desired_width(250.0)
-                            .hint_text("relay.example.com:port"),
-                    );
-
-                    ui.separator();
-                    ui.label("Note: Changes require ROM reload to take effect.");
                 });
             }
         }
@@ -4330,6 +4769,11 @@ fn main() {
     }
 
     let gb = Arc::new(Mutex::new(gb));
+    let external_clock_pending = Arc::new(network_link::ExternalClockPending::default());
+    let pending_timestamp = Arc::new(network_link::PendingTimestamp::default());
+    let local_timestamp = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let link_doublespeed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let slave_ready = Arc::new(network_link::SlaveReadyState::default());
 
     let (to_emu_tx, to_emu_rx) = mpsc::channel();
     let (from_emu_frame_tx, from_emu_frame_rx) = cb::bounded(3);
@@ -4345,6 +4789,10 @@ fn main() {
     };
     let initial_paused = rom_path.is_none();
     let frame_pool_tx_clone = frame_pool_tx.clone();
+    let emu_ext_clock = Arc::clone(&external_clock_pending);
+    let emu_slave_ready = Arc::clone(&slave_ready);
+    let emu_link_timestamp = Arc::clone(&local_timestamp);
+    let emu_link_doublespeed = Arc::clone(&link_doublespeed);
 
     let _emu_handle = thread::spawn(move || {
         run_emulator_thread(
@@ -4357,6 +4805,10 @@ fn main() {
                 frame_pool_tx,
                 frame_pool_rx,
             },
+            emu_ext_clock,
+            emu_slave_ready,
+            emu_link_timestamp,
+            emu_link_doublespeed,
         );
     });
 
@@ -4389,6 +4841,11 @@ fn main() {
                 keybinds,
                 keybinds_path,
                 emulation_mode,
+                external_clock_pending,
+                pending_timestamp,
+                local_timestamp,
+                link_doublespeed,
+                slave_ready,
             )))
         }),
     ) {
