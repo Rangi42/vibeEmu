@@ -4,6 +4,39 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
+pub enum SerialPeripheralKind {
+    #[default]
+    None,
+    MobileAdapter,
+    LinkCable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SerialConfig {
+    pub peripheral: SerialPeripheralKind,
+    pub link_host: String,
+    pub link_port: String,
+    pub mobile_dns1: String,
+    pub mobile_dns2: String,
+    pub mobile_relay: String,
+}
+
+impl Default for SerialConfig {
+    fn default() -> Self {
+        Self {
+            peripheral: SerialPeripheralKind::None,
+            link_host: "127.0.0.1".to_string(),
+            link_port: "5000".to_string(),
+            mobile_dns1: String::new(),
+            mobile_dns2: String::new(),
+            mobile_relay: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
 pub enum EmulationMode {
     #[default]
     Auto,
@@ -61,6 +94,7 @@ pub struct UiConfig {
     pub cgb_bootrom_path: Option<PathBuf>,
     pub window_size: WindowSize,
     pub emulation_mode: EmulationMode,
+    pub serial: SerialConfig,
 }
 
 pub fn default_ui_config_path() -> PathBuf {

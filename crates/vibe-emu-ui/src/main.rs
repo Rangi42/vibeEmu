@@ -30,7 +30,7 @@ use keybinds::KeyBindings;
 use network_link::{LinkCommand, LinkEvent, NetworkLinkPort};
 use ui::debugger::{BreakpointSpec, DebuggerPauseReason, DebuggerState};
 use ui::snapshot::UiSnapshot;
-use ui_config::{EmulationMode, UiConfig, WindowSize};
+use ui_config::{EmulationMode, SerialPeripheralKind, UiConfig, WindowSize};
 
 const DEFAULT_WINDOW_SCALE: u32 = 2;
 const GB_WIDTH: f32 = 160.0;
@@ -658,6 +658,9 @@ struct VibeEmuApp {
     frame_pool_tx: cb::Sender<Vec<u32>>,
     _audio_stream: Option<cpal::Stream>,
 
+    ui_config_path: std::path::PathBuf,
+    ui_config: UiConfig,
+
     framebuffer: Vec<u32>,
     texture: Option<egui::TextureHandle>,
     paused: bool,
@@ -753,6 +756,8 @@ impl VibeEmuApp {
         keybinds: KeyBindings,
         keybinds_path: std::path::PathBuf,
         emulation_mode: EmulationMode,
+        ui_config_path: std::path::PathBuf,
+        ui_config: UiConfig,
         external_clock_pending: Arc<network_link::ExternalClockPending>,
         pending_timestamp: Arc<network_link::PendingTimestamp>,
         local_timestamp: Arc<std::sync::atomic::AtomicU32>,
@@ -776,6 +781,9 @@ impl VibeEmuApp {
             frame_rx,
             frame_pool_tx,
             _audio_stream: audio_stream,
+
+            ui_config_path,
+            ui_config,
             framebuffer: vec![0u32; 160 * 144],
             texture: None,
             paused,
@@ -840,12 +848,54 @@ impl VibeEmuApp {
             current_fps: 0.0,
         };
 
+        app.apply_persisted_serial_settings();
+
         // Load symbols for ROM if one was provided at startup
         if let Some(ref path) = app.current_rom_path {
             app.debugger_state.load_symbols_for_rom_path(Some(path));
         }
 
         app
+    }
+
+    fn apply_persisted_serial_settings(&mut self) {
+        self.mobile_dns1 = self.ui_config.serial.mobile_dns1.clone();
+        self.mobile_dns2 = self.ui_config.serial.mobile_dns2.clone();
+        self.mobile_relay = self.ui_config.serial.mobile_relay.clone();
+        self.link_host = self.ui_config.serial.link_host.clone();
+        self.link_port = self.ui_config.serial.link_port.clone();
+
+        self.serial_peripheral = match self.ui_config.serial.peripheral {
+            SerialPeripheralKind::None => SerialPeripheral::None,
+            SerialPeripheralKind::MobileAdapter => SerialPeripheral::MobileAdapter,
+            SerialPeripheralKind::LinkCable => SerialPeripheral::LinkCable,
+        };
+
+        match self.serial_peripheral {
+            SerialPeripheral::None => {}
+            SerialPeripheral::MobileAdapter => self.connect_mobile_adapter(),
+            SerialPeripheral::LinkCable => self.init_link_cable_network(),
+        }
+    }
+
+    fn persist_serial_settings(&mut self) {
+        self.ui_config.serial.peripheral = match self.serial_peripheral {
+            SerialPeripheral::None => SerialPeripheralKind::None,
+            SerialPeripheral::MobileAdapter => SerialPeripheralKind::MobileAdapter,
+            SerialPeripheral::LinkCable => SerialPeripheralKind::LinkCable,
+        };
+        self.ui_config.serial.link_host = self.link_host.clone();
+        self.ui_config.serial.link_port = self.link_port.clone();
+        self.ui_config.serial.mobile_dns1 = self.mobile_dns1.clone();
+        self.ui_config.serial.mobile_dns2 = self.mobile_dns2.clone();
+        self.ui_config.serial.mobile_relay = self.mobile_relay.clone();
+
+        if let Err(e) = ui_config::save_to_file(&self.ui_config_path, &self.ui_config) {
+            log::warn!(
+                "Failed to save UI config {}: {e}",
+                self.ui_config_path.display()
+            );
+        }
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
@@ -1195,8 +1245,12 @@ impl eframe::App for VibeEmuApp {
                 });
 
                 ui.menu_button("Emulation", |ui| {
+                    let has_rom_loaded = self.current_rom_path.is_some();
                     if ui
-                        .button(if self.paused { "Resume" } else { "Pause" })
+                        .add_enabled(
+                            has_rom_loaded,
+                            egui::Button::new(if self.paused { "Resume" } else { "Pause" }),
+                        )
                         .clicked()
                     {
                         self.paused = !self.paused;
@@ -1265,6 +1319,7 @@ impl eframe::App for VibeEmuApp {
                             if prev_peripheral != SerialPeripheral::None {
                                 self.disconnect_serial_peripheral();
                             }
+                            self.persist_serial_settings();
                             ui.close_menu();
                         }
                         if ui
@@ -1279,6 +1334,7 @@ impl eframe::App for VibeEmuApp {
                                 self.disconnect_serial_peripheral();
                                 self.connect_mobile_adapter();
                             }
+                            self.persist_serial_settings();
                             ui.close_menu();
                         }
                         if ui
@@ -1293,7 +1349,7 @@ impl eframe::App for VibeEmuApp {
                                 self.disconnect_serial_peripheral();
                                 self.init_link_cable_network();
                             }
-                            ui.close_menu();
+                            self.persist_serial_settings();
                         }
 
                         if self.serial_peripheral == SerialPeripheral::LinkCable {
@@ -1308,17 +1364,27 @@ impl eframe::App for VibeEmuApp {
 
                             ui.horizontal(|ui| {
                                 ui.label("Host:");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.link_host)
-                                        .desired_width(100.0),
-                                );
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut self.link_host)
+                                            .desired_width(100.0),
+                                    )
+                                    .changed()
+                                {
+                                    self.persist_serial_settings();
+                                }
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Port:");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.link_port)
-                                        .desired_width(60.0),
-                                );
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut self.link_port)
+                                            .desired_width(60.0),
+                                    )
+                                    .changed()
+                                {
+                                    self.persist_serial_settings();
+                                }
                             });
 
                             ui.horizontal(|ui| {
@@ -1364,27 +1430,42 @@ impl eframe::App for VibeEmuApp {
                             ui.label("Mobile Adapter Settings:");
                             ui.horizontal(|ui| {
                                 ui.label("DNS 1:");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.mobile_dns1)
-                                        .desired_width(120.0)
-                                        .hint_text("8.8.8.8"),
-                                );
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut self.mobile_dns1)
+                                            .desired_width(120.0)
+                                            .hint_text("8.8.8.8"),
+                                    )
+                                    .changed()
+                                {
+                                    self.persist_serial_settings();
+                                }
                             });
                             ui.horizontal(|ui| {
                                 ui.label("DNS 2:");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.mobile_dns2)
-                                        .desired_width(120.0)
-                                        .hint_text("8.8.4.4"),
-                                );
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut self.mobile_dns2)
+                                            .desired_width(120.0)
+                                            .hint_text("8.8.4.4"),
+                                    )
+                                    .changed()
+                                {
+                                    self.persist_serial_settings();
+                                }
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Relay:");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.mobile_relay)
-                                        .desired_width(180.0)
-                                        .hint_text("relay.example.com:port"),
-                                );
+                                if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut self.mobile_relay)
+                                            .desired_width(180.0)
+                                            .hint_text("relay.example.com:port"),
+                                    )
+                                    .changed()
+                                {
+                                    self.persist_serial_settings();
+                                }
                             });
                         }
                     });
@@ -4827,6 +4908,9 @@ fn main() {
 
     let rom_path_clone = rom_path.clone();
 
+    let ui_config_path = ui_config::default_ui_config_path();
+    let ui_config = ui_config::load_from_file(&ui_config_path);
+
     if let Err(e) = eframe::run_native(
         "vibeEmu",
         native_options,
@@ -4841,6 +4925,8 @@ fn main() {
                 keybinds,
                 keybinds_path,
                 emulation_mode,
+                ui_config_path.clone(),
+                ui_config.clone(),
                 external_clock_pending,
                 pending_timestamp,
                 local_timestamp,
