@@ -314,6 +314,12 @@ enum OptionsTab {
     Emulation,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EmulationSubmenu {
+    Mode,
+    SerialPeripheral,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum VramTab {
     #[default]
@@ -738,6 +744,10 @@ struct VibeEmuApp {
     link_host: String,
     link_port: String,
 
+    // Menu popup state
+    open_emulation_submenu: Option<EmulationSubmenu>,
+    emulation_submenu_anchor: egui::Pos2,
+
     // Status bar state
     last_fps_update: std::time::Instant,
     frame_count_since_update: u64,
@@ -843,6 +853,8 @@ impl VibeEmuApp {
             link_slave_ready: slave_ready,
             link_host: "127.0.0.1".to_string(),
             link_port: "5000".to_string(),
+            open_emulation_submenu: None,
+            emulation_submenu_anchor: egui::Pos2::ZERO,
             last_fps_update: std::time::Instant::now(),
             frame_count_since_update: 0,
             current_fps: 0.0,
@@ -896,6 +908,211 @@ impl VibeEmuApp {
                 self.ui_config_path.display()
             );
         }
+    }
+
+    fn apply_window_scale(&self, ctx: &egui::Context) {
+        let scale = (self.selected_window_scale + 1) as f32;
+        let new_size = egui::vec2(
+            GB_WIDTH * scale,
+            GB_HEIGHT * scale + MENU_BAR_HEIGHT + STATUS_BAR_HEIGHT,
+        );
+        ctx.send_viewport_cmd_to(
+            egui::ViewportId::ROOT,
+            egui::ViewportCommand::InnerSize(new_size),
+        );
+    }
+
+    fn draw_emulation_mode_submenu(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut close_requested = false;
+
+        if ui
+            .radio_value(
+                &mut self.emulation_mode,
+                EmulationMode::Auto,
+                "Auto (detect from ROM)",
+            )
+            .clicked()
+        {
+            close_requested = true;
+        }
+        if ui
+            .radio_value(
+                &mut self.emulation_mode,
+                EmulationMode::ForceDmg,
+                "Force DMG",
+            )
+            .clicked()
+        {
+            close_requested = true;
+        }
+        if ui
+            .radio_value(
+                &mut self.emulation_mode,
+                EmulationMode::ForceCgb,
+                "Force CGB",
+            )
+            .clicked()
+        {
+            close_requested = true;
+        }
+
+        close_requested
+    }
+
+    fn draw_serial_peripheral_submenu(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut close_requested = false;
+        let prev_peripheral = self.serial_peripheral;
+
+        if ui
+            .radio_value(&mut self.serial_peripheral, SerialPeripheral::None, "None")
+            .clicked()
+        {
+            if prev_peripheral != SerialPeripheral::None {
+                self.disconnect_serial_peripheral();
+            }
+            self.persist_serial_settings();
+            close_requested = true;
+        }
+        if ui
+            .radio_value(
+                &mut self.serial_peripheral,
+                SerialPeripheral::MobileAdapter,
+                "Mobile Adapter",
+            )
+            .clicked()
+        {
+            if prev_peripheral != SerialPeripheral::MobileAdapter {
+                self.disconnect_serial_peripheral();
+                self.connect_mobile_adapter();
+            }
+            self.persist_serial_settings();
+            close_requested = true;
+        }
+        if ui
+            .radio_value(
+                &mut self.serial_peripheral,
+                SerialPeripheral::LinkCable,
+                "Link Cable (Network)",
+            )
+            .clicked()
+        {
+            if prev_peripheral != SerialPeripheral::LinkCable {
+                self.disconnect_serial_peripheral();
+                self.init_link_cable_network();
+            }
+            self.persist_serial_settings();
+        }
+
+        if self.serial_peripheral == SerialPeripheral::LinkCable {
+            ui.separator();
+            let state_text = match self.link_cable_state {
+                LinkCableState::Disconnected => "Disconnected",
+                LinkCableState::Listening => "Listening...",
+                LinkCableState::Connecting => "Connecting...",
+                LinkCableState::Connected => "✓ Connected",
+            };
+            ui.label(format!("Status: {}", state_text));
+
+            ui.horizontal(|ui| {
+                ui.label("Host:");
+                if ui
+                    .add(egui::TextEdit::singleline(&mut self.link_host).desired_width(100.0))
+                    .changed()
+                {
+                    self.persist_serial_settings();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Port:");
+                if ui
+                    .add(egui::TextEdit::singleline(&mut self.link_port).desired_width(60.0))
+                    .changed()
+                {
+                    self.persist_serial_settings();
+                }
+            });
+
+            ui.horizontal(|ui| {
+                let can_act = matches!(self.link_cable_state, LinkCableState::Disconnected);
+                if ui
+                    .add_enabled(can_act, egui::Button::new("Listen"))
+                    .clicked()
+                    && let Ok(port) = self.link_port.parse::<u16>()
+                    && let Some(ref tx) = self.link_cmd_tx
+                {
+                    let _ = tx.send(LinkCommand::Listen { port });
+                    self.link_cable_state = LinkCableState::Listening;
+                }
+                if ui
+                    .add_enabled(can_act, egui::Button::new("Connect"))
+                    .clicked()
+                    && let Ok(port) = self.link_port.parse::<u16>()
+                    && let Some(ref tx) = self.link_cmd_tx
+                {
+                    let _ = tx.send(LinkCommand::Connect {
+                        host: self.link_host.clone(),
+                        port,
+                    });
+                    self.link_cable_state = LinkCableState::Connecting;
+                }
+            });
+
+            let can_disconnect = !matches!(self.link_cable_state, LinkCableState::Disconnected);
+            if ui
+                .add_enabled(can_disconnect, egui::Button::new("Disconnect"))
+                .clicked()
+                && let Some(ref tx) = self.link_cmd_tx
+            {
+                let _ = tx.send(LinkCommand::Disconnect);
+                self.link_cable_state = LinkCableState::Disconnected;
+            }
+        }
+
+        if self.serial_peripheral == SerialPeripheral::MobileAdapter {
+            ui.separator();
+            ui.label("Mobile Adapter Settings:");
+            ui.horizontal(|ui| {
+                ui.label("DNS 1:");
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.mobile_dns1)
+                            .desired_width(120.0)
+                            .hint_text("8.8.8.8"),
+                    )
+                    .changed()
+                {
+                    self.persist_serial_settings();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("DNS 2:");
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.mobile_dns2)
+                            .desired_width(120.0)
+                            .hint_text("8.8.4.4"),
+                    )
+                    .changed()
+                {
+                    self.persist_serial_settings();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Relay:");
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.mobile_relay)
+                            .desired_width(180.0)
+                            .hint_text("relay.example.com:port"),
+                    )
+                    .changed()
+                {
+                    self.persist_serial_settings();
+                }
+            });
+        }
+
+        close_requested
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
@@ -1222,6 +1439,8 @@ impl eframe::App for VibeEmuApp {
         self.poll_frames();
         self.update_texture(ctx);
 
+        let mut emulation_menu_open = false;
+
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -1242,6 +1461,7 @@ impl eframe::App for VibeEmuApp {
                 });
 
                 ui.menu_button("Emulation", |ui| {
+                    emulation_menu_open = true;
                     let has_rom_loaded = self.current_rom_path.is_some();
                     if ui
                         .add_enabled(
@@ -1262,7 +1482,10 @@ impl eframe::App for VibeEmuApp {
                         }
                         ui.close();
                     }
-                    if ui.button("Reset").clicked() {
+                    if ui
+                        .add_enabled(has_rom_loaded, egui::Button::new("Reset"))
+                        .clicked()
+                    {
                         if let Ok(mut gb) = self.gb.lock() {
                             gb.reset();
                             self._audio_stream = audio::start_stream(&mut gb.mmu.apu, true);
@@ -1270,202 +1493,66 @@ impl eframe::App for VibeEmuApp {
                         ui.close();
                     }
                     ui.separator();
-                    ui.menu_button("Mode", |ui| {
-                        if ui
-                            .radio_value(
-                                &mut self.emulation_mode,
-                                EmulationMode::Auto,
-                                "Auto (detect from ROM)",
-                            )
-                            .clicked()
-                        {
-                            ui.close();
-                        }
-                        if ui
-                            .radio_value(
-                                &mut self.emulation_mode,
-                                EmulationMode::ForceDmg,
-                                "Force DMG",
-                            )
-                            .clicked()
-                        {
-                            ui.close();
-                        }
-                        if ui
-                            .radio_value(
-                                &mut self.emulation_mode,
-                                EmulationMode::ForceCgb,
-                                "Force CGB",
-                            )
-                            .clicked()
-                        {
-                            ui.close();
-                        }
-                    });
+
+                    let mode_button = ui.button("Mode  ▶");
                     ui.separator();
-                    ui.menu_button("Serial Peripheral", |ui| {
-                        let prev_peripheral = self.serial_peripheral;
-                        if ui
-                            .radio_value(
-                                &mut self.serial_peripheral,
-                                SerialPeripheral::None,
-                                "None",
-                            )
-                            .clicked()
-                        {
-                            if prev_peripheral != SerialPeripheral::None {
-                                self.disconnect_serial_peripheral();
+                    let serial_button = ui.button("Serial Peripheral  ▶");
+
+                    if mode_button.hovered() {
+                        self.open_emulation_submenu = Some(EmulationSubmenu::Mode);
+                        self.emulation_submenu_anchor = mode_button.rect.right_top();
+                    }
+                    if serial_button.hovered() {
+                        self.open_emulation_submenu = Some(EmulationSubmenu::SerialPeripheral);
+                        self.emulation_submenu_anchor = serial_button.rect.right_top();
+                    }
+
+                    if let Some(open) = self.open_emulation_submenu {
+                        let popup_id = match open {
+                            EmulationSubmenu::Mode => ui.make_persistent_id("emu_mode_popup"),
+                            EmulationSubmenu::SerialPeripheral => {
+                                ui.make_persistent_id("emu_serial_popup")
                             }
-                            self.persist_serial_settings();
-                            ui.close();
-                        }
-                        if ui
-                            .radio_value(
-                                &mut self.serial_peripheral,
-                                SerialPeripheral::MobileAdapter,
-                                "Mobile Adapter",
-                            )
-                            .clicked()
-                        {
-                            if prev_peripheral != SerialPeripheral::MobileAdapter {
-                                self.disconnect_serial_peripheral();
-                                self.connect_mobile_adapter();
+                        };
+
+                        let anchor = self.emulation_submenu_anchor + egui::vec2(1.0, 0.0);
+                        let visuals = ui.style().visuals.clone();
+                        let frame = egui::Frame::default()
+                            .fill(visuals.widgets.noninteractive.bg_fill)
+                            .stroke(visuals.widgets.noninteractive.bg_stroke)
+                            .corner_radius(visuals.widgets.noninteractive.corner_radius)
+                            .inner_margin(egui::Margin::same(6));
+
+                        let popup_area = egui::Area::new(popup_id)
+                            .order(egui::Order::Foreground)
+                            .fixed_pos(anchor)
+                            .show(ctx, |ui| {
+                                frame.show(ui, |ui| match open {
+                                    EmulationSubmenu::Mode => {
+                                        if self.draw_emulation_mode_submenu(ui) {
+                                            self.open_emulation_submenu = None;
+                                        }
+                                    }
+                                    EmulationSubmenu::SerialPeripheral => {
+                                        if self.draw_serial_peripheral_submenu(ui) {
+                                            self.open_emulation_submenu = None;
+                                        }
+                                    }
+                                });
+                            });
+
+                        let submenu_hovered = popup_area.response.hovered();
+                        let keep_open = match open {
+                            EmulationSubmenu::Mode => mode_button.hovered() || submenu_hovered,
+                            EmulationSubmenu::SerialPeripheral => {
+                                serial_button.hovered() || submenu_hovered
                             }
-                            self.persist_serial_settings();
-                            ui.close();
+                        };
+
+                        if !keep_open {
+                            self.open_emulation_submenu = None;
                         }
-                        if ui
-                            .radio_value(
-                                &mut self.serial_peripheral,
-                                SerialPeripheral::LinkCable,
-                                "Link Cable (Network)",
-                            )
-                            .clicked()
-                        {
-                            if prev_peripheral != SerialPeripheral::LinkCable {
-                                self.disconnect_serial_peripheral();
-                                self.init_link_cable_network();
-                            }
-                            self.persist_serial_settings();
-                        }
-
-                        if self.serial_peripheral == SerialPeripheral::LinkCable {
-                            ui.separator();
-                            let state_text = match self.link_cable_state {
-                                LinkCableState::Disconnected => "Disconnected",
-                                LinkCableState::Listening => "Listening...",
-                                LinkCableState::Connecting => "Connecting...",
-                                LinkCableState::Connected => "✓ Connected",
-                            };
-                            ui.label(format!("Status: {}", state_text));
-
-                            ui.horizontal(|ui| {
-                                ui.label("Host:");
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut self.link_host)
-                                            .desired_width(100.0),
-                                    )
-                                    .changed()
-                                {
-                                    self.persist_serial_settings();
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Port:");
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut self.link_port)
-                                            .desired_width(60.0),
-                                    )
-                                    .changed()
-                                {
-                                    self.persist_serial_settings();
-                                }
-                            });
-
-                            ui.horizontal(|ui| {
-                                let can_act =
-                                    matches!(self.link_cable_state, LinkCableState::Disconnected);
-                                if ui
-                                    .add_enabled(can_act, egui::Button::new("Listen"))
-                                    .clicked()
-                                    && let Ok(port) = self.link_port.parse::<u16>()
-                                    && let Some(ref tx) = self.link_cmd_tx
-                                {
-                                    let _ = tx.send(LinkCommand::Listen { port });
-                                    self.link_cable_state = LinkCableState::Listening;
-                                }
-                                if ui
-                                    .add_enabled(can_act, egui::Button::new("Connect"))
-                                    .clicked()
-                                    && let Ok(port) = self.link_port.parse::<u16>()
-                                    && let Some(ref tx) = self.link_cmd_tx
-                                {
-                                    let _ = tx.send(LinkCommand::Connect {
-                                        host: self.link_host.clone(),
-                                        port,
-                                    });
-                                    self.link_cable_state = LinkCableState::Connecting;
-                                }
-                            });
-
-                            let can_disconnect =
-                                !matches!(self.link_cable_state, LinkCableState::Disconnected);
-                            if ui
-                                .add_enabled(can_disconnect, egui::Button::new("Disconnect"))
-                                .clicked()
-                                && let Some(ref tx) = self.link_cmd_tx
-                            {
-                                let _ = tx.send(LinkCommand::Disconnect);
-                                self.link_cable_state = LinkCableState::Disconnected;
-                            }
-                        }
-
-                        if self.serial_peripheral == SerialPeripheral::MobileAdapter {
-                            ui.separator();
-                            ui.label("Mobile Adapter Settings:");
-                            ui.horizontal(|ui| {
-                                ui.label("DNS 1:");
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut self.mobile_dns1)
-                                            .desired_width(120.0)
-                                            .hint_text("8.8.8.8"),
-                                    )
-                                    .changed()
-                                {
-                                    self.persist_serial_settings();
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("DNS 2:");
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut self.mobile_dns2)
-                                            .desired_width(120.0)
-                                            .hint_text("8.8.4.4"),
-                                    )
-                                    .changed()
-                                {
-                                    self.persist_serial_settings();
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("Relay:");
-                                if ui
-                                    .add(
-                                        egui::TextEdit::singleline(&mut self.mobile_relay)
-                                            .desired_width(180.0)
-                                            .hint_text("relay.example.com:port"),
-                                    )
-                                    .changed()
-                                {
-                                    self.persist_serial_settings();
-                                }
-                            });
-                        }
-                    });
+                    }
                 });
 
                 ui.menu_button("Debug", |ui| {
@@ -1487,6 +1574,21 @@ impl eframe::App for VibeEmuApp {
                 });
 
                 ui.menu_button("Options", |ui| {
+                    ui.menu_button("Window Scale", |ui| {
+                        let prev_scale = self.selected_window_scale;
+                        for idx in 0..6 {
+                            let label = format!("{}x", idx + 1);
+                            if ui
+                                .radio_value(&mut self.selected_window_scale, idx, label)
+                                .clicked()
+                            {
+                                ui.close();
+                            }
+                        }
+                        if self.selected_window_scale != prev_scale {
+                            self.apply_window_scale(ctx);
+                        }
+                    });
                     if ui.button("Settings...").clicked() {
                         self.show_options = !self.show_options;
                         ui.close();
@@ -1494,6 +1596,10 @@ impl eframe::App for VibeEmuApp {
                 });
             });
         });
+
+        if !emulation_menu_open {
+            self.open_emulation_submenu = None;
+        }
 
         // Status bar at the bottom
         egui::TopBottomPanel::bottom("status_bar")
@@ -1760,41 +1866,6 @@ impl VibeEmuApp {
                         && let Some(path) = FileDialog::new().pick_file()
                     {
                         self.cgb_bootrom_path = path.to_string_lossy().to_string();
-                    }
-                });
-
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label("Window Scale:");
-                    let prev_scale = self.selected_window_scale;
-                    egui::ComboBox::from_id_salt("window_scale")
-                        .selected_text(match self.selected_window_scale {
-                            0 => "1x",
-                            1 => "2x",
-                            2 => "3x",
-                            3 => "4x",
-                            4 => "5x",
-                            5 => "6x",
-                            _ => "2x",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.selected_window_scale, 0, "1x");
-                            ui.selectable_value(&mut self.selected_window_scale, 1, "2x");
-                            ui.selectable_value(&mut self.selected_window_scale, 2, "3x");
-                            ui.selectable_value(&mut self.selected_window_scale, 3, "4x");
-                            ui.selectable_value(&mut self.selected_window_scale, 4, "5x");
-                            ui.selectable_value(&mut self.selected_window_scale, 5, "6x");
-                        });
-                    if self.selected_window_scale != prev_scale {
-                        let scale = (self.selected_window_scale + 1) as f32;
-                        let new_size = egui::vec2(
-                            GB_WIDTH * scale,
-                            GB_HEIGHT * scale + MENU_BAR_HEIGHT + STATUS_BAR_HEIGHT,
-                        );
-                        ctx.send_viewport_cmd_to(
-                            egui::ViewportId::ROOT,
-                            egui::ViewportCommand::InnerSize(new_size),
-                        );
                     }
                 });
             }
