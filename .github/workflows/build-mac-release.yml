@@ -1,0 +1,47 @@
+name: Build macOS Release
+
+on:
+  workflow_dispatch
+
+jobs:
+  build-mac:
+    name: Build macOS Release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Cache cargo registry and git
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - name: Cache target (release)
+        uses: actions/cache@v3
+        with:
+          path: target/release
+          key: macos-target-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-target-release-
+
+      - name: Build release
+        run: cargo build --release -p vibe-emu-ui
+
+      - name: Create app bundle
+        run: |
+          mkdir -p vibeEmu.app/Contents/{MacOS,Resources}
+          cp target/release/vibe-emu-ui vibeEmu.app/Contents/MacOS/vibeEmu
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: vibeEmu-macos
+          path: vibeEmu.app/
+          retention-days: 30
