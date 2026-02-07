@@ -9,7 +9,7 @@ mod ui_config;
 
 use clap::{Parser, ValueEnum};
 use cpal::traits::StreamTrait;
-use eframe::egui;
+use eframe::{egui, egui_wgpu, wgpu};
 use log::{debug, error, info, warn};
 use rfd::FileDialog;
 use std::collections::HashMap;
@@ -1606,7 +1606,7 @@ impl eframe::App for VibeEmuApp {
         }
     }
 
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if let Ok(mut gb) = self.gb.lock() {
             gb.mmu.save_cart_ram();
         }
@@ -4900,11 +4900,127 @@ fn main() {
         GB_WIDTH * scale,
         GB_HEIGHT * scale + MENU_BAR_HEIGHT + STATUS_BAR_HEIGHT,
     ];
+    let mut wgpu_setup = egui_wgpu::WgpuSetupCreateNew::default();
+
+    // Lavapipe (software Vulkan on Linux VMs) doesn't fully implement
+    // VK_EXT_debug_utils, which wgpu requests when the DEBUG flag is set.
+    wgpu_setup
+        .instance_descriptor
+        .flags
+        .remove(wgpu::InstanceFlags::DEBUG);
+
+    // Mesa < 22.0 lavapipe returns empty surface formats on Wayland, causing a
+    // black screen. Prefer the GL (llvmpipe) adapter when the only Vulkan
+    // adapter is a software/CPU device, since llvmpipe handles surfaces
+    // correctly via EGL even on old Mesa. Real GPUs still get Vulkan.
+    wgpu_setup.native_adapter_selector = Some(Arc::new(|adapters, surface| {
+        let mut ranked: Vec<_> = adapters.iter().collect();
+
+        ranked.sort_by_key(|a| {
+            let info = a.get_info();
+            let is_software = info.device_type == wgpu::DeviceType::Cpu;
+
+            let has_surface_formats = surface
+                .map(|s| !s.get_capabilities(a).formats.is_empty())
+                .unwrap_or(true);
+
+            // (primary key, secondary key) — lower is better
+            let backend_rank = match (info.backend, is_software) {
+                (wgpu::Backend::Vulkan, false) => 0,
+                (wgpu::Backend::Metal, _) => 0,
+                (wgpu::Backend::Dx12, false) => 0,
+                (wgpu::Backend::Gl, _) => 1,
+                (wgpu::Backend::Vulkan, true) => 2,
+                (wgpu::Backend::Dx12, true) => 2,
+                _ => 3,
+            };
+
+            // Adapters without surface formats are unusable for presentation
+            let format_penalty: u8 = if has_surface_formats { 0 } else { 10 };
+            backend_rank + format_penalty
+        });
+
+        for a in &ranked {
+            let info = a.get_info();
+            log::debug!(
+                "wgpu adapter candidate: {:?} backend={:?} type={:?}",
+                info.name,
+                info.backend,
+                info.device_type
+            );
+        }
+
+        let selected = ranked
+            .first()
+            .map(|a| (*a).clone())
+            .ok_or_else(|| "No suitable wgpu adapter found".to_owned());
+
+        if let Ok(ref adapter) = selected {
+            let info = adapter.get_info();
+            log::info!(
+                "Selected wgpu adapter: {:?} ({:?})",
+                info.name,
+                info.backend
+            );
+        }
+
+        selected
+    }));
+
+    // Probe whether wgpu would land on a GL-backend software/virtual GPU.
+    // In that scenario (e.g. VMware SVGA3D, llvmpipe) the wgpu GL present
+    // path (offscreen renderbuffer + glBlitFramebuffer) often produces a
+    // black screen on old Mesa. The glow renderer drives OpenGL directly
+    // through glutin and works reliably in these environments.
+    let renderer = {
+        let probe_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu_setup.instance_descriptor.backends,
+            ..Default::default()
+        });
+        let adapters = probe_instance.enumerate_adapters(wgpu_setup.instance_descriptor.backends);
+
+        let best_is_gl_software = adapters
+            .iter()
+            .min_by_key(|a| {
+                let info = a.get_info();
+                match (info.backend, info.device_type) {
+                    (
+                        wgpu::Backend::Vulkan,
+                        wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu,
+                    ) => 0,
+                    (wgpu::Backend::Metal, _) | (wgpu::Backend::Dx12, _) => 0,
+                    _ => 1,
+                }
+            })
+            .map(|a| {
+                let info = a.get_info();
+                let is_gl = info.backend == wgpu::Backend::Gl;
+                let is_software = matches!(
+                    info.device_type,
+                    wgpu::DeviceType::Cpu | wgpu::DeviceType::Other
+                );
+                is_gl || is_software
+            })
+            .unwrap_or(true);
+
+        if best_is_gl_software {
+            log::info!("Best wgpu adapter is GL/software — using glow renderer for reliability");
+            eframe::Renderer::Glow
+        } else {
+            eframe::Renderer::Wgpu
+        }
+    };
+
     let native_options = eframe::NativeOptions {
+        renderer,
         viewport: egui::ViewportBuilder::default()
             .with_title("vibeEmu")
             .with_inner_size(initial_size)
             .with_icon(load_window_icon().unwrap_or_default()),
+        wgpu_options: egui_wgpu::WgpuConfiguration {
+            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(wgpu_setup),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
