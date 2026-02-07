@@ -8,7 +8,7 @@ jobs:
     name: Build macOS Release
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -16,7 +16,7 @@ jobs:
           targets: x86_64-apple-darwin
 
       - name: Cache cargo registry and git
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -25,7 +25,7 @@ jobs:
           restore-keys: macos-cargo-
 
       - name: Cache target (release)
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: target/release
           key: macos-target-release-${{ hashFiles('**/Cargo.lock') }}
@@ -40,7 +40,7 @@ jobs:
           cp target/release/vibe-emu-ui vibeEmu.app/Contents/MacOS/vibeEmu
           
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: vibeEmu-macos
           path: vibeEmu.app/
