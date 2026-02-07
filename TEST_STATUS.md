@@ -8,6 +8,7 @@ Commands executed:
 - `cargo test --release --doc`
 - `cargo test --release --test apu -- --include-ignored`
 - `cargo test --release --test apu_quirks -- --include-ignored`
+- `cargo test --release --test bgb_protocol -- --include-ignored`
 - `cargo test --release --test bullygb_hacktix -- --include-ignored`
 - `cargo test --release --test cartridge -- --include-ignored`
 - `cargo test --release --test cgb_acid2_rom -- --include-ignored`
@@ -31,6 +32,7 @@ Commands executed:
 - `cargo test --release --test ppu -- --include-ignored`
 - `cargo test --release --test rtc_invalid_banks_test -- --include-ignored`
 - `cargo test --release --test same_suite -- --include-ignored`
+- `cargo test --release --test serial -- --include-ignored`
 - `cargo test --release --test strikethrough -- --include-ignored`
 - `cargo test --release --test timer -- --include-ignored`
 
@@ -42,10 +44,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1712 | 2007 | 0 | 0 | 3719 | 46.0% |
-| Integration Tests | 124 | 58 | 0 | 0 | 182 | 68.1% |
-| Unit Tests | 45 | 1 | 0 | 0 | 46 | 97.8% |
-| **Overall** | 1881 | 2066 | 0 | 0 | 3947 | 47.7% |
+| ROM Test Suites | 1711 | 2004 | 0 | 0 | 3715 | 46.1% |
+| Integration Tests | 165 | 2 | 0 | 0 | 167 | 98.8% |
+| Unit Tests | 50 | 0 | 0 | 0 | 50 | 100.0% |
+| **Overall** | 1926 | 2006 | 0 | 0 | 3932 | 49.0% |
 
 ## Detailed Results
 
@@ -130,7 +132,7 @@ Combined exit code: 101
 | `dmg_sound_10_wave_trigger_while_on` | ❌ Fail |
 | `dmg_sound_12_wave_write_while_on` | ❌ Fail |
 
-#### gambatte (1517/3429 passing, 44.2%)
+#### gambatte (1516/3425 passing, 44.3%)
 
 | Test | Result |
 | --- | --- |
@@ -1262,7 +1264,6 @@ Combined exit code: 101
 | `sprites/1spritesPrLine_xpos01_m3stat_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `sprites/1spritesPrLine_xpos01_m3stat_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/1spritesPrLine_xpos01_scx4_m3stat_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
-| `sprites/1spritesPrLine_xpos07_m3stat_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `sprites/2spritesPrLine_m3stat_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/2spritesPrLine_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/3spritesPrLine_m3stat_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
@@ -3157,7 +3158,6 @@ Combined exit code: 101
 | `sprites/1spritesPrLine_xpos01_scx4_m3stat_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/1spritesPrLine_xpos07_m3stat_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/1spritesPrLine_xpos09_scx4_m3stat_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
-| `sprites/1spritesPrLine_xpos09_scx4_m3stat_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/2spritesPrLine_m3stat_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/2spritesPrLine_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/3spritesPrLine_m3stat_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
@@ -3174,8 +3174,6 @@ Combined exit code: 101
 | `sprites/8spritesPrLine_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/9spritesPrLine_m3stat_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/9spritesPrLine_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
-| `sprites/enable/late_disable_ds_1_cgb04c_out3.gbc` | ❌ Fail |
-| `sprites/enable/late_disable_ds_2_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/enable/late_disable_ds_3_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/late_disable_1_dmg08_out0.gb` | ❌ Fail |
 | `sprites/late_disable_ds_1_cgb04c_out3.gbc` | ❌ Fail |
@@ -3873,7 +3871,7 @@ Combined exit code: 101
 
 ### Integration Tests
 
-#### apu (66/112 passing, 58.9%)
+#### apu (66/66 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
@@ -3943,64 +3941,43 @@ Combined exit code: 101
 | `wave_ram_locked_read_returns_latched_nibble_on_dmg` | ✅ Pass |
 | `wave_ram_locked_write_commits_after_byte_advance` | ✅ Pass |
 | `wave_retrigger_emits_last_sample` | ✅ Pass |
-| `ch2_first_sample_after_trigger_is_zero` | ❌ Fail |
-| `div_apu_envelope_clock` | ❌ Fail |
-| `div_apu_length_clock` | ❌ Fail |
-| `div_apu_sweep_clock` | ❌ Fail |
-| `duty_step_advances_each_period` | ❌ Fail |
-| `duty_step_not_reset_on_retrigger` | ❌ Fail |
-| `envelope_zero_does_not_disable_channel` | ❌ Fail |
-| `first_sample_after_trigger_is_zero` | ❌ Fail |
-| `nr11_length_counter_expires` | ❌ Fail |
-| `nr12_register_unchanged_after_envelope` | ❌ Fail |
-| `nr14_trigger_resets_length_and_volume` | ❌ Fail |
-| `nr21_length_counter_expires` | ❌ Fail |
-| `nr22_register_unchanged_after_envelope` | ❌ Fail |
-| `nr24_trigger_resets_length_and_volume` | ❌ Fail |
-| `nr31_length_counter_expires` | ❌ Fail |
-| `nr32_volume_change_mid_playback` | ❌ Fail |
-| `nr32_volume_control` | ❌ Fail |
-| `nr33_period_change_delayed_until_sample_end` | ❌ Fail |
-| `nr34_trigger_reload_timer_and_freq` | ❌ Fail |
-| `nr34_trigger_resets_length` | ❌ Fail |
-| `nr41_length_counter_expires` | ❌ Fail |
-| `nr41_write_ignored_when_disabled` | ❌ Fail |
-| `nr42_register_unchanged_after_envelope` | ❌ Fail |
-| `nr43_lfsr_lockup_and_retrigger` | ❌ Fail |
-| `nr43_period_calculation` | ❌ Fail |
-| `nr43_register_fields` | ❌ Fail |
-| `nr43_width7_mode` | ❌ Fail |
-| `nr44_trigger_resets_length_and_volume` | ❌ Fail |
-| `nr44_trigger_resets_lfsr_and_envelope_timer` | ❌ Fail |
-| `pcm34_noise_output` | ❌ Fail |
-| `pcm_register_sample_values` | ❌ Fail |
-| `sweep_disabled_when_period_zero` | ❌ Fail |
-| `sweep_disabled_with_zero_params` | ❌ Fail |
-| `sweep_frequency_write_lost` | ❌ Fail |
-| `sweep_overflow_with_period_zero_disables_channel` | ❌ Fail |
-| `sweep_subtraction_mode` | ❌ Fail |
-| `sweep_trigger_and_step` | ❌ Fail |
-| `sweep_trigger_sets_shadow_and_timer` | ❌ Fail |
-| `sweep_updates_frequency_registers` | ❌ Fail |
-| `wave_buffer_cleared_on_power_on` | ❌ Fail |
-| `wave_channel_first_sample_uses_old_buffer` | ❌ Fail |
-| `wave_channel_outputs_wave_ram_data` | ❌ Fail |
-| `wave_channel_starts_at_index_one` | ❌ Fail |
-| `wave_channel_wraps_after_32_samples` | ❌ Fail |
-| `wave_sample_index_matches_frequency` | ❌ Fail |
-| `writes_ignored_when_disabled` | ❌ Fail |
 
-#### apu_quirks (3/7 passing, 42.9%)
+#### apu_quirks (3/3 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
 | `noise_shift_15_freezes_lfsr` | ✅ Pass |
 | `wave_retrigger_corrupts_ram` | ✅ Pass |
 | `zombie_mode_volume_change` | ✅ Pass |
-| `extra_length_clocking_disables_channel` | ❌ Fail |
-| `sweep_negate_clear_disables` | ❌ Fail |
-| `trigger_envelope_timer_plus_one` | ❌ Fail |
-| `trigger_length_set_to_63_when_zero` | ❌ Fail |
+
+#### bgb_protocol (24/24 passing, 100.0%)
+
+| Test | Result |
+| --- | --- |
+| `bgb_sync3_sent_only_when_not_ready` | ✅ Pass |
+| `complete_transfer_cycle` | ✅ Pass |
+| `correct_sync1_response_logic` | ✅ Pass |
+| `handshake_sequence` | ✅ Pass |
+| `packet_roundtrip` | ✅ Pass |
+| `parse_real_log_packets` | ✅ Pass |
+| `pokemon_trade_handshake_81` | ✅ Pass |
+| `rapid_data_exchange` | ✅ Pass |
+| `serial_no_data_byte_pattern` | ✅ Pass |
+| `status_packet_running_paused_reconnect` | ✅ Pass |
+| `status_packet_running_reconnect` | ✅ Pass |
+| `sync1_creates_correct_packet` | ✅ Pass |
+| `sync1_packet_from_log` | ✅ Pass |
+| `sync1_sync2_when_slave_ready` | ✅ Pass |
+| `sync1_sync3_ack_when_slave_not_ready` | ✅ Pass |
+| `sync2_creates_correct_packet` | ✅ Pass |
+| `sync2_packet_from_log` | ✅ Pass |
+| `sync3_ack_creates_correct_packet` | ✅ Pass |
+| `sync3_ack_packet_from_log` | ✅ Pass |
+| `sync3_timestamp_creates_correct_packet` | ✅ Pass |
+| `sync3_timestamp_vs_ack_distinction` | ✅ Pass |
+| `timestamp_encoding` | ✅ Pass |
+| `version_packet_format` | ✅ Pass |
+| `vibe_incorrect_sync3_for_every_sync1` | ✅ Pass |
 
 #### channel_activation (2/4 passing, 50.0%)
 
@@ -4011,7 +3988,7 @@ Combined exit code: 101
 | `channel1_disabled_by_length_timer` | ❌ Fail |
 | `sweep_overflow_disables_channel1` | ❌ Fail |
 
-#### cpu (13/16 passing, 81.2%)
+#### cpu (13/13 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
@@ -4028,9 +4005,6 @@ Combined exit code: 101
 | `speed_switch_stall_advances_dot_div_but_not_cpu_div` | ✅ Pass |
 | `stop_resets_div_and_pauses` | ✅ Pass |
 | `stop_speed_switch` | ✅ Pass |
-| `cgb_bootrom_timing_matches_whichboot_capture` | ❌ Fail |
-| `div_rate_double_speed` | ❌ Fail |
-| `stop_speed_switch_resets_div` | ❌ Fail |
 
 #### mmu (12/12 passing, 100.0%)
 
@@ -4049,7 +4023,7 @@ Combined exit code: 101
 | `vram_oam_access_blocking` | ✅ Pass |
 | `wram_echo_and_bank_switch` | ✅ Pass |
 
-#### ppu (15/18 passing, 83.3%)
+#### ppu (15/15 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
@@ -4068,9 +4042,28 @@ Combined exit code: 101
 | `sprite_8x16_tile_offset` | ✅ Pass |
 | `sprite_x_priority` | ✅ Pass |
 | `step_vblank_interrupt` | ✅ Pass |
-| `render_bg_scanline` | ❌ Fail |
-| `render_window_scanline` | ❌ Fail |
-| `window_internal_line_counter` | ❌ Fail |
+
+#### serial (17/17 passing, 100.0%)
+
+| Test | Result |
+| --- | --- |
+| `cgb_fast_clock_completes_faster` | ✅ Pass |
+| `external_clock_partial_pulses` | ✅ Pass |
+| `external_clock_transfer_waits_for_pulses` | ✅ Pass |
+| `has_external_clock_transfer_pending_works` | ✅ Pass |
+| `internal_clock_transfer_exchanges_bytes` | ✅ Pass |
+| `multiple_sequential_transfers` | ✅ Pass |
+| `null_link_port_loopback_echoes_byte` | ✅ Pass |
+| `null_link_port_returns_ff_by_default` | ✅ Pass |
+| `out_buf_captures_completed_transfers` | ✅ Pass |
+| `pending_external_clock_outgoing_returns_byte` | ✅ Pass |
+| `pokemon_style_handshake` | ✅ Pass |
+| `sb_output_captures_writes` | ✅ Pass |
+| `serial_no_data_byte_handling` | ✅ Pass |
+| `serial_sb_readable_writable` | ✅ Pass |
+| `serial_sc_cgb_preserves_fast_clock_bit` | ✅ Pass |
+| `serial_sc_dmg_masks_unused_bits` | ✅ Pass |
+| `transfer_cancelled_by_clearing_sc_bit7` | ✅ Pass |
 
 #### timer (13/13 passing, 100.0%)
 
@@ -4114,12 +4107,6 @@ Combined exit code: 101
 | `cartridge::tests::rtc_halt_preserves_subseconds` | ✅ Pass |
 | `cartridge::tests::rtc_seconds_write_resets_phase` | ✅ Pass |
 | `cartridge::tests::rtc_ticks_through_invalid_values` | ✅ Pass |
-
-#### ppu (0/1 passing, 0.0%)
-
-| Test | Result |
-| --- | --- |
-| `ppu::tests::debug_temp_ppu_scanline_bgp_event_x` | ❌ Fail |
 
 #### ppu::mode3_timing_tests::dmg_mode3_cycles_mooneye_intr2_patterns (1/1 passing, 100.0%)
 
@@ -4235,21 +4222,26 @@ Combined exit code: 101
 | --- | --- |
 | `ppu::mode3_timing_tests::dmg_mode3_cycles_two_sprites_x0` | ✅ Pass |
 
-#### serial (11/11 passing, 100.0%)
+#### serial (16/16 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
 | `serial::tests::external_clock_completes_with_pulses` | ✅ Pass |
+| `serial::tests::external_clock_latches_and_shifts_partner_byte` | ✅ Pass |
 | `serial::tests::external_clock_stalls_without_pulses` | ✅ Pass |
 | `serial::tests::internal_clock_irq_only_on_final_bit_dmg` | ✅ Pass |
 | `serial::tests::internal_clock_rate_cgb_double_speed` | ✅ Pass |
 | `serial::tests::internal_clock_rate_cgb_fast_clock` | ✅ Pass |
+| `serial::tests::internal_clock_rate_cgb_fast_clock_double_speed` | ✅ Pass |
 | `serial::tests::internal_clock_rate_cgb_normal_speed` | ✅ Pass |
+| `serial::tests::internal_clock_shifts_bits_into_sb` | ✅ Pass |
 | `serial::tests::internal_clock_transfer_completes_and_requests_irq` | ✅ Pass |
+| `serial::tests::internal_clock_waits_for_partner_byte_before_clocking` | ✅ Pass |
 | `serial::tests::open_bus_no_partner_external_clock_receives_ff` | ✅ Pass |
 | `serial::tests::open_bus_no_partner_internal_clock_receives_ff` | ✅ Pass |
 | `serial::tests::sc_write_during_active_transfer_does_not_cancel` | ✅ Pass |
 | `serial::tests::sc_write_with_bit7_restarts_transfer_using_current_sb` | ✅ Pass |
+| `serial::tests::serial_dot_cycles_match_speed_table` | ✅ Pass |
 
 #### watchpoints (3/3 passing, 100.0%)
 

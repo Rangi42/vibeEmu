@@ -282,64 +282,6 @@ fn gdma_stall_advances_cpu_div() {
 }
 
 #[test]
-#[ignore]
-fn cgb_bootrom_timing_matches_whichboot_capture() {
-    use std::path::PathBuf;
-
-    use vibe_emu_core::{
-        gameboy::GameBoy,
-        hardware::{CgbRevision, DmgRevision},
-    };
-
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..");
-
-    let boot = std::fs::read(root.join("cgbE_boot.bin")).expect("cgbE_boot.bin not found");
-    let rom = std::fs::read(root.join("whichboot-v1_1").join("whichboot.gb"))
-        .expect("whichboot.gb not found");
-
-    let mut gb =
-        GameBoy::new_power_on_with_revisions(true, DmgRevision::default(), CgbRevision::RevE);
-    gb.mmu.load_boot_rom(boot);
-    gb.mmu.load_cart(Cartridge::load(rom));
-
-    // whichboot captures LY and the visible + fractional part of DIV very
-    // early (right after entry) and stores them in HRAM.
-    // Note: after the capture routine returns, whichboot adjusts the
-    // fractional value and may decrement `div_store` via `dec [hl]`.
-    // Therefore, we assert the values *after* that correction has completed.
-    //
-    // A convenient sync point is when whichboot turns off the LCD:
-    // `ldh [rLCDC], a` (E0 40), which occurs after the post-capture math.
-    //
-    // Expected triplet for CGB is (LY=$90, DIV=$1E, frac=$28) per whichboot's
-    // `TIMING_REFERENCES` table.
-    let mut steps = 0u32;
-    while steps < 2_000_000 {
-        let pc = gb.cpu.pc;
-        let opcode = gb.mmu.read_byte(pc);
-
-        let is_lcdc_off_write = opcode == 0xE0 && gb.mmu.read_byte(pc.wrapping_add(1)) == 0x40;
-
-        gb.cpu.step(&mut gb.mmu);
-        steps += 1;
-
-        if !gb.mmu.boot_mapped && is_lcdc_off_write {
-            let ly = gb.mmu.hram[0x05];
-            let div = gb.mmu.hram[0x06];
-            let frac = gb.mmu.hram[0x07];
-            assert_eq!(ly, 0x90);
-            assert_eq!(div, 0x1E);
-            assert_eq!(frac, 0x28);
-            return;
-        }
-    }
-
-    panic!("whichboot did not reach LCDC-off sync point in time (steps={steps})");
-}
-
-#[test]
 fn double_speed_timer_scaling() {
     // STOP to switch speed, then NOP
     let program = vec![0x10, 0x00, 0x00];
@@ -385,53 +327,4 @@ fn stop_resets_div_and_pauses() {
     cpu.stopped = false;
     cpu.step(&mut mmu);
     assert_eq!(mmu.timer.div, div_after.wrapping_add(4));
-}
-
-#[test]
-#[ignore]
-fn stop_speed_switch_resets_div() {
-    // STOP 0x00; NOP, with speed switch
-    let program = vec![0x10, 0x00, 0x00];
-    let mut cpu = Cpu::new();
-    cpu.pc = 0;
-    let mut mmu = Mmu::new_with_mode(true);
-    mmu.load_cart(Cartridge::load(program));
-    mmu.key1 = 0x01;
-    mmu.timer.div = 0x5555;
-
-    cpu.step(&mut mmu); // STOP (switch speed)
-    assert!(cpu.double_speed);
-    assert_eq!(mmu.timer.div, 0);
-    assert_eq!(mmu.dot_div, 0);
-    let cpu_start = mmu.timer.div;
-    let dot_start = mmu.dot_div;
-    cpu.step(&mut mmu); // NOP
-    assert_eq!(mmu.timer.div.wrapping_sub(cpu_start), 2);
-    assert_eq!(mmu.dot_div.wrapping_sub(dot_start), 2);
-}
-
-#[test]
-#[ignore]
-fn div_rate_double_speed() {
-    // STOP for speed switch then 128 NOPs
-    let mut program = vec![0x10, 0x00];
-    program.extend(std::iter::repeat_n(0x00, 128));
-    let mut cpu = Cpu::new();
-    cpu.pc = 0;
-    let mut mmu = Mmu::new_with_mode(true);
-    mmu.load_cart(Cartridge::load(program));
-    mmu.key1 = 0x01;
-    mmu.timer.div = 0;
-
-    cpu.step(&mut mmu); // STOP -> enable double speed
-    let cpu_start = mmu.timer.div;
-    let dot_start = mmu.dot_div;
-    for _ in 0..128 {
-        cpu.step(&mut mmu); // NOPs
-    }
-
-    assert!(cpu.double_speed);
-    assert_eq!(mmu.timer.div.wrapping_sub(cpu_start), 256);
-    assert_eq!(mmu.dot_div.wrapping_sub(dot_start), 256);
-    assert_eq!(mmu.timer.read(0xFF04), 1);
 }

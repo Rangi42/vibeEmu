@@ -2936,6 +2936,12 @@ impl Ppu {
     }
 }
 
+impl Default for Ppu {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod mode3_timing_tests {
     use super::*;
@@ -3285,86 +3291,5 @@ mod mode3_timing_tests {
             dmg_mode3_cycles_with_sprites_at_oam_x(&[0, 0, 0, 0, 0, 160, 160, 160, 160, 160]),
             MODE3_CYCLES + 68
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        cartridge::Cartridge,
-        gameboy::GameBoy,
-        hardware::{CgbRevision, DmgRevision},
-    };
-    use std::path::Path;
-
-    fn workspace_root() -> std::path::PathBuf {
-        let mut ancestors = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors();
-        ancestors.next();
-        let crate_dir = ancestors
-            .next()
-            .expect("crate directory should have a parent");
-        ancestors.next().unwrap_or(crate_dir).to_path_buf()
-    }
-
-    #[test]
-    #[ignore]
-    fn debug_temp_ppu_scanline_bgp_event_x() {
-        let rom_path = workspace_root().join("temp/ppu_scanline_bgp.gb");
-        let rom_data = std::fs::read(&rom_path).expect("failed to read temp/ppu_scanline_bgp.gb");
-
-        for (label, cgb) in [("DMG", false), ("CGB-DMG-COMPAT", true)] {
-            let mut gb =
-                GameBoy::new_with_revisions(cgb, DmgRevision::default(), CgbRevision::default());
-            gb.mmu.load_cart(Cartridge::load(rom_data.clone()));
-
-            let mut prev_mode = gb.mmu.ppu.mode;
-            let mut prev_ly = gb.mmu.ppu.ly;
-            let mut iterations = 0u64;
-            loop {
-                iterations += 1;
-                gb.cpu.step(&mut gb.mmu);
-
-                let mode = gb.mmu.ppu.mode;
-                let ly = gb.mmu.ppu.ly;
-                if prev_mode == MODE_TRANSFER && mode == MODE_HBLANK {
-                    let count = gb.mmu.ppu.dmg_bgp_event_count;
-                    if count > 0 {
-                        eprintln!(
-                            "--- {label} BGP events on ly={}: count={count} base={:02X} dmg_compat={} ---",
-                            prev_ly, gb.mmu.ppu.dmg_line_bgp_base, gb.mmu.ppu.dmg_compat
-                        );
-                        let mut last: Option<u8> = None;
-                        for i in 0..count.min(DMG_BGP_EVENTS_MAX) {
-                            let ev = gb.mmu.ppu.dmg_bgp_events[i];
-                            if let Some(prev) = last {
-                                eprintln!(
-                                    "  #{i:02} x={} val={:02X} dx={}",
-                                    ev.x,
-                                    ev.val,
-                                    ev.x.wrapping_sub(prev)
-                                );
-                            } else {
-                                eprintln!("  #{i:02} x={} val={:02X}", ev.x, ev.val);
-                            }
-                            last = Some(ev.x);
-                        }
-                        break;
-                    }
-                }
-                prev_mode = mode;
-                prev_ly = ly;
-
-                if iterations > 2_000_000 {
-                    panic!("timed out waiting for a scanline with recorded BGP events");
-                }
-            }
-        }
-    }
-}
-
-impl Default for Ppu {
-    fn default() -> Self {
-        Self::new()
     }
 }
