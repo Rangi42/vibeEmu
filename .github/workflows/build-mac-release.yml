@@ -12,6 +12,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Cache cargo registry and git
         uses: actions/cache@v4
@@ -25,17 +27,25 @@ jobs:
       - name: Cache target (release)
         uses: actions/cache@v4
         with:
-          path: target/release
+          path: |
+            target/x86_64-apple-darwin/release
+            target/aarch64-apple-darwin/release
           key: macos-target-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: macos-target-release-
 
-      - name: Build release
-        run: cargo build --release -p vibe-emu-ui
+      - name: Build release (x86_64)
+        run: cargo build --release -p vibe-emu-ui --target x86_64-apple-darwin
+
+      - name: Build release (arm64)
+        run: cargo build --release -p vibe-emu-ui --target aarch64-apple-darwin
 
       - name: Create app bundle
         run: |
           mkdir -p vibeEmu.app/Contents/{MacOS,Resources}
-          cp target/release/vibe-emu-ui vibeEmu.app/Contents/MacOS/vibeEmu
+          lipo -create \
+            target/x86_64-apple-darwin/release/vibe-emu-ui \
+            target/aarch64-apple-darwin/release/vibe-emu-ui \
+            -output vibeEmu.app/Contents/MacOS/vibeEmu
 
           cat > vibeEmu.app/Contents/Info.plist <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -65,6 +75,9 @@ jobs:
           PLIST
 
           chmod +x vibeEmu.app/Contents/MacOS/vibeEmu
+
+      - name: Verify universal binary
+        run: lipo -info vibeEmu.app/Contents/MacOS/vibeEmu
 
       - name: Package app bundle (zip)
         run: |
