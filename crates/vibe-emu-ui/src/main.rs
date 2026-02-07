@@ -1174,10 +1174,7 @@ impl VibeEmuApp {
             })
             .collect();
 
-        let image = egui::ColorImage {
-            size: [160, 144],
-            pixels,
-        };
+        let image = egui::ColorImage::new([160, 144], pixels);
 
         match &mut self.texture {
             Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
@@ -1226,7 +1223,7 @@ impl eframe::App for VibeEmuApp {
         self.update_texture(ctx);
 
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open ROM...").clicked() {
                         if let Some(path) = FileDialog::new()
@@ -1235,7 +1232,7 @@ impl eframe::App for VibeEmuApp {
                         {
                             self.load_rom(path);
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Exit").clicked() {
@@ -1263,14 +1260,14 @@ impl eframe::App for VibeEmuApp {
                             };
                             let _ = tx.send(cmd);
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Reset").clicked() {
                         if let Ok(mut gb) = self.gb.lock() {
                             gb.reset();
                             self._audio_stream = audio::start_stream(&mut gb.mmu.apu, true);
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     ui.menu_button("Mode", |ui| {
@@ -1282,7 +1279,7 @@ impl eframe::App for VibeEmuApp {
                             )
                             .clicked()
                         {
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui
                             .radio_value(
@@ -1292,7 +1289,7 @@ impl eframe::App for VibeEmuApp {
                             )
                             .clicked()
                         {
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui
                             .radio_value(
@@ -1302,7 +1299,7 @@ impl eframe::App for VibeEmuApp {
                             )
                             .clicked()
                         {
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                     ui.separator();
@@ -1320,7 +1317,7 @@ impl eframe::App for VibeEmuApp {
                                 self.disconnect_serial_peripheral();
                             }
                             self.persist_serial_settings();
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui
                             .radio_value(
@@ -1335,7 +1332,7 @@ impl eframe::App for VibeEmuApp {
                                 self.connect_mobile_adapter();
                             }
                             self.persist_serial_settings();
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui
                             .radio_value(
@@ -1477,22 +1474,22 @@ impl eframe::App for VibeEmuApp {
                         if self.show_debugger {
                             self.debugger_state.request_scroll_to_pc();
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("VRAM Viewer").clicked() {
                         self.show_vram_viewer = !self.show_vram_viewer;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Watchpoints").clicked() {
                         self.show_watchpoints = !self.show_watchpoints;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
                 ui.menu_button("Options", |ui| {
                     if ui.button("Settings...").clicked() {
                         self.show_options = !self.show_options;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             });
@@ -1566,7 +1563,7 @@ impl eframe::App for VibeEmuApp {
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none())
+            .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
                 if let Some(tex) = &self.texture {
                     let available = ui.available_size();
@@ -3345,10 +3342,7 @@ impl VibeEmuApp {
                 .chunks_exact(4)
                 .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]))
                 .collect();
-            let image = egui::ColorImage {
-                size: [IMG_W, IMG_H],
-                pixels,
-            };
+            let image = egui::ColorImage::new([IMG_W, IMG_H], pixels);
             match &mut self.vram_viewer.bg_map_tex {
                 Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
                 None => {
@@ -3408,7 +3402,12 @@ impl VibeEmuApp {
                                 rect.min + egui::vec2(scx * scale, scy * scale),
                                 egui::vec2(vp_w * scale, vp_h * scale),
                             );
-                            painter.rect_stroke(viewport_rect, 0.0, stroke);
+                            painter.rect_stroke(
+                                viewport_rect,
+                                0.0,
+                                stroke,
+                                egui::StrokeKind::Middle,
+                            );
                         } else {
                             let x1_start = scx;
                             let x1_end = if x_wraps { map_size } else { scx + vp_w };
@@ -3433,28 +3432,28 @@ impl VibeEmuApp {
                                 rect.min + egui::vec2(x1_start * scale, y1_start * scale),
                                 egui::vec2(x1_w * scale, y1_h * scale),
                             );
-                            painter.rect_stroke(r1, 0.0, stroke);
+                            painter.rect_stroke(r1, 0.0, stroke, egui::StrokeKind::Middle);
 
                             if x_wraps {
                                 let r2 = egui::Rect::from_min_size(
                                     rect.min + egui::vec2(x2_start * scale, y1_start * scale),
                                     egui::vec2(x2_w * scale, y1_h * scale),
                                 );
-                                painter.rect_stroke(r2, 0.0, stroke);
+                                painter.rect_stroke(r2, 0.0, stroke, egui::StrokeKind::Middle);
                             }
                             if y_wraps {
                                 let r3 = egui::Rect::from_min_size(
                                     rect.min + egui::vec2(x1_start * scale, y2_start * scale),
                                     egui::vec2(x1_w * scale, y2_h * scale),
                                 );
-                                painter.rect_stroke(r3, 0.0, stroke);
+                                painter.rect_stroke(r3, 0.0, stroke, egui::StrokeKind::Middle);
                             }
                             if x_wraps && y_wraps {
                                 let r4 = egui::Rect::from_min_size(
                                     rect.min + egui::vec2(x2_start * scale, y2_start * scale),
                                     egui::vec2(x2_w * scale, y2_h * scale),
                                 );
-                                painter.rect_stroke(r4, 0.0, stroke);
+                                painter.rect_stroke(r4, 0.0, stroke, egui::StrokeKind::Middle);
                             }
                         }
                     }
@@ -3472,6 +3471,7 @@ impl VibeEmuApp {
                             sel_rect,
                             0.0,
                             egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            egui::StrokeKind::Middle,
                         );
                     }
 
@@ -3586,10 +3586,7 @@ impl VibeEmuApp {
                         .chunks_exact(4)
                         .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]))
                         .collect();
-                    let image = egui::ColorImage {
-                        size: [8, 8],
-                        pixels,
-                    };
+                    let image = egui::ColorImage::new([8, 8], pixels);
                     match &mut self.vram_viewer.bg_tile_preview_tex {
                         Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
                         None => {
@@ -3853,10 +3850,7 @@ impl VibeEmuApp {
                 .chunks_exact(4)
                 .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]))
                 .collect();
-            let image = egui::ColorImage {
-                size: [img_w, img_h],
-                pixels,
-            };
+            let image = egui::ColorImage::new([img_w, img_h], pixels);
             match &mut self.vram_viewer.tiles_tex {
                 Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
                 None => {
@@ -3916,6 +3910,7 @@ impl VibeEmuApp {
                             sel_rect,
                             0.0,
                             egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            egui::StrokeKind::Middle,
                         );
                     }
 
@@ -3997,10 +3992,7 @@ impl VibeEmuApp {
                         .chunks_exact(4)
                         .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]))
                         .collect();
-                    let image = egui::ColorImage {
-                        size: [8, 8],
-                        pixels,
-                    };
+                    let image = egui::ColorImage::new([8, 8], pixels);
                     match &mut self.vram_viewer.tiles_preview_tex {
                         Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
                         None => {
@@ -4426,6 +4418,7 @@ impl VibeEmuApp {
                     sprite_screen_rect,
                     0.0,
                     egui::Stroke::new(1.0, egui::Color32::YELLOW),
+                    egui::StrokeKind::Middle,
                 );
 
                 ui.add_space(8.0);
@@ -4555,8 +4548,12 @@ impl VibeEmuApp {
                         } else {
                             egui::Color32::GRAY
                         };
-                        ui.painter()
-                            .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, stroke_color));
+                        ui.painter().rect_stroke(
+                            rect,
+                            0.0,
+                            egui::Stroke::new(1.0, stroke_color),
+                            egui::StrokeKind::Middle,
+                        );
                     }
                 });
             }
@@ -4595,8 +4592,12 @@ impl VibeEmuApp {
                         } else {
                             egui::Color32::GRAY
                         };
-                        ui.painter()
-                            .rect_stroke(rect, 0.0, egui::Stroke::new(1.0, stroke_color));
+                        ui.painter().rect_stroke(
+                            rect,
+                            0.0,
+                            egui::Stroke::new(1.0, stroke_color),
+                            egui::StrokeKind::Middle,
+                        );
                     }
                 });
             }
@@ -4634,6 +4635,7 @@ impl VibeEmuApp {
                     rect,
                     0.0,
                     egui::Stroke::new(1.0, egui::Color32::WHITE),
+                    egui::StrokeKind::Middle,
                 );
 
                 let r5 = (r >> 3) as u16;

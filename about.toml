@@ -13,6 +13,8 @@ accepted = [
     "Zlib",
 ]
 
+ignore-dev-dependencies = true
+
 # epaint_default_fonts includes fonts under OFL-1.1 and Ubuntu Font License.
 # UFL-1.0 is not a standard SPDX identifier, so we clarify it here.
 # The Ubuntu Font License is permissive and compatible with OFL-1.1.
