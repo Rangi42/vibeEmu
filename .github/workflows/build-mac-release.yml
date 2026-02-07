@@ -65,11 +65,16 @@ jobs:
           PLIST
 
           chmod +x vibeEmu.app/Contents/MacOS/vibeEmu
+
+      - name: Package app bundle (zip)
+        run: |
+          rm -f vibeEmu.app.zip
+          ditto -c -k --sequesterRsrc --keepParent vibeEmu.app vibeEmu.app.zip
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: vibeEmu-macos
-          path: vibeEmu.app
+          path: vibeEmu.app.zip
           if-no-files-found: error
           retention-days: 30
