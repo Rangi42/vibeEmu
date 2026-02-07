@@ -15,6 +15,7 @@ use rfd::FileDialog;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -664,6 +665,8 @@ struct VibeEmuApp {
     frame_pool_tx: cb::Sender<Vec<u32>>,
     _audio_stream: Option<cpal::Stream>,
 
+    sound_enabled: Arc<AtomicBool>,
+
     ui_config_path: std::path::PathBuf,
     ui_config: UiConfig,
 
@@ -779,8 +782,10 @@ impl VibeEmuApp {
             let _ = emu_tx.send(EmuCommand::SetPaused(true));
         }
 
+        let sound_enabled = Arc::new(AtomicBool::new(true));
+
         let audio_stream = if let Ok(mut gb_lock) = gb.lock() {
-            audio::start_stream(&mut gb_lock.mmu.apu, true)
+            audio::start_stream(&mut gb_lock.mmu.apu, true, sound_enabled.clone())
         } else {
             None
         };
@@ -791,6 +796,8 @@ impl VibeEmuApp {
             frame_rx,
             frame_pool_tx,
             _audio_stream: audio_stream,
+
+            sound_enabled,
 
             ui_config_path,
             ui_config,
@@ -1418,7 +1425,8 @@ impl VibeEmuApp {
                     gb.mmu.save_cart_ram();
                     *gb = GameBoy::new_with_mode(cgb_mode);
                     gb.mmu.load_cart(cart);
-                    self._audio_stream = audio::start_stream(&mut gb.mmu.apu, true);
+                    self._audio_stream =
+                        audio::start_stream(&mut gb.mmu.apu, true, self.sound_enabled.clone());
                 }
                 self.current_rom_path = Some(path.clone());
                 self.debugger_state.load_symbols_for_rom_path(Some(&path));
@@ -1488,7 +1496,11 @@ impl eframe::App for VibeEmuApp {
                     {
                         if let Ok(mut gb) = self.gb.lock() {
                             gb.reset();
-                            self._audio_stream = audio::start_stream(&mut gb.mmu.apu, true);
+                            self._audio_stream = audio::start_stream(
+                                &mut gb.mmu.apu,
+                                true,
+                                self.sound_enabled.clone(),
+                            );
                         }
                         ui.close();
                     }
@@ -1589,6 +1601,14 @@ impl eframe::App for VibeEmuApp {
                             self.apply_window_scale(ctx);
                         }
                     });
+
+                    let mut enabled = self.sound_enabled.load(Ordering::Relaxed);
+                    let response = ui.checkbox(&mut enabled, "Enable sound");
+                    if response.changed() {
+                        self.sound_enabled.store(enabled, Ordering::Relaxed);
+                        ui.close();
+                    }
+
                     if ui.button("Settings...").clicked() {
                         self.show_options = !self.show_options;
                         ui.close();
@@ -1617,8 +1637,6 @@ impl eframe::App for VibeEmuApp {
                         ("▶ Running", egui::Color32::GREEN)
                     };
                     ui.colored_label(status_text.1, status_text.0);
-
-                    // Serial peripheral status
                     match self.serial_peripheral {
                         SerialPeripheral::None => {}
                         SerialPeripheral::MobileAdapter => {

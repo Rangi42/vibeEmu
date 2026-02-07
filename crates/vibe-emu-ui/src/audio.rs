@@ -1,5 +1,9 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use log::{error, info, warn};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use vibe_emu_core::apu::Apu;
 
 /// Build an audio stream using `cpal` and hook it up to the APU sample queue.
@@ -7,7 +11,11 @@ use vibe_emu_core::apu::Apu;
 /// If `autoplay` is true the stream starts immediately; otherwise the caller is
 /// responsible for invoking [`cpal::Stream::play`] once any warm-up work
 /// completes. Returns the configured stream on success.
-pub fn start_stream(apu: &mut Apu, autoplay: bool) -> Option<cpal::Stream> {
+pub fn start_stream(
+    apu: &mut Apu,
+    autoplay: bool,
+    sound_enabled: Arc<AtomicBool>,
+) -> Option<cpal::Stream> {
     let host = cpal::default_host();
     let device = match host.default_output_device() {
         Some(device) => device,
@@ -52,6 +60,11 @@ pub fn start_stream(apu: &mut Apu, autoplay: bool) -> Option<cpal::Stream> {
             move |data: &mut [i16], _| {
                 for frame in data.chunks_mut(channels) {
                     let (left, right) = consumer.pop_stereo().unwrap_or((0, 0));
+                    let (left, right) = if sound_enabled.load(Ordering::Relaxed) {
+                        (left, right)
+                    } else {
+                        (0, 0)
+                    };
                     frame[0] = left;
                     if channels > 1 {
                         frame[1] = right;
@@ -66,6 +79,11 @@ pub fn start_stream(apu: &mut Apu, autoplay: bool) -> Option<cpal::Stream> {
             move |data: &mut [u16], _| {
                 for frame in data.chunks_mut(channels) {
                     let (left, right) = consumer.pop_stereo().unwrap_or((0, 0));
+                    let (left, right) = if sound_enabled.load(Ordering::Relaxed) {
+                        (left, right)
+                    } else {
+                        (0, 0)
+                    };
                     frame[0] = (left as i32 + 32768) as u16;
                     if channels > 1 {
                         frame[1] = (right as i32 + 32768) as u16;
@@ -80,6 +98,11 @@ pub fn start_stream(apu: &mut Apu, autoplay: bool) -> Option<cpal::Stream> {
             move |data: &mut [f32], _| {
                 for frame in data.chunks_mut(channels) {
                     let (left, right) = consumer.pop_stereo().unwrap_or((0, 0));
+                    let (left, right) = if sound_enabled.load(Ordering::Relaxed) {
+                        (left, right)
+                    } else {
+                        (0, 0)
+                    };
                     let left = left as f32 / 32768.0;
                     let right = right as f32 / 32768.0;
                     frame[0] = left;
