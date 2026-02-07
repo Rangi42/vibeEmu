@@ -1439,11 +1439,32 @@ impl VibeEmuApp {
             }
         }
     }
+
+    fn handle_file_drop(&mut self, ctx: &egui::Context) {
+        let dropped_paths: Vec<std::path::PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|file| file.path.clone())
+                .collect()
+        });
+
+        let Some(rom_path) = dropped_paths.into_iter().find(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "gb" | "gbc"))
+        }) else {
+            return;
+        };
+
+        self.load_rom(rom_path);
+    }
 }
 
 impl eframe::App for VibeEmuApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_input(ctx);
+        self.handle_file_drop(ctx);
         self.poll_frames();
         self.update_texture(ctx);
 
@@ -1704,7 +1725,7 @@ impl eframe::App for VibeEmuApp {
                     ui.put(rect, egui::Image::new(tex).fit_to_exact_size(size));
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label("No ROM loaded. Use File → Open ROM...");
+                        ui.label("No ROM loaded. Use File → Open ROM... or drag and drop a ROM file here.");
                     });
                 }
             });
