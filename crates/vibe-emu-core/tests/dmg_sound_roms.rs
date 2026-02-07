@@ -153,7 +153,6 @@ fn dmg_sound_03_trigger() {
 }
 
 #[test]
-#[ignore]
 fn dmg_sound_04_sweep() {
     run_single("04-sweep.gb");
 }

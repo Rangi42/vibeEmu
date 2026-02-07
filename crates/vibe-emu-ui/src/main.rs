@@ -26,6 +26,9 @@ use vibe_emu_mobile::{
     MobileNumber, MobileSockType, StdMobileHost,
 };
 
+#[cfg(not(target_os = "android"))]
+use gilrs::{Axis as GamepadAxis, Button as GamepadButton, GamepadId, Gilrs};
+
 use crossbeam_channel as cb;
 use keybinds::KeyBindings;
 use network_link::{LinkCommand, LinkEvent, NetworkLinkPort};
@@ -41,6 +44,101 @@ const STATUS_BAR_HEIGHT: f32 = 24.0;
 const GB_FPS: f64 = 59.7275;
 const FRAME_TIME: Duration = Duration::from_nanos((1e9_f64 / GB_FPS) as u64);
 const FF_MULT: f32 = 4.0;
+
+#[cfg(not(target_os = "android"))]
+struct GamepadInput {
+    gilrs: Gilrs,
+    active: Option<GamepadId>,
+    axis_deadzone: f32,
+}
+
+#[cfg(not(target_os = "android"))]
+impl GamepadInput {
+    fn try_new() -> Option<Self> {
+        let gilrs = Gilrs::new().ok()?;
+        Some(Self {
+            gilrs,
+            active: None,
+            axis_deadzone: 0.45,
+        })
+    }
+
+    fn sample(&mut self) -> (u8, bool) {
+        while let Some(ev) = self.gilrs.next_event() {
+            self.active = Some(ev.id);
+        }
+
+        let active = self
+            .active
+            .filter(|&id| self.gilrs.gamepad(id).is_connected())
+            .or_else(|| {
+                self.gilrs
+                    .gamepads()
+                    .find(|(_, gp)| gp.is_connected())
+                    .map(|(id, _)| id)
+            });
+
+        let Some(id) = active else {
+            return (0xFF, false);
+        };
+
+        let gp = self.gilrs.gamepad(id);
+
+        let mut state = 0xFFu8;
+
+        let pressed = |btn: GamepadButton| {
+            gp.button_data(btn)
+                .map(|d| d.is_pressed())
+                .unwrap_or(false)
+        };
+
+        if pressed(GamepadButton::DPadRight) {
+            state &= !0x01;
+        }
+        if pressed(GamepadButton::DPadLeft) {
+            state &= !0x02;
+        }
+        if pressed(GamepadButton::DPadUp) {
+            state &= !0x04;
+        }
+        if pressed(GamepadButton::DPadDown) {
+            state &= !0x08;
+        }
+
+        if pressed(GamepadButton::South) {
+            state &= !0x10;
+        }
+        if pressed(GamepadButton::East) {
+            state &= !0x20;
+        }
+        if pressed(GamepadButton::Select) {
+            state &= !0x40;
+        }
+        if pressed(GamepadButton::Start) {
+            state &= !0x80;
+        }
+
+        if let Some(x) = gp.axis_data(GamepadAxis::LeftStickX).map(|d| d.value()) {
+            if x > self.axis_deadzone {
+                state &= !0x01;
+            } else if x < -self.axis_deadzone {
+                state &= !0x02;
+            }
+        }
+        if let Some(y) = gp.axis_data(GamepadAxis::LeftStickY).map(|d| d.value()) {
+            if y < -self.axis_deadzone {
+                state &= !0x04;
+            } else if y > self.axis_deadzone {
+                state &= !0x08;
+            }
+        }
+
+        let fast_forward = pressed(GamepadButton::RightTrigger)
+            || pressed(GamepadButton::RightTrigger2);
+
+        (state, fast_forward)
+    }
+}
 
 use std::sync::LazyLock;
 static VIEWPORT_DEBUGGER: LazyLock<egui::ViewportId> =
@@ -679,6 +777,9 @@ struct VibeEmuApp {
     joypad_state: u8,
     fast_forward: bool,
 
+    #[cfg(not(target_os = "android"))]
+    gamepad: Option<GamepadInput>,
+
     show_debugger: bool,
     show_vram_viewer: bool,
     show_options: bool,
@@ -809,6 +910,9 @@ impl VibeEmuApp {
             keybinds_path,
             joypad_state: 0xFF,
             fast_forward: false,
+
+            #[cfg(not(target_os = "android"))]
+            gamepad: GamepadInput::try_new(),
             show_debugger: false,
             show_vram_viewer: false,
             show_options: false,
@@ -1149,6 +1253,13 @@ impl VibeEmuApp {
 
             new_fast_forward = i.key_down(self.keybinds.fast_forward_key());
         });
+
+        #[cfg(not(target_os = "android"))]
+        if let Some(gamepad) = &mut self.gamepad {
+            let (pad_state, pad_ff) = gamepad.sample();
+            new_state &= pad_state;
+            new_fast_forward |= pad_ff;
+        }
 
         if new_state != self.joypad_state {
             self.joypad_state = new_state;

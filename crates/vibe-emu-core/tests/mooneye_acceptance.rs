@@ -461,7 +461,6 @@ fn misc__boot_div_cgb0_gb() {
 }
 
 #[test]
-#[ignore]
 fn boot_regs_dmg0_gb() {
     let passed = run_mooneye_acceptance_with_dmg_revision(
         common::rom_path("mooneye-test-suite/acceptance/boot_regs-dmg0.gb"),
@@ -781,7 +780,6 @@ fn ppu__intr_2_mode0_timing_gb() {
 }
 
 #[test]
-#[ignore]
 fn ppu__intr_2_mode0_timing_sprites_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/ppu/intr_2_mode0_timing_sprites.gb"),
@@ -818,7 +816,6 @@ fn ppu__lcdon_timing_GS_gb() {
 }
 
 #[test]
-#[ignore]
 fn ppu__lcdon_write_timing_GS_gb() {
     let passed = run_mooneye_acceptance(
         common::rom_path("mooneye-test-suite/acceptance/ppu/lcdon_write_timing-GS.gb"),

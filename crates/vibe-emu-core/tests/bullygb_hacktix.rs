@@ -119,13 +119,11 @@ fn run_bullygb(mode_cgb: bool) {
 }
 
 #[test]
-#[ignore]
 fn bullygb_hacktix__dmg__serial() {
     run_bullygb(false);
 }
 
 #[test]
-#[ignore]
 fn bullygb_hacktix__cgb__serial() {
     run_bullygb(true);
 }
