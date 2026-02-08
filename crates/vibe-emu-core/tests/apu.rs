@@ -554,19 +554,40 @@ fn wave_ram_locked_read_returns_latched_nibble_on_dmg() {
 }
 
 #[test]
-fn wave_ram_locked_read_returns_ff_on_cgb_e() {
+fn wave_ram_locked_read_redirects_on_cgb_e() {
+    // CGB (all revisions through E) redirects wave RAM reads while CH3 is
+    // active to the byte at the current playback position, regardless of
+    // which wave RAM address was requested.
     let mut apu = Apu::new_with_config(true, CgbRevision::RevE);
     apu.write_reg(0xFF26, 0x80); // enable APU
+    // Write a recognisable pattern into wave RAM so that different positions
+    // produce different values and we can verify redirection.
+    for i in 0u8..16 {
+        apu.write_reg(0xFF30 + i as u16, (i << 4) | i);
+    }
     apu.write_reg(0xFF1A, 0x80); // DAC on
     apu.write_reg(0xFF1C, 0x20);
     apu.write_reg(0xFF1D, 0xFF);
     apu.write_reg(0xFF1E, 0x87);
 
     let mut div = 0u16;
+    // Run for a while and verify that reading two different wave RAM
+    // addresses in the same cycle returns the same value (redirect).
+    let mut saw_redirect = false;
     for _ in 0..256 {
         tick_machine(&mut apu, &mut div, 1);
-        assert_eq!(apu.read_reg(0xFF30), 0xFF);
+        let val_a = apu.read_reg(0xFF30); // address 0
+        let val_b = apu.read_reg(0xFF35); // address 5
+        // Both should return the byte at the current position (same byte)
+        assert_eq!(
+            val_a, val_b,
+            "CGB-E should redirect both reads to the same byte"
+        );
+        if val_a != 0x00 {
+            saw_redirect = true;
+        }
     }
+    assert!(saw_redirect, "should have seen non-zero redirected values");
 }
 
 #[test]

@@ -1058,21 +1058,23 @@ impl Apu {
 
     fn wave_cpu_read_locked(&mut self, _: usize) -> u8 {
         let just_read = self.ch3.wave_form_just_read.get();
-        let nibble = self.ch3.wave_sample_buffer & 0x0F;
-        let latched = (nibble << 4) | nibble;
-        let old_model = !self.cgb_mode
-            || matches!(
-                self.cgb_revision,
-                CgbRevision::Rev0 | CgbRevision::RevA | CgbRevision::RevB | CgbRevision::RevC
-            );
+        let byte_idx = self.wave_current_byte_index();
         self.ch3.wave_form_just_read.set(false);
-        self.ch3.bugged_read_index = self.wave_current_byte_index() as u8;
+        self.ch3.bugged_read_index = byte_idx as u8;
         self.ch3.bugged_read_countdown = 2;
         self.ch3.sample_suppressed.set(true);
-        if old_model && just_read {
-            latched
+
+        if self.cgb_mode {
+            // CGB: always redirect to the byte at the current playback position
+            self.wave_ram[byte_idx]
         } else {
-            0xFF
+            // DMG: only accessible during the exact cycle the APU read wave RAM
+            if just_read {
+                let nibble = self.ch3.wave_sample_buffer & 0x0F;
+                (nibble << 4) | nibble
+            } else {
+                0xFF
+            }
         }
     }
 
@@ -1131,7 +1133,6 @@ impl Apu {
     }
 
     fn power_off(&mut self) {
-        let nr41 = self.regs[NR41_IDX];
         // On DMG, length counters survive power off/on cycles
         let ch1_len = self.ch1.length;
         let ch2_len = self.ch2.length;
@@ -1142,7 +1143,6 @@ impl Apu {
         self.ch3 = WaveChannel::default();
         self.ch4 = NoiseChannel::default();
         self.regs.fill(0);
-        self.regs[NR41_IDX] = nr41;
         if !self.cgb_mode {
             self.ch1.length = ch1_len;
             self.ch2.length = ch2_len;
@@ -1453,7 +1453,13 @@ impl Apu {
 
         if (0xFF30..=0xFF3F).contains(&addr) {
             let index = (addr - 0xFF30) as usize;
-            self.prestep_wave();
+            // DMG needs prestep to align the wave_form_just_read timing window
+            // with an advance-before-read ordering. CGB always redirects
+            // reads to the current position, so the extra advance would put us
+            // 2 ticks ahead of the correct phase.
+            if !self.cgb_mode {
+                self.prestep_wave();
+            }
             return self.wave_cpu_read(index);
         }
 
@@ -1592,14 +1598,10 @@ impl Apu {
     }
 
     pub fn write_reg(&mut self, addr: u16, mut val: u8) {
-        if self.nr52 & 0x80 == 0
-            && addr != 0xFF26
-            && addr != 0xFF20
-            && !(0xFF30..=0xFF3F).contains(&addr)
-        {
-            // On DMG, NR11/NR21/NR31 length writes are allowed even when APU is off
-            if !self.cgb_mode && matches!(addr, 0xFF11 | 0xFF16 | 0xFF1B) {
-                if addr != 0xFF1B {
+        if self.nr52 & 0x80 == 0 && addr != 0xFF26 && !(0xFF30..=0xFF3F).contains(&addr) {
+            // On DMG, NR11/NR21/NR31/NR41 length writes are allowed even when APU is off
+            if !self.cgb_mode && matches!(addr, 0xFF11 | 0xFF16 | 0xFF1B | 0xFF20) {
+                if matches!(addr, 0xFF11 | 0xFF16) {
                     val &= 0x3F;
                 }
             } else {
@@ -1697,10 +1699,14 @@ impl Apu {
                     self.extra_length_clock_square(prev, length_enable, false, 1);
                     self.trigger_square(1, prev);
                 } else {
+                    let mut effective_prev = prev;
                     if triggered {
+                        if self.ch1.length == 0 {
+                            effective_prev = false;
+                        }
                         self.trigger_square(1, prev);
                     }
-                    self.extra_length_clock_square(prev, length_enable, triggered, 1);
+                    self.extra_length_clock_square(effective_prev, length_enable, triggered, 1);
                 }
             }
             0xFF16 => {
@@ -1742,10 +1748,14 @@ impl Apu {
                     self.extra_length_clock_square(prev, length_enable, false, 2);
                     self.trigger_square(2, prev);
                 } else {
+                    let mut effective_prev = prev;
                     if triggered {
+                        if self.ch2.length == 0 {
+                            effective_prev = false;
+                        }
                         self.trigger_square(2, prev);
                     }
-                    self.extra_length_clock_square(prev, length_enable, triggered, 2);
+                    self.extra_length_clock_square(effective_prev, length_enable, triggered, 2);
                 }
             }
             0xFF1A => {
@@ -1793,19 +1803,23 @@ impl Apu {
                     self.extra_length_clock_wave(prev, length_enable, false);
                     let was_enabled = self.ch3.enabled && self.ch3.dac_enabled;
                     self.trigger_wave(was_enabled, prev, length_enable);
-                    // SameBoy advances the APU BEFORE the trigger handler runs,
+                    // Some hardware advances the APU before the trigger handler runs,
                     // so those ticks hit the old (pre-trigger) state. Our model
                     // fires the trigger first, then ticks the new state. Absorb
                     // the post-trigger tick so the fresh countdown isn't shortened.
                     self.wave_prestep_deficit = if self.double_speed { 1 } else { 2 };
                     self.refresh_pcm_regs();
                 } else {
+                    let mut effective_prev = prev;
                     if triggered {
+                        if self.ch3.length == 0 {
+                            effective_prev = false;
+                        }
                         let was_enabled = self.ch3.enabled && self.ch3.dac_enabled;
                         self.trigger_wave(was_enabled, prev, length_enable);
                         self.refresh_pcm_regs();
                     }
-                    self.extra_length_clock_wave(prev, length_enable, triggered);
+                    self.extra_length_clock_wave(effective_prev, length_enable, triggered);
                 }
             }
             0xFF20 => {
@@ -1876,11 +1890,15 @@ impl Apu {
                     self.trigger_noise(prev, length_enable);
                     self.refresh_pcm_regs();
                 } else {
+                    let mut effective_prev = prev;
                     if triggered {
+                        if self.ch4.length == 0 {
+                            effective_prev = false;
+                        }
                         self.trigger_noise(prev, length_enable);
                         self.refresh_pcm_regs();
                     }
-                    self.extra_length_clock_noise(prev, length_enable, triggered);
+                    self.extra_length_clock_noise(effective_prev, length_enable, triggered);
                 }
                 #[cfg(feature = "apu-trace")]
                 self.trace_noise_state("NR44", Some(val));
@@ -1917,7 +1935,9 @@ impl Apu {
                 self.regs[idx] = 0x70 | (self.nr52 & 0x80);
             }
             0xFF30..=0xFF3F => {
-                self.prestep_wave();
+                if !self.cgb_mode {
+                    self.prestep_wave();
+                }
                 let index = (addr - 0xFF30) as usize;
                 self.wave_cpu_write(index, val);
             }
@@ -2059,8 +2079,9 @@ impl Apu {
 
             if ch.length == 0 {
                 ch.length = 64;
-                if ch.length_enable
-                    && (!prev_length_enable || (!self.cgb_mode && (self.sequencer.step & 1) != 0))
+                if !self.cgb_mode
+                    && ch.length_enable
+                    && (!prev_length_enable || (self.sequencer.step & 1) != 0)
                 {
                     ch.length = 63;
                 }
@@ -2190,8 +2211,9 @@ impl Apu {
         self.ch3.length_enable = length_enable;
         if self.ch3.length == 0 {
             self.ch3.length = 256;
-            if self.ch3.length_enable
-                && (!prev_length_enable || (!self.cgb_mode && (self.sequencer.step & 1) != 0))
+            if !self.cgb_mode
+                && self.ch3.length_enable
+                && (!prev_length_enable || (self.sequencer.step & 1) != 0)
             {
                 self.ch3.length = 255;
             }
@@ -2202,8 +2224,9 @@ impl Apu {
         self.ch4.length_enable = length_enable;
         if self.ch4.length == 0 {
             self.ch4.length = 64;
-            if self.ch4.length_enable
-                && (!prev_length_enable || (!self.cgb_mode && (self.sequencer.step & 1) != 0))
+            if !self.cgb_mode
+                && self.ch4.length_enable
+                && (!prev_length_enable || (self.sequencer.step & 1) != 0)
             {
                 self.ch4.length = 63;
             }
@@ -2488,8 +2511,7 @@ impl Apu {
     }
 
     /// Synchronizes wave channel state before a timing-sensitive register write.
-    /// Compensates for our CPU's write-before-tick ordering (SameBoy steps APU
-    /// before each bus access).
+    /// Compensates for our CPU's write-before-tick ordering.
     fn prestep_wave(&mut self) {
         if self.nr52 & 0x80 != 0
             && self.wave_prestep_deficit == 0
