@@ -804,6 +804,9 @@ pub struct Apu {
     apu_enable_tick: u64,
     /// Accumulates CPU cycles to emit 2 MHz ticks (1 tick per 2 CPU cycles).
     mhz2_residual: i32,
+    /// Tracks 2 MHz ticks pre-stepped to compensate for write-before-tick ordering.
+    /// Our CPU does write→tick, but hardware steps APU before each bus access.
+    wave_prestep_deficit: i32,
     /// True if running in CGB mode; used for model-specific APU quirks.
     cgb_mode: bool,
     cgb_revision: CgbRevision,
@@ -1096,6 +1099,9 @@ impl Apu {
         let locked = self.ch3.enabled && self.ch3.dac_enabled;
         self.ch3.wave_ram_locked.set(locked);
         if locked {
+            if !self.cgb_mode && !self.ch3.wave_form_just_read.get() {
+                return;
+            }
             let target = self.wave_current_byte_index();
             self.ch3.wave_shadow[target] = value;
             self.ch3.wave_ram_state |= 1 << target;
@@ -1126,12 +1132,23 @@ impl Apu {
 
     fn power_off(&mut self) {
         let nr41 = self.regs[NR41_IDX];
+        // On DMG, length counters survive power off/on cycles
+        let ch1_len = self.ch1.length;
+        let ch2_len = self.ch2.length;
+        let ch3_len = self.ch3.length;
+        let ch4_len = self.ch4.length;
         self.ch1 = SquareChannel::new(true);
         self.ch2 = SquareChannel::new(false);
         self.ch3 = WaveChannel::default();
         self.ch4 = NoiseChannel::default();
         self.regs.fill(0);
         self.regs[NR41_IDX] = nr41;
+        if !self.cgb_mode {
+            self.ch1.length = ch1_len;
+            self.ch2.length = ch2_len;
+            self.ch3.length = ch3_len;
+            self.ch4.length = ch4_len;
+        }
         self.nr50 = 0;
         self.nr51 = 0;
         self.disable_output();
@@ -1335,6 +1352,7 @@ impl Apu {
             ch1_last_env_write_cycle: 0,
             apu_enable_tick: 0,
             mhz2_residual: 0,
+            wave_prestep_deficit: 0,
             cgb_mode: false,
             cgb_revision: CgbRevision::default(),
             dmg_revision: DmgRevision::default(),
@@ -1435,6 +1453,7 @@ impl Apu {
 
         if (0xFF30..=0xFF3F).contains(&addr) {
             let index = (addr - 0xFF30) as usize;
+            self.prestep_wave();
             return self.wave_cpu_read(index);
         }
 
@@ -1572,13 +1591,20 @@ impl Apu {
         self.write_reg(addr, val);
     }
 
-    pub fn write_reg(&mut self, addr: u16, val: u8) {
+    pub fn write_reg(&mut self, addr: u16, mut val: u8) {
         if self.nr52 & 0x80 == 0
             && addr != 0xFF26
             && addr != 0xFF20
             && !(0xFF30..=0xFF3F).contains(&addr)
         {
-            return;
+            // On DMG, NR11/NR21/NR31 length writes are allowed even when APU is off
+            if !self.cgb_mode && matches!(addr, 0xFF11 | 0xFF16 | 0xFF1B) {
+                if addr != 0xFF1B {
+                    val &= 0x3F;
+                }
+            } else {
+                return;
+            }
         }
 
         let idx = (addr - 0xFF10) as usize;
@@ -1763,9 +1789,15 @@ impl Apu {
                     (self.ch3.sample_length & 0xFF) | (((val & 0x07) as u16) << 8);
                 let triggered = val & 0x80 != 0;
                 if triggered && !self.cgb_mode {
+                    self.prestep_wave();
                     self.extra_length_clock_wave(prev, length_enable, false);
                     let was_enabled = self.ch3.enabled && self.ch3.dac_enabled;
                     self.trigger_wave(was_enabled, prev, length_enable);
+                    // SameBoy advances the APU BEFORE the trigger handler runs,
+                    // so those ticks hit the old (pre-trigger) state. Our model
+                    // fires the trigger first, then ticks the new state. Absorb
+                    // the post-trigger tick so the fresh countdown isn't shortened.
+                    self.wave_prestep_deficit = if self.double_speed { 1 } else { 2 };
                     self.refresh_pcm_regs();
                 } else {
                     if triggered {
@@ -1885,6 +1917,7 @@ impl Apu {
                 self.regs[idx] = 0x70 | (self.nr52 & 0x80);
             }
             0xFF30..=0xFF3F => {
+                self.prestep_wave();
                 let index = (addr - 0xFF30) as usize;
                 self.wave_cpu_write(index, val);
             }
@@ -2097,7 +2130,8 @@ impl Apu {
         let retrigger_bug = !self.cgb_mode && was_enabled && self.ch3.sample_countdown == 0;
         if retrigger_bug {
             // DMG hardware copies upcoming wave RAM bytes into the first slot when retriggered on the read edge.
-            let byte_index = (self.ch3.current_sample_index >> 1) as usize;
+            let byte_index =
+                (((self.ch3.current_sample_index.wrapping_add(1)) >> 1) & 0x0F) as usize;
             if byte_index < 4 {
                 let value = self.wave_ram[byte_index];
                 self.wave_ram[0] = value;
@@ -2453,7 +2487,31 @@ impl Apu {
         clock_channel(&mut self.ch2);
     }
 
+    /// Synchronizes wave channel state before a timing-sensitive register write.
+    /// Compensates for our CPU's write-before-tick ordering (SameBoy steps APU
+    /// before each bus access).
+    fn prestep_wave(&mut self) {
+        if self.nr52 & 0x80 != 0
+            && self.wave_prestep_deficit == 0
+            && self.ch3.enabled
+            && self.ch3.dac_enabled
+        {
+            let ticks = if self.double_speed { 1 } else { 2 };
+            self.clock_wave_channel_2mhz_inner(ticks);
+            self.wave_prestep_deficit = ticks;
+        }
+    }
+
     fn clock_wave_channel_2mhz(&mut self, cycles: i32) {
+        let adjusted = cycles - self.wave_prestep_deficit;
+        self.wave_prestep_deficit = 0;
+        if adjusted <= 0 {
+            return;
+        }
+        self.clock_wave_channel_2mhz_inner(adjusted);
+    }
+
+    fn clock_wave_channel_2mhz_inner(&mut self, cycles: i32) {
         if cycles <= 0 {
             return;
         }

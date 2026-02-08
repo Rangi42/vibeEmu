@@ -86,11 +86,8 @@ impl GamepadInput {
 
         let mut state = 0xFFu8;
 
-        let pressed = |btn: GamepadButton| {
-            gp.button_data(btn)
-                .map(|d| d.is_pressed())
-                .unwrap_or(false)
-        };
+        let pressed =
+            |btn: GamepadButton| gp.button_data(btn).map(|d| d.is_pressed()).unwrap_or(false);
 
         if pressed(GamepadButton::DPadRight) {
             state &= !0x01;
@@ -133,8 +130,8 @@ impl GamepadInput {
             }
         }
 
-        let fast_forward = pressed(GamepadButton::RightTrigger)
-            || pressed(GamepadButton::RightTrigger2);
+        let fast_forward =
+            pressed(GamepadButton::RightTrigger) || pressed(GamepadButton::RightTrigger2);
 
         (state, fast_forward)
     }

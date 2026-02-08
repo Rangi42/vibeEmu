@@ -622,12 +622,12 @@ fn nr31_write_sets_length() {
 }
 
 #[test]
-fn nr31_write_ignored_when_disabled() {
+fn nr31_write_updates_length_when_disabled_on_dmg() {
     let mut apu = Apu::new();
     apu.write_reg(0xFF26, 0x00); // disable APU
-    let before = apu.ch3_length();
     apu.write_reg(0xFF1B, 0x40);
-    assert_eq!(apu.ch3_length(), before);
+    // On DMG, NR31 length writes are allowed even when the APU is off
+    assert_eq!(apu.ch3_length(), 256 - 0x40);
 }
 
 #[test]

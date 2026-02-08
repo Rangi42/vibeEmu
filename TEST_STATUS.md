@@ -44,10 +44,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1711 | 2004 | 0 | 0 | 3715 | 46.1% |
+| ROM Test Suites | 1714 | 2005 | 0 | 0 | 3719 | 46.1% |
 | Integration Tests | 165 | 2 | 0 | 0 | 167 | 98.8% |
 | Unit Tests | 50 | 0 | 0 | 0 | 50 | 100.0% |
-| **Overall** | 1926 | 2006 | 0 | 0 | 3932 | 49.0% |
+| **Overall** | 1929 | 2007 | 0 | 0 | 3936 | 49.0% |
 
 ## Detailed Results
 
@@ -115,7 +115,7 @@ Combined exit code: 101
 | --- | --- |
 | `dmg_acid2_rom` | ✅ Pass |
 
-#### dmg_sound_roms (9/12 passing, 75.0%)
+#### dmg_sound_roms (12/12 passing, 100.0%)
 
 | Test | Result |
 | --- | --- |
@@ -126,13 +126,13 @@ Combined exit code: 101
 | `dmg_sound_05_sweep_details` | ✅ Pass |
 | `dmg_sound_06_overflow_on_trigger` | ✅ Pass |
 | `dmg_sound_07_len_sweep_period_sync` | ✅ Pass |
+| `dmg_sound_08_len_ctr_during_power` | ✅ Pass |
 | `dmg_sound_09_wave_read_while_on` | ✅ Pass |
+| `dmg_sound_10_wave_trigger_while_on` | ✅ Pass |
 | `dmg_sound_11_regs_after_power` | ✅ Pass |
-| `dmg_sound_08_len_ctr_during_power` | ❌ Fail |
-| `dmg_sound_10_wave_trigger_while_on` | ❌ Fail |
-| `dmg_sound_12_wave_write_while_on` | ❌ Fail |
+| `dmg_sound_12_wave_write_while_on` | ✅ Pass |
 
-#### gambatte (1516/3425 passing, 44.3%)
+#### gambatte (1516/3429 passing, 44.2%)
 
 | Test | Result |
 | --- | --- |
@@ -1117,9 +1117,8 @@ Combined exit code: 101
 | `sound/ch3_late_div_write_nr52_1b_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch3_late_div_write_nr52_2a_dmg08_cgb04c_outF4.gbc` | ✅ Pass |
 | `sound/ch3_late_div_write_nr52_2b_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
-| `sound/ch3_reset_nr4init_freq7fd_write_ff30_1_dmg08_cgb04c_out32.gbc` | ✅ Pass |
+| `sound/ch3_reset_nr4init_freq7fd_write_ff30_2_dmg08_out32_cgb04c_out00.gbc` | ✅ Pass |
 | `sound/ch3_reset_nr4init_freq7fd_write_ff30_3_dmg08_cgb04c_out00.gbc` | ✅ Pass |
-| `sound/ch3_reset_nr4init_freq7ff_write_ff30_ds_1_cgb04c_out32.gbc` | ✅ Pass |
 | `sound/ch3_reset_nr4init_freq7ff_write_ff30_ds_2_cgb04c_out00.gbc` | ✅ Pass |
 | `sound/ch4_div_write_reset_length_counter_timing_nr52_1_dmg08_cgb04c_outF8.gbc` | ✅ Pass |
 | `sound/ch4_late_div_write_nr52_1a_dmg08_cgb04c_outF8.gbc` | ✅ Pass |
@@ -1264,6 +1263,7 @@ Combined exit code: 101
 | `sprites/1spritesPrLine_xpos01_m3stat_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `sprites/1spritesPrLine_xpos01_m3stat_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/1spritesPrLine_xpos01_scx4_m3stat_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
+| `sprites/1spritesPrLine_xpos07_m3stat_1_dmg08_cgb04c_out3.gbc` | ✅ Pass |
 | `sprites/2spritesPrLine_m3stat_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/2spritesPrLine_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/3spritesPrLine_m3stat_2_dmg08_cgb04c_out0.gbc` | ✅ Pass |
@@ -2969,7 +2969,7 @@ Combined exit code: 101
 | `sound/ch3_reset_nr4init_freq7fd_read_ff30_2_dmg08_outFF_cgb04c_out10.gbc` | ❌ Fail |
 | `sound/ch3_reset_nr4init_freq7fd_read_ff30_3_dmg08_outFF_cgb04c_out32.gbc` | ❌ Fail |
 | `sound/ch3_reset_nr4init_freq7fd_read_ff30_4_dmg08_cgb04c_out32.gbc` | ❌ Fail |
-| `sound/ch3_reset_nr4init_freq7fd_write_ff30_2_dmg08_out32_cgb04c_out00.gbc` | ❌ Fail |
+| `sound/ch3_reset_nr4init_freq7fd_write_ff30_1_dmg08_cgb04c_out32.gbc` | ❌ Fail |
 | `sound/ch3_reset_nr4init_freq7fd_write_ff30_4_dmg08_out32_cgb04c_out00.gbc` | ❌ Fail |
 | `sound/ch3_reset_nr4init_freq7fe_read_ff30_1_dmg08_outFF_cgb04c_out10.gbc` | ❌ Fail |
 | `sound/ch3_reset_nr4init_freq7fe_read_ff30_2_dmg08_outFF_cgb04c_out32.gbc` | ❌ Fail |
@@ -2979,6 +2979,7 @@ Combined exit code: 101
 | `sound/ch3_reset_nr4init_freq7ff_read_ff30_2_dmg08_cgb04c_out54.gbc` | ❌ Fail |
 | `sound/ch3_reset_nr4init_freq7ff_read_ff30_ds_1_cgb04c_out10.gbc` | ❌ Fail |
 | `sound/ch3_reset_nr4init_freq7ff_read_ff30_ds_2_cgb04c_out32.gbc` | ❌ Fail |
+| `sound/ch3_reset_nr4init_freq7ff_write_ff30_ds_1_cgb04c_out32.gbc` | ❌ Fail |
 | `sound/ch4_div_write_reset_length_counter_timing_nr52_2_dmg08_cgb04c_outF0.gbc` | ❌ Fail |
 | `sound/ch4_late_div_write_nr52_1b_dmg08_cgb04c_outF0.gbc` | ❌ Fail |
 | `sound/ch4_late_div_write_nr52_2b_dmg08_cgb04c_outF0.gbc` | ❌ Fail |
@@ -3158,6 +3159,7 @@ Combined exit code: 101
 | `sprites/1spritesPrLine_xpos01_scx4_m3stat_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/1spritesPrLine_xpos07_m3stat_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/1spritesPrLine_xpos09_scx4_m3stat_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
+| `sprites/1spritesPrLine_xpos09_scx4_m3stat_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
 | `sprites/2spritesPrLine_m3stat_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/2spritesPrLine_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/3spritesPrLine_m3stat_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
@@ -3174,6 +3176,8 @@ Combined exit code: 101
 | `sprites/8spritesPrLine_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/9spritesPrLine_m3stat_1_dmg08_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/9spritesPrLine_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
+| `sprites/enable/late_disable_ds_1_cgb04c_out3.gbc` | ❌ Fail |
+| `sprites/enable/late_disable_ds_2_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/enable/late_disable_ds_3_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/late_disable_1_dmg08_out0.gb` | ❌ Fail |
 | `sprites/late_disable_ds_1_cgb04c_out3.gbc` | ❌ Fail |
@@ -3898,8 +3902,8 @@ Combined exit code: 101
 | `nr24_length_enable_read_write` | ✅ Pass |
 | `nr24_write_sets_frequency_high_bits_and_is_write_only` | ✅ Pass |
 | `nr30_dac_off_disables_channel` | ✅ Pass |
-| `nr31_write_ignored_when_disabled` | ✅ Pass |
 | `nr31_write_sets_length` | ✅ Pass |
+| `nr31_write_updates_length_when_disabled_on_dmg` | ✅ Pass |
 | `nr33_write_sets_frequency_low_bits_and_is_write_only` | ✅ Pass |
 | `nr34_length_enable_read_write` | ✅ Pass |
 | `nr34_retrigger_resets_wave_position` | ✅ Pass |
