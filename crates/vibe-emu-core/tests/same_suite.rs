@@ -401,7 +401,6 @@ fn same_suite__apu__channel_1__channel_1_sweep_restart_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_1__channel_1_sweep_restart_2_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_1/channel_1_sweep_restart_2.gb"),

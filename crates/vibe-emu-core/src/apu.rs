@@ -833,6 +833,8 @@ pub struct Apu {
     sweep_instant_calc_done: bool,
     /// Hold period after channel 1 restart (delays sweep shadow reload)
     ch1_restart_hold: u8,
+    /// Skip hold decrement for the write M-cycle (write-before-tick compensation)
+    ch1_restart_hold_skip: bool,
     /// True if a negate calculation has been used since last trigger
     sweep_neg_used: bool,
 }
@@ -1373,6 +1375,7 @@ impl Apu {
             sweep_unshifted: false,
             sweep_instant_calc_done: false,
             ch1_restart_hold: 0,
+            ch1_restart_hold_skip: false,
             sweep_neg_used: false,
         };
 
@@ -2141,6 +2144,10 @@ impl Apu {
             // These are set unconditionally
             let cgb_not_d = self.cgb_mode && self.cgb_revision != CgbRevision::RevD;
             self.ch1_restart_hold = 2 - (self.lf_div & 1) + if cgb_not_d { 2 } else { 0 };
+            // In hardware the APU ticks for this M-cycle already ran before
+            // the register write, so the write-before-tick model must skip
+            // the first step() decrement to avoid draining hold too early.
+            self.ch1_restart_hold_skip = true;
             self.sweep_countdown = ((nr10 >> 4) & 7) ^ 7;
         }
 
@@ -2422,15 +2429,6 @@ impl Apu {
 
     /// Tick sweep-related countdowns. Called during APU run with 1 MHz cycles.
     fn tick_sweep(&mut self, cycles: u8) {
-        // ch1_restart_hold must decrement in parallel with other timers
-        if self.ch1_restart_hold > 0 {
-            if self.ch1_restart_hold > cycles {
-                self.ch1_restart_hold -= cycles;
-            } else {
-                self.ch1_restart_hold = 0;
-            }
-        }
-
         if self.sweep_calc_reload_timer > 0 {
             if self.sweep_calc_reload_timer > cycles {
                 self.sweep_calc_reload_timer -= cycles;
@@ -3094,6 +3092,22 @@ impl Apu {
             // Only advance the APU's 2 MHz domain (and lf_div parity) when the APU is enabled (NR52 bit 7 set).
             // This keeps internal clocks effectively gated while the APU is disabled.
             if self.nr52 & 0x80 != 0 {
+                // Decrement ch1_restart_hold at the 2 MHz rate, before frame
+                // sequencer events run. The skip flag compensates for the write-before-tick
+                // model: in hardware the APU ticks for the write M-cycle ran
+                // before the register write, so no hold decrement occurs during
+                // the same step() call that follows trigger_square.
+                if self.ch1_restart_hold_skip {
+                    self.ch1_restart_hold_skip = false;
+                } else if self.ch1_restart_hold > 0 {
+                    let dec = ticks_2mhz as u8;
+                    if self.ch1_restart_hold > dec {
+                        self.ch1_restart_hold -= dec;
+                    } else {
+                        self.ch1_restart_hold = 0;
+                    }
+                }
+
                 // Toggle parity of lf_div: xor with odd count of 2 MHz ticks
                 if (ticks_2mhz & 1) != 0 {
                     self.lf_div ^= 1;
