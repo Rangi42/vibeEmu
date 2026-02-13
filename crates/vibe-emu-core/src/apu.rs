@@ -2211,13 +2211,15 @@ impl Apu {
         self.ch3.pending_reset = true;
 
         if self.ch3.dac_enabled {
-            if was_enabled {
-                self.ch3.sample_suppressed.set(false);
+            if was_enabled && !self.ch3.sample_suppressed.get() {
+                // Retrigger after the initial delay expired: preserve current output
                 self.ch3.set_pipeline_sample(prev_sample);
-            } else {
+            } else if !was_enabled {
+                // Cold trigger: suppress until first sample boundary
                 self.ch3.sample_suppressed.set(true);
                 self.ch3.set_pipeline_sample(0);
             }
+            // Retrigger during initial delay: sample_suppressed stays true
         } else {
             self.ch3.sample_suppressed.set(true);
             self.ch3.set_pipeline_sample(0);

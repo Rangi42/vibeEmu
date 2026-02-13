@@ -649,7 +649,6 @@ fn same_suite__apu__channel_3__channel_3_restart_delay_gb() {
 }
 
 #[test]
-#[ignore]
 fn same_suite__apu__channel_3__channel_3_restart_during_delay_gb() {
     let passed = run_same_suite(
         common::rom_path("same-suite/apu/channel_3/channel_3_restart_during_delay.gb"),
