@@ -263,6 +263,12 @@ impl Mmu {
             // Seed chosen to match whichboot's timing reference for CGB
             // (LY=$90, DIV=$1E, frac=$28) when running the RevE boot ROM.
             timer.div = 0x0104;
+        } else if !cgb {
+            // The CPU reset sequence consumes 8 T-cycles before the first
+            // instruction fetch, offsetting the internal divider phase.
+            // Without this, boot_div and serial clock alignment tests fail
+            // because the divider ends up 8 T-cycles behind real hardware.
+            timer.div = 8;
         }
 
         let dot_div = timer.div;
