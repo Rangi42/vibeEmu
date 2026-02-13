@@ -34,6 +34,7 @@ const MODE0_CYCLES: u16 = 204; // HBlank
 const MODE1_CYCLES: u16 = 456; // One line during VBlank
 const MODE2_CYCLES: u16 = 80; // OAM scan
 const MODE3_CYCLES: u16 = 172; // Pixel transfer
+const DMG_HBLANK_RENDER_DELAY: u16 = 8;
 
 // Total number of T-cycles per scanline.
 const LINE_CYCLES: u16 = 456;
@@ -199,6 +200,7 @@ pub struct Ppu {
     dmg_line_bgp_base: u8,
     dmg_bgp_event_count: usize,
     dmg_bgp_events: [DmgBgpEvent; DMG_BGP_EVENTS_MAX],
+    dmg_hblank_render_pending: bool,
 
     // --- CGB timing quirks ---
     //
@@ -211,6 +213,7 @@ pub struct Ppu {
 
 #[derive(Copy, Clone, Default)]
 struct DmgBgpEvent {
+    t: u16,
     x: u8,
     val: u8,
 }
@@ -307,6 +310,7 @@ impl Ppu {
             dmg_line_bgp_base: 0,
             dmg_bgp_event_count: 0,
             dmg_bgp_events: [DmgBgpEvent::default(); DMG_BGP_EVENTS_MAX],
+            dmg_hblank_render_pending: false,
 
             mode3_lcdc_base: 0,
             mode3_lcdc_event_count: 0,
@@ -412,31 +416,44 @@ impl Ppu {
     fn record_dmg_bgp_event(&mut self, mode3_t: u16, val: u8) {
         // Convert MODE3 timestamp to an approximate output pixel coordinate.
         //
-        // The pipeline delay accounts for the latency between a CPU write and
-        // the PPU applying the new palette. On CGB in DMG-compat mode the
-        // pixel pipeline takes several additional T-cycles of setup and FIFO
-        // warmup before the first visible pixel is output. Writes arriving
-        // during this warmup should apply from pixel 0 onward, but the small
-        // CGB delay constant (3) does not fully cover the warmup window.
-        // DMG's larger delay (6) naturally saturates early writes to pixel 0.
-        let scx_fine = (self.scx & 7) as u16;
-        let delay = if self.dmg_compat { 3u16 } else { 6u16 };
-        // CGB DMG-compat warmup: 2 extra T-cycles covers writes that land
-        // after the delay constant but before pixel 0 is actually output.
-        let warmup_guard = if self.dmg_compat { 2u16 } else { 0u16 };
-        let warmup = delay + scx_fine + warmup_guard;
-        let adjusted_t = if mode3_t < warmup {
-            0
+        // On DMG with OBJ enabled, the simplified mode 3 model tracks the live
+        // pixel position (`mode3_lcd_x`) including DMG fetch phase effects.
+        // Use that directly for tighter alignment of mid-line BGP writes.
+        //
+        // Otherwise, keep the linear timing model that works well for no-OBJ
+        // DMG lines and CGB DMG-compat behavior.
+        let x = if !self.cgb && (self.lcdc & 0x02) != 0 {
+            if self.ly == 0 {
+                // On DMG line 0, Mode 2 -> Mode 3 interrupt/write phasing is
+                // offset versus subsequent lines; map by raw mode-3 dot time.
+                mode3_t.saturating_sub(11).min((SCREEN_WIDTH - 1) as u16) as u8
+            } else {
+                let phase = ((mode3_t >> 2) & 1) as u16;
+                (self
+                    .mode3_lcd_x
+                    .saturating_add(phase)
+                    .min((SCREEN_WIDTH - 1) as u16)) as u8
+            }
         } else {
-            mode3_t - delay - scx_fine
+            let scx_fine = (self.scx & 7) as u16;
+            let delay = if self.dmg_compat { 3u16 } else { 6u16 };
+            // CGB DMG-compat warmup: 2 extra T-cycles covers writes that land
+            // after the delay constant but before pixel 0 is actually output.
+            let warmup_guard = if self.dmg_compat { 2u16 } else { 0u16 };
+            let warmup = delay + scx_fine + warmup_guard;
+            let adjusted_t = if mode3_t < warmup {
+                0
+            } else {
+                mode3_t - delay - scx_fine
+            };
+            adjusted_t.min((SCREEN_WIDTH - 1) as u16) as u8
         };
-        let x = adjusted_t.min((SCREEN_WIDTH - 1) as u16) as u8;
         if self.dmg_bgp_event_count >= DMG_BGP_EVENTS_MAX {
             // Saturate; keep the newest event so behavior remains stable.
-            self.dmg_bgp_events[DMG_BGP_EVENTS_MAX - 1] = DmgBgpEvent { x, val };
+            self.dmg_bgp_events[DMG_BGP_EVENTS_MAX - 1] = DmgBgpEvent { t: mode3_t, x, val };
             return;
         }
-        self.dmg_bgp_events[self.dmg_bgp_event_count] = DmgBgpEvent { x, val };
+        self.dmg_bgp_events[self.dmg_bgp_event_count] = DmgBgpEvent { t: mode3_t, x, val };
         self.dmg_bgp_event_count += 1;
     }
 
@@ -444,7 +461,23 @@ impl Ppu {
     fn dmg_bgp_for_pixel(&self, x: usize) -> u8 {
         let mut current = self.dmg_line_bgp_base;
         let x = x as u8;
+        let dmg_obj_phase_mix = !self.cgb && (self.lcdc & 0x02) != 0;
         for ev in self.dmg_bgp_events[..self.dmg_bgp_event_count].iter() {
+            let phase = if dmg_obj_phase_mix {
+                ((ev.t >> 2) & 1) as u8
+            } else {
+                0
+            };
+            let transition_x = ev.x.saturating_sub(phase);
+            if x < transition_x {
+                break;
+            }
+            // DMG OBJ-enabled lines can output a one-pixel transitional shade
+            // when BGP changes on specific fetch phases.
+            if dmg_obj_phase_mix && ev.t != 0 && x == transition_x && !(self.ly == 0 && phase == 1)
+            {
+                return current | ev.val;
+            }
             if ev.x <= x {
                 current = ev.val;
             } else {
@@ -1977,12 +2010,26 @@ impl Ppu {
             0xFF46 => self.dma = val,
             0xFF47 => {
                 if (!self.cgb || self.dmg_compat)
-                    && self.mode == MODE_TRANSFER
                     && self.ly < SCREEN_HEIGHT as u8
                     && self.lcdc & 0x80 != 0
                 {
                     // Capture BGP changes during MODE3 for mid-scanline effects.
-                    self.record_dmg_bgp_event(self.mode_clock.min(MODE3_CYCLES), val);
+                    // Also include very-early HBlank writes: with 4-dot CPU
+                    // granularity, the final mode-3 write can spill into the
+                    // first HBlank tick while still affecting tail pixels.
+                    let mode3_t = if self.mode == MODE_TRANSFER {
+                        self.mode_clock
+                    } else if self.mode == MODE_HBLANK
+                        && self.dmg_hblank_render_pending
+                        && self.mode_clock <= 8
+                    {
+                        self.mode3_target_cycles.saturating_add(self.mode_clock)
+                    } else {
+                        u16::MAX
+                    };
+                    if mode3_t != u16::MAX {
+                        self.record_dmg_bgp_event(mode3_t, val);
+                    }
                 }
                 self.bgp = val;
             }
@@ -2298,6 +2345,7 @@ impl Ppu {
             }
 
             if self.lcdc & 0x80 == 0 {
+                self.dmg_hblank_render_pending = false;
                 self.set_mode(MODE_HBLANK);
                 self.ly = 0;
                 self.ly_for_comparison = 0;
@@ -2336,8 +2384,18 @@ impl Ppu {
 
             match self.mode {
                 MODE_HBLANK => {
+                    if self.dmg_hblank_render_pending && self.mode_clock >= DMG_HBLANK_RENDER_DELAY
+                    {
+                        self.render_scanline();
+                        self.dmg_hblank_render_pending = false;
+                    }
+
                     let target = self.mode0_target_cycles;
                     if self.mode_clock >= target {
+                        if self.dmg_hblank_render_pending {
+                            self.render_scanline();
+                            self.dmg_hblank_render_pending = false;
+                        }
                         self.mode_clock -= target;
                         self.ly += 1;
                         self.ly_for_comparison = self.ly;
@@ -2422,6 +2480,7 @@ impl Ppu {
                     if self.mode_clock >= MODE2_CYCLES {
                         self.mode_clock -= MODE2_CYCLES;
                         self.oam_scan_finalize();
+                        self.dmg_hblank_render_pending = false;
                         self.set_mode(MODE_TRANSFER);
                         self.begin_mode3_line();
                         self.mode3_target_cycles = self.compute_mode3_cycles_for_line();
@@ -2451,7 +2510,18 @@ impl Ppu {
                     let target = self.mode3_target_cycles;
                     if self.mode_clock >= target {
                         self.mode_clock -= target;
-                        self.render_scanline();
+                        if !self.cgb || self.dmg_compat {
+                            let delay_render = self.dmg_bgp_event_count > 0
+                                && self.dmg_bgp_events[self.dmg_bgp_event_count - 1].x >= 140;
+                            if delay_render {
+                                self.dmg_hblank_render_pending = true;
+                            } else {
+                                self.render_scanline();
+                                self.dmg_hblank_render_pending = false;
+                            }
+                        } else {
+                            self.render_scanline();
+                        }
                         self.set_mode(MODE_HBLANK);
                         hblank_triggered = true;
                         #[cfg(feature = "ppu-trace")]
