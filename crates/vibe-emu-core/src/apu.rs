@@ -1980,17 +1980,25 @@ impl Apu {
             let mut extra_delay = 0;
 
             if !was_active {
-                // CGB startup delay is one 2 MHz tick shorter in normal speed but
-                // matches DMG timing when running in double-speed mode.
-                let base_delay = if self.cgb_mode {
-                    if self.double_speed { 6 } else { 5 }
+                // Pre-CGB-D revisions in double-speed invert the lf_div
+                // contribution; all other models/speeds use 6 - lf_div.
+                let pre_cgb_d = self.cgb_mode
+                    && matches!(
+                        self.cgb_revision,
+                        CgbRevision::Rev0
+                            | CgbRevision::RevA
+                            | CgbRevision::RevB
+                            | CgbRevision::RevC
+                    );
+                let mut delay = if pre_cgb_d && self.double_speed {
+                    6 + lf_div
                 } else {
-                    6
+                    6 - lf_div
                 };
-                let mut delay = base_delay - lf_div;
                 if delay < 0 {
                     delay = 0;
                 }
+
                 ch.delay = delay;
                 ch.sample_countdown = ((ch.sample_length ^ 0x07FF) as i32) * 2 + ch.delay;
                 ch.sample_surpressed = ch.dac_enabled && !force_unsurpressed;
@@ -2384,6 +2392,14 @@ impl Apu {
                     .wrapping_add(self.sweep_shadow_freq)
                     .wrapping_add(negate_add);
                 self.ch1.sample_length = new_freq & 0x07FF;
+                // The sweep frequency change runs between the 2 MHz channel
+                // step and the dot-clock tick.  If clock_2mhz just reloaded
+                // sample_countdown from the old sample_length, re-sync it to
+                // the new frequency so the next edge uses the correct period.
+                if self.ch1.just_reloaded {
+                    self.ch1.sample_countdown =
+                        SquareChannel::sample_countdown_from_length(self.ch1.sample_length);
+                }
             }
 
             if self.ch1_restart_hold == 0 {
