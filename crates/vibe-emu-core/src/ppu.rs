@@ -412,19 +412,23 @@ impl Ppu {
     fn record_dmg_bgp_event(&mut self, mode3_t: u16, val: u8) {
         // Convert MODE3 timestamp to an approximate output pixel coordinate.
         //
-        // The test ROM writes BGP every 16 T-cycles and expects 16-pixel wide
-        // bands across the 160px line. If we scale timestamps across the full
-        // MODE3 duration (172 cycles), the pattern compresses horizontally.
-        let adjusted_t = if self.dmg_compat {
-            // In CGB DMG-compat mode, there's a 4-cycle offset between when
-            // the CPU write is visible and when the PPU applies it. Compensate
-            // by subtracting 4, then add 1 for the next-pixel effect.
-            // Net effect: -3 cycles (or equivalently, +1 to x after -4 to t).
-            mode3_t.saturating_sub(3)
+        // The pipeline delay accounts for the latency between a CPU write and
+        // the PPU applying the new palette. On CGB in DMG-compat mode the
+        // pixel pipeline takes several additional T-cycles of setup and FIFO
+        // warmup before the first visible pixel is output. Writes arriving
+        // during this warmup should apply from pixel 0 onward, but the small
+        // CGB delay constant (3) does not fully cover the warmup window.
+        // DMG's larger delay (6) naturally saturates early writes to pixel 0.
+        let scx_fine = (self.scx & 7) as u16;
+        let delay = if self.dmg_compat { 3u16 } else { 6u16 };
+        // CGB DMG-compat warmup: 2 extra T-cycles covers writes that land
+        // after the delay constant but before pixel 0 is actually output.
+        let warmup_guard = if self.dmg_compat { 2u16 } else { 0u16 };
+        let warmup = delay + scx_fine + warmup_guard;
+        let adjusted_t = if mode3_t < warmup {
+            0
         } else {
-            // Pure DMG has a pipeline delay (~6 cycles) between when the CPU
-            // writes BGP and when the PPU applies it to subsequent pixels.
-            mode3_t.saturating_sub(6)
+            mode3_t - delay - scx_fine
         };
         let x = adjusted_t.min((SCREEN_WIDTH - 1) as u16) as u8;
         if self.dmg_bgp_event_count >= DMG_BGP_EVENTS_MAX {
