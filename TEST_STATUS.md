@@ -45,10 +45,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1754 | 1983 | 0 | 0 | 3737 | 46.9% |
+| ROM Test Suites | 1760 | 1984 | 0 | 0 | 3744 | 47.0% |
 | Integration Tests | 153 | 2 | 0 | 0 | 155 | 98.7% |
 | Unit Tests | 50 | 0 | 0 | 0 | 50 | 100.0% |
-| **Overall** | 1957 | 1985 | 0 | 0 | 3942 | 49.6% |
+| **Overall** | 1963 | 1986 | 0 | 0 | 3949 | 49.7% |
 
 ## Detailed Results
 
@@ -150,7 +150,7 @@ Combined exit code: 101
 | `dmg_sound_11_regs_after_power` | ✅ Pass |
 | `dmg_sound_12_wave_write_while_on` | ✅ Pass |
 
-#### gambatte (1524/3422 passing, 44.5%)
+#### gambatte (1529/3429 passing, 44.6%)
 
 | Test | Result |
 | --- | --- |
@@ -1368,6 +1368,7 @@ Combined exit code: 101
 | `sprites/space/10spritesPrLine_wx6_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/10spritesPrLine_wx7_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/1pos8_8pos9_wx08_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
+| `sprites/space/2overlap1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/2overlap1_offset4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/2overlap1_offset5_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/2overlap2_offset4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
@@ -1385,9 +1386,11 @@ Combined exit code: 101
 | `sprites/space/3overlap2_scx1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx2_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx3_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
+| `sprites/space/3overlap2_scx4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx5_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx6_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx7_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
+| `sprites/space/3overlap3_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap3_scx1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap3_scx2_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap3_scx3_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
@@ -1397,11 +1400,13 @@ Combined exit code: 101
 | `sprites/space/3overlap3_scx7_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
+| `sprites/space/3overlap4_scx2_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx3_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx5_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx6_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx7_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
+| `sprites/space/3overlap5_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap5_rev_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap5_scx1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap5_scx2_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
@@ -3251,6 +3256,7 @@ Combined exit code: 101
 | `sprites/space/2overlap3_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap4_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap5_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
+| `sprites/space/2overlap6_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap7_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap8_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap8_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
@@ -3281,6 +3287,7 @@ Combined exit code: 101
 | `sprites/space/3overlap4_scx5_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap4_scx6_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap4_scx7_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
+| `sprites/space/3overlap5_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap5_rev_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap5_scx1_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap5_scx2_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
@@ -3602,13 +3609,14 @@ Combined exit code: 101
 | --- | --- |
 | `latch_rtc_png` | ✅ Pass |
 
-#### mealybug_tearoom (3/77 passing, 3.9%)
+#### mealybug_tearoom (4/77 passing, 5.2%)
 
 | Test | Result |
 | --- | --- |
 | `ppu_m2_win_en_toggle_dmg_blob` | ✅ Pass |
 | `ppu_m3_bgp_change_dmg_blob` | ✅ Pass |
 | `ppu_m3_bgp_change_sprites_dmg_blob` | ✅ Pass |
+| `ppu_m3_lcdc_bg_en_change_dmg_blob` | ✅ Pass |
 | `dma_hdma_during_halt_c` | ❌ Fail |
 | `dma_hdma_timing_c` | ❌ Fail |
 | `mbc_mbc3_rtc` | ❌ Fail |
@@ -3622,7 +3630,6 @@ Combined exit code: 101
 | `ppu_m3_lcdc_bg_en_change_cgb_c` | ❌ Fail |
 | `ppu_m3_lcdc_bg_en_change_cgb_d` | ❌ Fail |
 | `ppu_m3_lcdc_bg_en_change_dmg_b` | ❌ Fail |
-| `ppu_m3_lcdc_bg_en_change_dmg_blob` | ❌ Fail |
 | `ppu_m3_lcdc_bg_map_change2_cgb_c` | ❌ Fail |
 | `ppu_m3_lcdc_bg_map_change_cgb_c` | ❌ Fail |
 | `ppu_m3_lcdc_bg_map_change_cgb_d` | ❌ Fail |

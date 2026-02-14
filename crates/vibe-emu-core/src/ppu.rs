@@ -208,10 +208,11 @@ pub struct Ppu {
     dmg_bgp_events: [DmgBgpEvent; DMG_BGP_EVENTS_MAX],
     dmg_hblank_render_pending: bool,
 
-    // --- CGB timing quirks ---
+    // --- Mode3 LCDC timing quirks ---
     //
-    // Some CGB test ROMs rely on mid-scanline LCDC writes changing the tile
-    // fetch pipeline (notably LCDC bit 4 TILE_SEL mixing/glitches).
+    // Mid-scanline LCDC writes can affect rendering timing and fetch behavior.
+    // CGB relies on this for TILE_SEL bit mixing/glitches; DMG relies on this
+    // for per-pixel BG enable behavior when bit 0 changes during mode 3.
     mode3_lcdc_base: u8,
     mode3_lcdc_event_count: usize,
     mode3_lcdc_events: [Mode3LcdcEvent; MODE3_LCDC_EVENTS_MAX],
@@ -231,7 +232,10 @@ const MODE3_LCDC_EVENTS_MAX: usize = 64;
 #[derive(Copy, Clone, Default)]
 struct Mode3LcdcEvent {
     t: u16,
+    x: u8,
     val: u8,
+    bg_fifo: u8,
+    fetcher_state: u8,
 }
 
 /// Default DMG palette colors in 0x00RRGGBB order for the `pixels` crate.
@@ -411,11 +415,53 @@ impl Ppu {
 
     fn record_mode3_lcdc_event(&mut self, mode3_t: u16, val: u8) {
         let t = mode3_t.min(self.mode3_target_cycles.saturating_sub(1));
+        let x = if !self.cgb && (self.lcdc & 0x02) != 0 {
+            // On DMG, use the live mode-3 pixel position so LCDC writes track
+            // sprite-stall timing similarly to mid-line BGP writes.
+            let phase = (mode3_t >> 2) & 1;
+            let raw = self
+                .mode3_lcd_x
+                .saturating_add(phase)
+                .min((SCREEN_WIDTH - 1) as u16) as u8;
+            let lag = if self.ly == 0 { 2 } else { 6 };
+            let mut x = raw.saturating_sub(lag);
+            if self.dmg_compat || self.cgb {
+                x
+            } else if self.mode3_lcdc_event_count == 0 && self.sprite_count > 0 {
+                let first_x = self.line_sprites[0].x;
+                let offset = if first_x >= 0 {
+                    first_x - 3
+                } else if first_x >= -5 {
+                    1
+                } else {
+                    0
+                };
+                let xi = (x as i16 + offset).clamp(0, (SCREEN_WIDTH - 1) as i16);
+                x = xi as u8;
+                x
+            } else {
+                x
+            }
+        } else {
+            t.min((SCREEN_WIDTH - 1) as u16) as u8
+        };
         if self.mode3_lcdc_event_count >= MODE3_LCDC_EVENTS_MAX {
-            self.mode3_lcdc_events[MODE3_LCDC_EVENTS_MAX - 1] = Mode3LcdcEvent { t, val };
+            self.mode3_lcdc_events[MODE3_LCDC_EVENTS_MAX - 1] = Mode3LcdcEvent {
+                t,
+                x,
+                val,
+                bg_fifo: self.mode3_bg_fifo,
+                fetcher_state: self.mode3_fetcher_state,
+            };
             return;
         }
-        self.mode3_lcdc_events[self.mode3_lcdc_event_count] = Mode3LcdcEvent { t, val };
+        self.mode3_lcdc_events[self.mode3_lcdc_event_count] = Mode3LcdcEvent {
+            t,
+            x,
+            val,
+            bg_fifo: self.mode3_bg_fifo,
+            fetcher_state: self.mode3_fetcher_state,
+        };
         self.mode3_lcdc_event_count += 1;
     }
 
@@ -534,6 +580,41 @@ impl Ppu {
             } else {
                 break;
             }
+        }
+        current
+    }
+
+    #[inline]
+    fn dmg_lcdc_for_pixel(&self, x: usize) -> u8 {
+        let mut current = self.mode3_lcdc_base;
+        let x = x as u8;
+        let dmg_obj_mode3 =
+            !self.cgb && (self.mode3_lcdc_base & 0x02) != 0 && self.sprite_count > 0;
+        for (i, ev) in self.mode3_lcdc_events[..self.mode3_lcdc_event_count]
+            .iter()
+            .enumerate()
+        {
+            let transition_x = if dmg_obj_mode3 {
+                let mut tx = ev.x;
+                if i > 0 {
+                    // DMG OBJ lines have a one-to-two pixel transition skew that
+                    // depends on the fetcher phase when LCDC is written.
+                    if self.ly == 0 {
+                        tx = tx.saturating_add(2);
+                    } else if ev.fetcher_state == 6 && ev.bg_fifo >= 2 {
+                        tx = tx.saturating_add(1);
+                    } else if ev.fetcher_state == 4 && ev.bg_fifo >= 7 {
+                        tx = tx.saturating_sub(1);
+                    }
+                }
+                tx
+            } else {
+                ev.x
+            };
+            if x < transition_x {
+                break;
+            }
+            current = ev.val;
         }
         current
     }
@@ -2208,7 +2289,7 @@ impl Ppu {
         let bg_enabled = if cgb_render {
             true
         } else {
-            self.lcdc & 0x01 != 0
+            self.mode3_lcdc_base & 0x01 != 0
         };
         let master_priority = if cgb_render {
             self.lcdc & 0x01 != 0
@@ -2259,6 +2340,9 @@ impl Ppu {
 
                 // draw background
                 for x in 0..SCREEN_WIDTH as u16 {
+                    if (self.dmg_lcdc_for_pixel(x as usize) & 0x01) == 0 {
+                        continue;
+                    }
                     let scx = self.scx as u16;
                     let px = x.wrapping_add(scx) & 0xFF;
                     let tile_col = (px / 8) as usize;
@@ -2302,6 +2386,9 @@ impl Ppu {
                     };
                     let window_y = self.win_line_counter as usize;
                     for x in start_x..SCREEN_WIDTH as u16 {
+                        if (self.dmg_lcdc_for_pixel(x as usize) & 0x01) == 0 {
+                            continue;
+                        }
                         let window_x = (x as i16 - window_origin_x) as usize;
                         let tile_col = window_x / 8;
                         let tile_row = window_y / 8;
@@ -2383,6 +2470,8 @@ impl Ppu {
                         continue;
                     }
                     let bg_zero = if !bg_enabled {
+                        true
+                    } else if !cgb_render && (self.dmg_lcdc_for_pixel(sx as usize) & 0x01) == 0 {
                         true
                     } else {
                         self.line_color_zero[sx as usize]
