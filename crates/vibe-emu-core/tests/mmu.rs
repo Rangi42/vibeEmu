@@ -1,4 +1,10 @@
-use vibe_emu_core::{cartridge::Cartridge, mmu::Mmu};
+mod common;
+
+use vibe_emu_core::{
+    cartridge::Cartridge,
+    hardware::{CgbRevision, DmgRevision},
+    mmu::Mmu,
+};
 
 #[test]
 fn hdma_wait_loop_observes_idle_ff55() {
@@ -122,6 +128,63 @@ fn cgb_boot_rom_mapping() {
     assert_eq!(mmu.read_byte(0x01FF), 0xC3);
     assert_eq!(mmu.read_byte(0x0200), 0xC4);
     assert_eq!(mmu.read_byte(0x08FF), 0xC5);
+}
+
+#[test]
+fn dmg_post_boot_vram_matches_real_boot_rom() {
+    let boot_rom = std::fs::read(common::dmg_boot_rom_path()).expect("boot ROM not found");
+    assert!(
+        boot_rom.len() >= 0x00D8,
+        "unexpected DMG boot ROM size: {}",
+        boot_rom.len()
+    );
+
+    // The DMG boot ROM stores the canonical Nintendo logo bytes here and
+    // compares cart header bytes against this block.
+    let logo = &boot_rom[0x00A8..0x00D8];
+
+    let mut rom = vec![0u8; 0x8000];
+    rom[0x0104..0x0134].copy_from_slice(logo);
+
+    let mut mmu = Mmu::new_with_revisions(false, DmgRevision::default(), CgbRevision::default());
+    mmu.load_cart(Cartridge::load(rom));
+    let vram = &mmu.ppu.vram[0];
+
+    fn expand_nibble(nibble: u8) -> u8 {
+        let mut out = 0u8;
+        for i in 0..4 {
+            let bit = (nibble >> (3 - i)) & 1;
+            out |= bit << (7 - i * 2);
+            out |= bit << (6 - i * 2);
+        }
+        out
+    }
+
+    let mut addr = 0x0010usize;
+    for &src in logo {
+        for nibble in [src >> 4, src & 0x0F] {
+            let expanded = expand_nibble(nibble);
+            assert_eq!(vram[addr], expanded);
+            assert_eq!(vram[addr + 1], 0);
+            assert_eq!(vram[addr + 2], expanded);
+            assert_eq!(vram[addr + 3], 0);
+            addr += 4;
+        }
+    }
+
+    let trademark = [0x3C, 0x42, 0xB9, 0xA5, 0xB9, 0xA5, 0x42, 0x3C];
+    for (i, &b) in trademark.iter().enumerate() {
+        assert_eq!(vram[0x0190 + i * 2], b);
+        assert_eq!(vram[0x0191 + i * 2], 0);
+    }
+
+    assert_eq!(vram[0x1910], 0x19);
+    for i in 0..12usize {
+        assert_eq!(vram[0x192F - i], (0x18 - i as u8));
+    }
+    for i in 0..12usize {
+        assert_eq!(vram[0x190F - i], (0x0C - i as u8));
+    }
 }
 
 #[test]

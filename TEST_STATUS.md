@@ -45,10 +45,10 @@ Combined exit code: 101
 
 | Category | Passed | Failed | Ignored | Measured | Total | Pass % |
 | --- | --- | --- | --- | --- | --- | --- |
-| ROM Test Suites | 1738 | 1988 | 0 | 0 | 3726 | 46.6% |
-| Integration Tests | 165 | 2 | 0 | 0 | 167 | 98.8% |
+| ROM Test Suites | 1754 | 1983 | 0 | 0 | 3737 | 46.9% |
+| Integration Tests | 153 | 2 | 0 | 0 | 155 | 98.7% |
 | Unit Tests | 50 | 0 | 0 | 0 | 50 | 100.0% |
-| **Overall** | 1953 | 1990 | 0 | 0 | 3943 | 49.5% |
+| **Overall** | 1957 | 1985 | 0 | 0 | 3942 | 49.6% |
 
 ## Detailed Results
 
@@ -150,7 +150,7 @@ Combined exit code: 101
 | `dmg_sound_11_regs_after_power` | ✅ Pass |
 | `dmg_sound_12_wave_write_while_on` | ✅ Pass |
 
-#### gambatte (1527/3424 passing, 44.6%)
+#### gambatte (1524/3422 passing, 44.5%)
 
 | Test | Result |
 | --- | --- |
@@ -1100,11 +1100,13 @@ Combined exit code: 101
 | `sound/ch1_init_reset_sweep_counter_timing_nr52_1_dmg08_cgb04c_out1.gbc` | ✅ Pass |
 | `sound/ch1_init_reset_sweep_counter_timing_nr52_2_dmg08_out0_cgb04c_out1.gbc` | ✅ Pass |
 | `sound/ch1_init_reset_sweep_counter_timing_nr52_4_dmg08_cgb04c_out0.gbc` | ✅ Pass |
+| `sound/ch1_late_div_write_nr52_1a_dmg08_cgb04c_outF1.gbc` | ✅ Pass |
 | `sound/ch1_late_div_write_nr52_1b_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch1_late_div_write_nr52_2a_dmg08_cgb04c_outF1.gbc` | ✅ Pass |
 | `sound/ch1_late_div_write_nr52_2b_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
 | `sound/ch2_div_write_reset_length_counter_timing_nr52_1_dmg08_cgb04c_outF2.gbc` | ✅ Pass |
 | `sound/ch2_div_write_reset_length_counter_timing_nr52_2_dmg08_cgb04c_outF0.gbc` | ✅ Pass |
+| `sound/ch2_init_env_counter_timing_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_pos_1_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_pos_2_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
 | `sound/ch2_init_reset_env_counter_timing_13_dmg08_cgb04c_outaudio0.gbc` | ✅ Pass |
@@ -1366,7 +1368,6 @@ Combined exit code: 101
 | `sprites/space/10spritesPrLine_wx6_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/10spritesPrLine_wx7_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/1pos8_8pos9_wx08_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
-| `sprites/space/2overlap1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/2overlap1_offset4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/2overlap1_offset5_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/2overlap2_offset4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
@@ -1384,11 +1385,9 @@ Combined exit code: 101
 | `sprites/space/3overlap2_scx1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx2_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx3_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
-| `sprites/space/3overlap2_scx4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx5_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx6_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap2_scx7_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
-| `sprites/space/3overlap3_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap3_scx1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap3_scx2_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap3_scx3_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
@@ -1398,13 +1397,11 @@ Combined exit code: 101
 | `sprites/space/3overlap3_scx7_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
-| `sprites/space/3overlap4_scx2_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx3_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx4_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx5_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx6_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap4_scx7_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
-| `sprites/space/3overlap5_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap5_rev_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap5_scx1_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
 | `sprites/space/3overlap5_scx2_m3stat_ds_2_cgb04c_out0.gbc` | ✅ Pass |
@@ -2972,6 +2969,7 @@ Combined exit code: 101
 | `sound/ch2_init_reset_env_counter_timing_14_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_15_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_16_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
+| `sound/ch2_init_reset_env_counter_timing_2_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_4_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_5_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_env_counter_timing_6_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
@@ -2981,6 +2979,7 @@ Combined exit code: 101
 | `sound/ch2_init_reset_length_counter_timing_2_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_3_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_5_dmg08_cgb04c_outaudio1.gbc` | ❌ Fail |
+| `sound/ch2_init_reset_length_counter_timing_6_dmg08_outaudio1_cgb04c_outaudio0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_7_dmg08_outaudio0_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_nr52_1_dmg08_out2_cgb04c_out0.gbc` | ❌ Fail |
 | `sound/ch2_init_reset_length_counter_timing_nr52_2_dmg08_cgb04c_out0.gbc` | ❌ Fail |
@@ -3037,6 +3036,7 @@ Combined exit code: 101
 | `speedchange/speedchange2_nop_ch1_duty0_pos6_to_pos7_timing_ds_2_cgb04c_outaudio1.gbc` | ❌ Fail |
 | `speedchange/speedchange2_nop_lcdoff_m2int_m3stat_scx3_1_cgb04c_out3.gbc` | ❌ Fail |
 | `speedchange/speedchange2_nop_lcdoff_nop_m2int_m3stat_scx1_1_cgb04c_out3.gbc` | ❌ Fail |
+| `speedchange/speedchange2_nop_lcdoff_nop_m2int_m3stat_scx4_1_cgb04c_out3.gbc` | ❌ Fail |
 | `speedchange/speedchange2_nop_lcdoff_nopx2_m2int_m3stat_scx3_1_cgb04c_out3.gbc` | ❌ Fail |
 | `speedchange/speedchange2_nop_ly44_m3_m3stat_scx2_1_cgb04c_outC3.gbc` | ❌ Fail |
 | `speedchange/speedchange2_nop_ly44_m3_m3stat_scx2_2_cgb04c_outC0.gbc` | ❌ Fail |
@@ -3251,7 +3251,6 @@ Combined exit code: 101
 | `sprites/space/2overlap3_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap4_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap5_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
-| `sprites/space/2overlap6_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap7_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap8_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/2overlap8_offset4_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
@@ -3282,7 +3281,6 @@ Combined exit code: 101
 | `sprites/space/3overlap4_scx5_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap4_scx6_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap4_scx7_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
-| `sprites/space/3overlap5_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap5_rev_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap5_scx1_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
 | `sprites/space/3overlap5_scx2_m3stat_ds_1_cgb04c_out3.gbc` | ❌ Fail |
@@ -3604,11 +3602,13 @@ Combined exit code: 101
 | --- | --- |
 | `latch_rtc_png` | ✅ Pass |
 
-#### mealybug_tearoom (1/77 passing, 1.3%)
+#### mealybug_tearoom (3/77 passing, 3.9%)
 
 | Test | Result |
 | --- | --- |
 | `ppu_m2_win_en_toggle_dmg_blob` | ✅ Pass |
+| `ppu_m3_bgp_change_dmg_blob` | ✅ Pass |
+| `ppu_m3_bgp_change_sprites_dmg_blob` | ✅ Pass |
 | `dma_hdma_during_halt_c` | ❌ Fail |
 | `dma_hdma_timing_c` | ❌ Fail |
 | `mbc_mbc3_rtc` | ❌ Fail |
@@ -3616,10 +3616,8 @@ Combined exit code: 101
 | `ppu_m2_win_en_toggle_cgb_d` | ❌ Fail |
 | `ppu_m3_bgp_change_cgb_c` | ❌ Fail |
 | `ppu_m3_bgp_change_cgb_d` | ❌ Fail |
-| `ppu_m3_bgp_change_dmg_blob` | ❌ Fail |
 | `ppu_m3_bgp_change_sprites_cgb_c` | ❌ Fail |
 | `ppu_m3_bgp_change_sprites_cgb_d` | ❌ Fail |
-| `ppu_m3_bgp_change_sprites_dmg_blob` | ❌ Fail |
 | `ppu_m3_lcdc_bg_en_change2_cgb_c` | ❌ Fail |
 | `ppu_m3_lcdc_bg_en_change_cgb_c` | ❌ Fail |
 | `ppu_m3_lcdc_bg_en_change_cgb_d` | ❌ Fail |
@@ -3693,6 +3691,24 @@ Combined exit code: 101
 | `mem_timing_modify` | ✅ Pass |
 | `mem_timing_read` | ✅ Pass |
 | `mem_timing_write` | ✅ Pass |
+
+#### mmu (13/13 passing, 100.0%)
+
+| Test | Result |
+| --- | --- |
+| `boot_rom_disable` | ✅ Pass |
+| `cartridge_ram_access` | ✅ Pass |
+| `cgb_boot_rom_mapping` | ✅ Pass |
+| `dmg_post_boot_vram_matches_real_boot_rom` | ✅ Pass |
+| `hdma_wait_loop_observes_idle_ff55` | ✅ Pass |
+| `mbc1_ram_enable` | ✅ Pass |
+| `mbc1_rom_bank_switching` | ✅ Pass |
+| `oam_dma_initial_delay` | ✅ Pass |
+| `oam_dma_restart_timing` | ✅ Pass |
+| `oam_dma_transfer` | ✅ Pass |
+| `vram_bank_switch` | ✅ Pass |
+| `vram_oam_access_blocking` | ✅ Pass |
+| `wram_echo_and_bank_switch` | ✅ Pass |
 
 #### mooneye_acceptance (79/85 passing, 92.9%)
 
@@ -3796,7 +3812,7 @@ Combined exit code: 101
 | --- | --- |
 | `rtc_invalid_banks_png` | ✅ Pass |
 
-#### same_suite (69/78 passing, 88.5%)
+#### same_suite (73/78 passing, 93.6%)
 
 | Test | Result |
 | --- | --- |
@@ -3807,6 +3823,7 @@ Combined exit code: 101
 | `same_suite__apu__channel_1__channel_1_duty_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_extra_length_clocking_cgb0B_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_freq_change_gb` | ✅ Pass |
+| `same_suite__apu__channel_1__channel_1_freq_change_timing_A_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_nrx2_glitch_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_nrx2_speed_change_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_restart_gb` | ✅ Pass |
@@ -3814,6 +3831,8 @@ Combined exit code: 101
 | `same_suite__apu__channel_1__channel_1_stop_div_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_stop_restart_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_sweep_gb` | ✅ Pass |
+| `same_suite__apu__channel_1__channel_1_sweep_restart_2_gb` | ✅ Pass |
+| `same_suite__apu__channel_1__channel_1_sweep_restart_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_volume_div_gb` | ✅ Pass |
 | `same_suite__apu__channel_1__channel_1_volume_gb` | ✅ Pass |
 | `same_suite__apu__channel_2__channel_2_align_cpu_gb` | ✅ Pass |
@@ -3837,6 +3856,7 @@ Combined exit code: 101
 | `same_suite__apu__channel_3__channel_3_first_sample_gb` | ✅ Pass |
 | `same_suite__apu__channel_3__channel_3_freq_change_delay_gb` | ✅ Pass |
 | `same_suite__apu__channel_3__channel_3_restart_delay_gb` | ✅ Pass |
+| `same_suite__apu__channel_3__channel_3_restart_during_delay_gb` | ✅ Pass |
 | `same_suite__apu__channel_3__channel_3_restart_stop_delay_gb` | ✅ Pass |
 | `same_suite__apu__channel_3__channel_3_shift_delay_gb` | ✅ Pass |
 | `same_suite__apu__channel_3__channel_3_shift_skip_delay_gb` | ✅ Pass |
@@ -3869,13 +3889,9 @@ Combined exit code: 101
 | `same_suite__dma__hdma_mode0_gb` | ✅ Pass |
 | `same_suite__interrupt__ei_delay_halt_gb` | ✅ Pass |
 | `same_suite__ppu__blocking_bgpi_increase_gb` | ✅ Pass |
-| `same_suite__apu__channel_1__channel_1_freq_change_timing_A_gb` | ❌ Fail |
 | `same_suite__apu__channel_1__channel_1_freq_change_timing_cgb0BC_gb` | ❌ Fail |
 | `same_suite__apu__channel_1__channel_1_freq_change_timing_cgbDE_gb` | ❌ Fail |
-| `same_suite__apu__channel_1__channel_1_sweep_restart_2_gb` | ❌ Fail |
-| `same_suite__apu__channel_1__channel_1_sweep_restart_gb` | ❌ Fail |
 | `same_suite__apu__channel_3__channel_3_extra_length_clocking_cgbB_gb` | ❌ Fail |
-| `same_suite__apu__channel_3__channel_3_restart_during_delay_gb` | ❌ Fail |
 | `same_suite__sgb__command_mlt_req_1_incrementing_gb` | ❌ Fail |
 | `same_suite__sgb__command_mlt_req_gb` | ❌ Fail |
 
@@ -4022,23 +4038,6 @@ Combined exit code: 101
 | `speed_switch_stall_advances_dot_div_but_not_cpu_div` | ✅ Pass |
 | `stop_resets_div_and_pauses` | ✅ Pass |
 | `stop_speed_switch` | ✅ Pass |
-
-#### mmu (12/12 passing, 100.0%)
-
-| Test | Result |
-| --- | --- |
-| `boot_rom_disable` | ✅ Pass |
-| `cartridge_ram_access` | ✅ Pass |
-| `cgb_boot_rom_mapping` | ✅ Pass |
-| `hdma_wait_loop_observes_idle_ff55` | ✅ Pass |
-| `mbc1_ram_enable` | ✅ Pass |
-| `mbc1_rom_bank_switching` | ✅ Pass |
-| `oam_dma_initial_delay` | ✅ Pass |
-| `oam_dma_restart_timing` | ✅ Pass |
-| `oam_dma_transfer` | ✅ Pass |
-| `vram_bank_switch` | ✅ Pass |
-| `vram_oam_access_blocking` | ✅ Pass |
-| `wram_echo_and_bank_switch` | ✅ Pass |
 
 #### ppu (15/15 passing, 100.0%)
 

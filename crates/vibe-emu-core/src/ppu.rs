@@ -106,6 +106,12 @@ const DMG_STAGE2_LY1_TICK: u16 = 452;
 // 908 T-cycles satisfies both observations.
 const DMG_STAGE5_LY2_TICK: u16 = 908;
 // (no DMG-specific VRAM block ticks currently modeled here)
+const DMG_BOOT_LOGO_BYTES: usize = 0x30;
+const DMG_BOOT_LOGO_VRAM_BASE: usize = 0x0010;
+const DMG_BOOT_TRADEMARK_VRAM_BASE: usize = 0x0190;
+const DMG_BOOT_LOGO_MAP_9910: usize = 0x1910;
+const DMG_BOOT_LOGO_MAP_992F: usize = 0x192F;
+const DMG_BOOT_TRADEMARK_BYTES: [u8; 8] = [0x3C, 0x42, 0xB9, 0xA5, 0xB9, 0xA5, 0x42, 0x3C];
 
 pub struct Ppu {
     pub vram: [[u8; VRAM_BANK_SIZE]; 2],
@@ -422,13 +428,23 @@ impl Ppu {
         //
         // Otherwise, keep the linear timing model that works well for no-OBJ
         // DMG lines and CGB DMG-compat behavior.
-        let x = if !self.cgb && (self.lcdc & 0x02) != 0 {
-            if self.ly == 0 {
+        let mut x = if !self.cgb && (self.lcdc & 0x02) != 0 {
+            if self.sprite_count > 0 {
+                let phase = (mode3_t >> 2) & 1;
+                let raw = self
+                    .mode3_lcd_x
+                    .saturating_add(phase)
+                    .min((SCREEN_WIDTH - 1) as u16) as u8;
+                // With active sprites on DMG, palette writes trail visible output
+                // by a few pixels due to fetcher stalls and write phasing.
+                let lag = if self.ly == 0 { 2 } else { 6 };
+                raw.saturating_sub(lag)
+            } else if self.ly == 0 {
                 // On DMG line 0, Mode 2 -> Mode 3 interrupt/write phasing is
                 // offset versus subsequent lines; map by raw mode-3 dot time.
                 mode3_t.saturating_sub(11).min((SCREEN_WIDTH - 1) as u16) as u8
             } else {
-                let phase = ((mode3_t >> 2) & 1) as u16;
+                let phase = (mode3_t >> 2) & 1;
                 (self
                     .mode3_lcd_x
                     .saturating_add(phase)
@@ -448,6 +464,31 @@ impl Ppu {
             };
             adjusted_t.min((SCREEN_WIDTH - 1) as u16) as u8
         };
+        if !self.cgb
+            && (self.lcdc & 0x02) != 0
+            && self.sprite_count > 0
+            && self.dmg_bgp_event_count == 0
+        {
+            // The first BGP write in OBJ-heavy lines aligns with the first
+            // visible output pixels, which are delayed when the first sprite is
+            // positioned inside the left border.
+            let first_x = self.line_sprites[0].x.clamp(0, 5) as u8;
+            x = x.saturating_add(first_x);
+        }
+        if !self.cgb
+            && (self.lcdc & 0x02) != 0
+            && self.sprite_count > 0
+            && self.dmg_bgp_event_count == 1
+        {
+            let first_x_raw = self.line_sprites[0].x.max(0) as u8;
+            if first_x_raw >= 8 {
+                // The second write crosses an OBJ/fetch boundary when the first
+                // sprite starts near the left edge; transition leads visible
+                // output by up to two extra pixels as X approaches 8.
+                let extra = 10u8.saturating_sub(first_x_raw).min(2);
+                x = x.saturating_sub(2 + extra);
+            }
+        }
         if self.dmg_bgp_event_count >= DMG_BGP_EVENTS_MAX {
             // Saturate; keep the newest event so behavior remains stable.
             self.dmg_bgp_events[DMG_BGP_EVENTS_MAX - 1] = DmgBgpEvent { t: mode3_t, x, val };
@@ -462,19 +503,29 @@ impl Ppu {
         let mut current = self.dmg_line_bgp_base;
         let x = x as u8;
         let dmg_obj_phase_mix = !self.cgb && (self.lcdc & 0x02) != 0;
-        for ev in self.dmg_bgp_events[..self.dmg_bgp_event_count].iter() {
+        for (i, ev) in self.dmg_bgp_events[..self.dmg_bgp_event_count]
+            .iter()
+            .enumerate()
+        {
             let phase = if dmg_obj_phase_mix {
                 ((ev.t >> 2) & 1) as u8
             } else {
                 0
             };
-            let transition_x = ev.x.saturating_sub(phase);
+            let transition_x = if dmg_obj_phase_mix && self.sprite_count > 0 && i == 0 {
+                ev.x
+            } else {
+                ev.x.saturating_sub(phase)
+            };
             if x < transition_x {
                 break;
             }
             // DMG OBJ-enabled lines can output a one-pixel transitional shade
             // when BGP changes on specific fetch phases.
-            if dmg_obj_phase_mix && ev.t != 0 && x == transition_x && !(self.ly == 0 && phase == 1)
+            if dmg_obj_phase_mix
+                && ev.t != 0
+                && x == transition_x
+                && !(self.ly == 0 && phase == 1 && self.sprite_count == 0)
             {
                 return current | ev.val;
             }
@@ -1130,6 +1181,62 @@ impl Ppu {
         self.lyc_eq_ly = self.ly_for_comparison == self.lyc;
         self.stat_irq_line = false;
         self.dmg_mode2_vblank_irq_pending = false;
+    }
+
+    /// Apply the DMG boot ROM's logo/tile-map writes when skipping boot ROM
+    /// execution and starting directly in post-boot state.
+    ///
+    /// `logo` is the cartridge-header logo slice (normally `0x0104..0x0134`).
+    pub(crate) fn apply_dmg_post_boot_vram(&mut self, logo: &[u8]) {
+        if self.cgb {
+            return;
+        }
+
+        let mut addr = DMG_BOOT_LOGO_VRAM_BASE;
+        for i in 0..DMG_BOOT_LOGO_BYTES {
+            let src = logo.get(i).copied().unwrap_or(0);
+            for nibble in [src >> 4, src & 0x0F] {
+                let expanded = Self::dmg_boot_expand_nibble(nibble);
+                self.vram[0][addr] = expanded;
+                self.vram[0][addr + 2] = expanded;
+                addr += 4;
+            }
+        }
+
+        for (i, &b) in DMG_BOOT_TRADEMARK_BYTES.iter().enumerate() {
+            self.vram[0][DMG_BOOT_TRADEMARK_VRAM_BASE + i * 2] = b;
+        }
+
+        // Match the DMG boot ROM tile-map setup around $9900/$9920.
+        self.vram[0][DMG_BOOT_LOGO_MAP_9910] = 0x19;
+        let mut a: u8 = 0x19;
+        let mut map_addr = DMG_BOOT_LOGO_MAP_992F;
+        let mut c: u8 = 0x0C;
+        loop {
+            a = a.wrapping_sub(1);
+            if a == 0 {
+                break;
+            }
+            self.vram[0][map_addr] = a;
+            map_addr = map_addr.saturating_sub(1);
+            c = c.wrapping_sub(1);
+            if c != 0 {
+                continue;
+            }
+            map_addr = (map_addr & 0x1F00) | 0x000F;
+            c = 0x0C;
+        }
+    }
+
+    #[inline]
+    fn dmg_boot_expand_nibble(nibble: u8) -> u8 {
+        let mut out = 0u8;
+        for i in 0..4 {
+            let bit = (nibble >> (3 - i)) & 1;
+            out |= bit << (7 - i * 2);
+            out |= bit << (6 - i * 2);
+        }
+        out
     }
 
     /// Load the default CGB palettes used when running a DMG cartridge in

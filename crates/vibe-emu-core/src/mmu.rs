@@ -123,6 +123,8 @@ pub struct Mmu {
     pending_delay: u16,
     /// Remaining stall cycles after a General DMA
     gdma_cycles: u32,
+    /// True when this MMU was created in the "skip boot ROM" post-boot state.
+    post_boot_state: bool,
     cgb_mode: bool,
     cgb_revision: CgbRevision,
     dmg_revision: DmgRevision,
@@ -233,6 +235,7 @@ impl Mmu {
             pending_dma: None,
             pending_delay: 0,
             gdma_cycles: 0,
+            post_boot_state: true,
             cgb_mode: cgb,
             cgb_revision,
             dmg_revision,
@@ -311,6 +314,7 @@ impl Mmu {
             pending_dma: None,
             pending_delay: 0,
             gdma_cycles: 0,
+            post_boot_state: false,
             cgb_mode: cgb,
             cgb_revision,
             dmg_revision,
@@ -332,6 +336,10 @@ impl Mmu {
 
     pub fn load_cart(&mut self, cart: Cartridge) {
         let is_dmg = !cart.cgb;
+        if self.post_boot_state && !self.cgb_mode {
+            let logo = cart.rom.get(0x0104..0x0134).unwrap_or(&[]);
+            self.ppu.apply_dmg_post_boot_vram(logo);
+        }
         self.cart = Some(cart);
         if self.cgb_mode && is_dmg {
             self.ppu.apply_dmg_compatibility_palettes();
