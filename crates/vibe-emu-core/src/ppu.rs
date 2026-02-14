@@ -619,6 +619,43 @@ impl Ppu {
         current
     }
 
+    #[inline]
+    fn dmg_lcdc_for_fetch_control_pixel(&self, x: usize) -> u8 {
+        // BG/window map and tile-data control bits are sampled by the fetcher.
+        // Keep sprite-phase corrections out of this path; they are tuned for
+        // output-pixel BG enable transitions (bit 0), not fetch control bits.
+        let mut current = self.mode3_lcdc_base;
+        let x = x as u8;
+        for (i, ev) in self.mode3_lcdc_events[..self.mode3_lcdc_event_count]
+            .iter()
+            .enumerate()
+        {
+            let first_fetch_edge = i == 0 && ev.fetcher_state == 0 && ev.bg_fifo == 8;
+            if if first_fetch_edge {
+                x <= ev.x
+            } else {
+                x < ev.x
+            } {
+                break;
+            }
+            current = ev.val;
+        }
+        current
+    }
+
+    #[inline]
+    fn dmg_lcdc_for_bg_fetch_pixel(&self, x: usize) -> u8 {
+        // BG map/tile-data control bits affect tile fetch selection rather than
+        // the already-shifted output pixel. Approximate this by sampling one
+        // tile earlier and quantizing to tile boundaries.
+        if x < 8 {
+            // The first visible tile comes from the preloaded fetch state.
+            return self.mode3_lcdc_base;
+        }
+        let fetch_x = x.saturating_sub(8) & !7usize;
+        self.dmg_lcdc_for_fetch_control_pixel(fetch_x)
+    }
+
     /// Set a runtime DMG palette. Colors are in 0x00RRGGBB order.
     pub fn set_dmg_palette(&mut self, pal: [u32; 4]) {
         self.dmg_palette = pal;
@@ -2327,22 +2364,23 @@ impl Ppu {
             if cgb_render {
                 self.render_cgb_bg_window_scanline_with_mode3_lcdc();
             } else {
-                let tile_map_base = if self.lcdc & 0x08 != 0 {
-                    BG_MAP_1_BASE
-                } else {
-                    BG_MAP_0_BASE
-                };
-                let tile_data_base = if self.lcdc & 0x10 != 0 {
-                    TILE_DATA_0_BASE
-                } else {
-                    TILE_DATA_1_BASE
-                };
-
                 // draw background
                 for x in 0..SCREEN_WIDTH as u16 {
-                    if (self.dmg_lcdc_for_pixel(x as usize) & 0x01) == 0 {
+                    let lcdc_px = self.dmg_lcdc_for_pixel(x as usize);
+                    if (lcdc_px & 0x01) == 0 {
                         continue;
                     }
+                    let lcdc_fetch = self.dmg_lcdc_for_bg_fetch_pixel(x as usize);
+                    let tile_map_base = if (lcdc_fetch & 0x08) != 0 {
+                        BG_MAP_1_BASE
+                    } else {
+                        BG_MAP_0_BASE
+                    };
+                    let tile_data_base = if (lcdc_fetch & 0x10) != 0 {
+                        TILE_DATA_0_BASE
+                    } else {
+                        TILE_DATA_1_BASE
+                    };
                     let scx = self.scx as u16;
                     let px = x.wrapping_add(scx) & 0xFF;
                     let tile_col = (px / 8) as usize;
@@ -2351,7 +2389,7 @@ impl Ppu {
 
                     let tile_index =
                         self.vram_read_for_render(0, tile_map_base + tile_row * 32 + tile_col);
-                    let addr = if self.lcdc & 0x10 != 0 {
+                    let addr = if (lcdc_fetch & 0x10) != 0 {
                         tile_data_base + tile_index as usize * 16
                     } else {
                         tile_data_base + ((tile_index as i8 as i16 + 128) as usize) * 16
@@ -2379,16 +2417,23 @@ impl Ppu {
                     let wx_reg = self.wx;
                     let window_origin_x = wx_reg as i16 - 7;
                     let start_x = wx_reg.saturating_sub(7) as u16;
-                    let window_map_base = if self.lcdc & 0x40 != 0 {
-                        BG_MAP_1_BASE
-                    } else {
-                        BG_MAP_0_BASE
-                    };
                     let window_y = self.win_line_counter as usize;
                     for x in start_x..SCREEN_WIDTH as u16 {
-                        if (self.dmg_lcdc_for_pixel(x as usize) & 0x01) == 0 {
+                        let lcdc_px = self.dmg_lcdc_for_pixel(x as usize);
+                        if (lcdc_px & 0x01) == 0 {
                             continue;
                         }
+                        let lcdc_fetch = self.dmg_lcdc_for_bg_fetch_pixel(x as usize);
+                        let window_map_base = if (lcdc_fetch & 0x40) != 0 {
+                            BG_MAP_1_BASE
+                        } else {
+                            BG_MAP_0_BASE
+                        };
+                        let tile_data_base = if (lcdc_fetch & 0x10) != 0 {
+                            TILE_DATA_0_BASE
+                        } else {
+                            TILE_DATA_1_BASE
+                        };
                         let window_x = (x as i16 - window_origin_x) as usize;
                         let tile_col = window_x / 8;
                         let tile_row = window_y / 8;
@@ -2396,7 +2441,7 @@ impl Ppu {
                         let tile_x = window_x % 8;
                         let tile_index = self
                             .vram_read_for_render(0, window_map_base + tile_row * 32 + tile_col);
-                        let addr = if self.lcdc & 0x10 != 0 {
+                        let addr = if (lcdc_fetch & 0x10) != 0 {
                             tile_data_base + tile_index as usize * 16
                         } else {
                             tile_data_base + ((tile_index as i8 as i16 + 128) as usize) * 16
