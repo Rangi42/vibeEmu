@@ -248,6 +248,7 @@ struct Sprite {
     tile: u8,
     flags: u8,
     oam_index: usize,
+    fetched: bool,
 }
 
 impl Ppu {
@@ -518,8 +519,19 @@ impl Ppu {
             // The first BGP write in OBJ-heavy lines aligns with the first
             // visible output pixels, which are delayed when the first sprite is
             // positioned inside the left border.
-            let first_x = self.line_sprites[0].x.clamp(0, 5) as u8;
-            x = x.saturating_add(first_x);
+            let fx = self.line_sprites[0].x.max(0) as u8;
+            let add = if mode3_t < 168 {
+                fx.min(5)
+            } else if fx <= 2 {
+                0
+            } else if fx <= 5 {
+                fx - 2
+            } else if fx <= 7 {
+                3
+            } else {
+                fx.saturating_sub(4).min(5)
+            };
+            x = x.saturating_add(add);
         }
         if !self.cgb
             && (self.lcdc & 0x02) != 0
@@ -534,6 +546,16 @@ impl Ppu {
                 let extra = 10u8.saturating_sub(first_x_raw).min(2);
                 x = x.saturating_sub(2 + extra);
             }
+        }
+        if !self.cgb
+            && (self.lcdc & 0x02) != 0
+            && self.sprite_count > 0
+            && mode3_t >= 168
+            && self.ly >= 8
+        {
+            // Very-late DMG BGP writes on OBJ-active lines transition one pixel
+            // earlier than the baseline mode3_lcd_x mapping.
+            x = x.saturating_sub(1);
         }
         if self.dmg_bgp_event_count >= DMG_BGP_EVENTS_MAX {
             // Saturate; keep the newest event so behavior remains stable.
@@ -668,7 +690,7 @@ impl Ppu {
         // This keeps OAM tile/flags reads close to hardware timing so DMA overlap
         // hits the intended bytes.
 
-        if (self.cgb && !self.dmg_compat) || (self.lcdc & 0x02) == 0 {
+        if self.cgb && !self.dmg_compat {
             // CGB mode has different timing/behavior expectations (and this
             // scanline renderer doesn't model the FIFO). Keep sprite attribute
             // latching simple here to avoid DMG-specific DMA corruption quirks.
@@ -689,6 +711,7 @@ impl Ppu {
                 let base = sprite.oam_index * 4;
                 self.line_sprites[idx].tile = self.oam[base + 2];
                 self.line_sprites[idx].flags = self.oam[base + 3];
+                self.line_sprites[idx].fetched = true;
                 self.mode3_sprite_latch_index += 1;
             }
         } else {
@@ -735,6 +758,8 @@ impl Ppu {
             };
 
             // One "dot" of simplified mode 3 progression.
+            let sprites_enabled = (self.lcdc & 0x02) != 0;
+
             let match_x = if self.mode3_position_in_line < -7 {
                 0u8
             } else {
@@ -747,14 +772,32 @@ impl Ppu {
                 self.mode3_same_x_toggle = (match_x & 0x02) != 0 && (match_x & 0x04) == 0;
             }
 
-            let x0_pending = self.mode3_sprite_latch_index < self.sprite_count
+            if !sprites_enabled {
+                while self.mode3_sprite_latch_index < self.sprite_count {
+                    let idx = self.mode3_sprite_latch_index;
+                    let sprite = self.line_sprites[idx];
+                    let raw_x = (sprite.x + 8).clamp(0, 255) as u8;
+                    if raw_x >= match_x {
+                        break;
+                    }
+                    if raw_x <= 15 {
+                        let base = sprite.oam_index * 4;
+                        self.line_sprites[idx].tile = self.oam[base + 2];
+                        self.line_sprites[idx].flags = self.oam[base + 3];
+                    }
+                    self.mode3_sprite_latch_index += 1;
+                }
+            }
+
+            let x0_pending = sprites_enabled
+                && self.mode3_sprite_latch_index < self.sprite_count
                 && (self.line_sprites[self.mode3_sprite_latch_index].x + 8) == 0;
 
             // Attempt at most one sprite attribute fetch per dot.
             //
             // Important: object matching/fetch happens *before* a pixel is
             // rendered. If the fetcher isn't ready, the pipeline stalls here.
-            if self.mode3_sprite_latch_index < self.sprite_count {
+            if sprites_enabled && self.mode3_sprite_latch_index < self.sprite_count {
                 let idx = self.mode3_sprite_latch_index;
                 let sprite = self.line_sprites[idx];
                 let raw_x = (sprite.x + 8).clamp(0, 255) as u8;
@@ -777,6 +820,7 @@ impl Ppu {
 
                     self.line_sprites[idx].tile = tile;
                     self.line_sprites[idx].flags = flags;
+                    self.line_sprites[idx].fetched = true;
                     self.mode3_sprite_latch_index += 1;
 
                     // Back-to-back sprites at the same X incur additional delay.
@@ -824,9 +868,9 @@ impl Ppu {
             }
         }
 
-        // Before we render the scanline at the end of MODE3, ensure we've latched
-        // all remaining sprite attributes from OAM. This avoids rendering any
-        // sprite entries with their default (tile=0) placeholder values.
+        // Before we render the scanline at the end of MODE3, ensure we've
+        // latched remaining sprite attributes. This keeps non-fetched sprites
+        // from rendering with placeholder tile/flags values.
         if self.mode_clock + 1 >= self.mode3_target_cycles {
             while self.mode3_sprite_latch_index < self.sprite_count {
                 let sprite = self.line_sprites[self.mode3_sprite_latch_index];
@@ -861,6 +905,7 @@ impl Ppu {
                             tile: 0,
                             flags: 0,
                             oam_index: self.oam_scan_index,
+                            fetched: false,
                         };
                         self.sprite_count += 1;
                     }
@@ -2245,8 +2290,11 @@ impl Ppu {
                     let mode3_t = if self.mode == MODE_TRANSFER {
                         self.mode_clock
                     } else if self.mode == MODE_HBLANK
-                        && self.dmg_hblank_render_pending
                         && self.mode_clock <= 8
+                        && (self.dmg_hblank_render_pending
+                            || (!self.cgb
+                                && (self.lcdc & 0x02) != 0
+                                && self.mode3_lcdc_event_count > 0))
                     {
                         self.mode3_target_cycles.saturating_add(self.mode_clock)
                     } else {
@@ -2476,7 +2524,10 @@ impl Ppu {
         let any_obj_enabled = if cgb_render {
             self.cgb_line_obj_enabled.iter().any(|&v| v)
         } else {
-            self.lcdc & 0x02 != 0
+            (self.mode3_lcdc_base & 0x02) != 0
+                || self.mode3_lcdc_events[..self.mode3_lcdc_event_count]
+                    .iter()
+                    .any(|ev| (ev.val & 0x02) != 0)
         };
 
         if any_obj_enabled {
@@ -2513,6 +2564,27 @@ impl Ppu {
 
                     if cgb_render && !self.cgb_line_obj_enabled[sx as usize] {
                         continue;
+                    }
+                    if !cgb_render {
+                        let mut obj_sample_x = sx.clamp(0, (SCREEN_WIDTH - 1) as i16) as usize;
+                        if !s.fetched {
+                            if s.x <= 0 {
+                                obj_sample_x = obj_sample_x.saturating_sub(2);
+                            } else if s.x == 1 {
+                                obj_sample_x = obj_sample_x.saturating_sub(1);
+                            } else if s.x == 6 {
+                                obj_sample_x = (obj_sample_x + 3).min(SCREEN_WIDTH - 1);
+                            } else if s.x == 7 {
+                                obj_sample_x = (obj_sample_x + 4).min(SCREEN_WIDTH - 1);
+                            } else if s.x == 3 {
+                                obj_sample_x = (obj_sample_x + 1).min(SCREEN_WIDTH - 1);
+                            } else if (4..=5).contains(&s.x) {
+                                obj_sample_x = (obj_sample_x + 2).min(SCREEN_WIDTH - 1);
+                            }
+                        }
+                        if (self.dmg_lcdc_for_pixel(obj_sample_x) & 0x02) == 0 {
+                            continue;
+                        }
                     }
                     let bg_zero = if !bg_enabled {
                         true
@@ -2752,8 +2824,13 @@ impl Ppu {
                     if self.mode_clock >= target {
                         self.mode_clock -= target;
                         if !self.cgb || self.dmg_compat {
+                            let obj_toggle_line = !self.cgb
+                                && self.mode3_lcdc_events[..self.mode3_lcdc_event_count]
+                                    .iter()
+                                    .any(|ev| ((self.mode3_lcdc_base ^ ev.val) & 0x02) != 0);
                             let delay_render = self.dmg_bgp_event_count > 0
-                                && self.dmg_bgp_events[self.dmg_bgp_event_count - 1].x >= 140;
+                                && self.dmg_bgp_events[self.dmg_bgp_event_count - 1].x >= 140
+                                || (obj_toggle_line && self.dmg_bgp_event_count == 0);
                             if delay_render {
                                 self.dmg_hblank_render_pending = true;
                             } else {
@@ -3273,6 +3350,7 @@ mod mode3_timing_tests {
             tile: 0,
             flags: 0,
             oam_index: 0,
+            fetched: false,
         };
         ppu.sprite_count = 1;
 
@@ -3291,6 +3369,7 @@ mod mode3_timing_tests {
                 tile: 0,
                 flags: 0,
                 oam_index: i,
+                fetched: false,
             };
         }
         ppu.sprite_count = xs.len();
