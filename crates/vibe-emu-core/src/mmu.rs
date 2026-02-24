@@ -17,7 +17,11 @@ fn env_flag_enabled(var: &str) -> bool {
     // Cache a small fixed set to avoid repeated env parsing.
     let cache = CACHE.get_or_init(|| {
         let mut map = std::collections::HashMap::new();
-        for key in ["VIBEEMU_TRACE_OAMBUG", "VIBEEMU_TRACE_LCDC"] {
+        for key in [
+            "VIBEEMU_TRACE_OAMBUG",
+            "VIBEEMU_TRACE_LCDC",
+            "VIBEEMU_DMG_MODE3_LCDC_DELAY",
+        ] {
             let enabled = std::env::var_os(key)
                 .map(|v| {
                     let s = v.to_string_lossy();
@@ -29,6 +33,18 @@ fn env_flag_enabled(var: &str) -> bool {
         map
     });
     cache.get(var).copied().unwrap_or(false)
+}
+
+fn dmg_mode3_lcdc_delay_dots() -> u8 {
+    use std::sync::OnceLock;
+    static DELAY: OnceLock<u8> = OnceLock::new();
+    *DELAY.get_or_init(|| {
+        std::env::var("VIBEEMU_DMG_MODE3_LCDC_DELAY")
+            .ok()
+            .and_then(|v| v.trim().parse::<i16>().ok())
+            .map(|v| v.clamp(0, 8) as u8)
+            .unwrap_or(1)
+    })
 }
 
 const WRAM_BANK_SIZE: usize = 0x1000;
@@ -198,7 +214,7 @@ impl Mmu {
 
         let dot_div = timer.div;
 
-        let mut ppu = Ppu::new_with_mode(cgb);
+        let mut ppu = Ppu::new_with_revisions(cgb, dmg_revision, cgb_revision);
         ppu.apply_boot_state(if cgb { None } else { Some(dmg_revision) });
 
         Self {
@@ -276,7 +292,7 @@ impl Mmu {
 
         let dot_div = timer.div;
 
-        let ppu = Ppu::new_with_mode(cgb);
+        let ppu = Ppu::new_with_revisions(cgb, dmg_revision, cgb_revision);
 
         let wram = init_power_on_wram(power_on_wram_seed(cgb, dmg_revision, cgb_revision));
 
@@ -336,7 +352,7 @@ impl Mmu {
 
     pub fn load_cart(&mut self, cart: Cartridge) {
         let is_dmg = !cart.cgb;
-        if self.post_boot_state && !self.cgb_mode {
+        if self.post_boot_state && is_dmg {
             let logo = cart.rom.get(0x0104..0x0134).unwrap_or(&[]);
             self.ppu.apply_dmg_post_boot_vram(logo);
         }
@@ -853,12 +869,12 @@ impl Mmu {
             }
             0xFF40 => {
                 let lcd_was_on = self.ppu.lcd_enabled();
+                let old = self.ppu.read_reg(0xFF40);
                 if env_flag_enabled("VIBEEMU_TRACE_LCDC") {
                     let pc_str = self
                         .last_cpu_pc
                         .map(|p| format!("{:04X}", p))
                         .unwrap_or_else(|| "<none>".to_string());
-                    let old = self.ppu.read_reg(0xFF40);
                     core_trace!(
                         target: "vibe_emu_core::lcdc",
                         "LCDC write pc={} old={:02X} new={:02X}",
@@ -867,7 +883,32 @@ impl Mmu {
                         val
                     );
                 }
-                self.ppu.write_reg(addr, val);
+                if !self.cgb_mode && lcd_was_on && self.ppu.mode == 3 {
+                    // DMG LCDC writes during mode 3 are conflict-prone: the
+                    // bus first exposes a transitional value, then the target
+                    // value is observed one dot later.
+                    let mut transitional = (old & !0x01) | (val & 0x01);
+                    if (old & 0x02) != 0
+                        && (val & 0x02) == 0
+                        && (self.ppu.dmg_mode3_during_object_fetch()
+                            || self.ppu.dmg_mode3_position_in_line() == 0)
+                    {
+                        // OBJ disable can take effect immediately for the
+                        // object-fetch path in this conflict window.
+                        transitional &= !0x02;
+                    }
+                    self.ppu.write_reg(addr, transitional);
+                    if val != transitional {
+                        let delay = dmg_mode3_lcdc_delay_dots();
+                        if delay == 0 {
+                            self.ppu.write_reg(addr, val);
+                        } else {
+                            self.ppu.queue_lcdc_write(val, delay);
+                        }
+                    }
+                } else {
+                    self.ppu.write_reg(addr, val);
+                }
                 if lcd_was_on && !self.ppu.lcd_enabled() {
                     self.complete_active_hdma();
                 }
@@ -1012,10 +1053,7 @@ impl Mmu {
     /// Advance the ongoing OAM DMA transfer if active.
     pub fn dma_step(&mut self, cycles: u16) {
         for _ in 0..cycles {
-            // Only expose a bus value to the PPU on the specific dot where the
-            // DMA engine is transferring a byte. On other dots, treat it as not
-            // observable.
-            self.ppu.oam_dma_write = None;
+            self.ppu.oam_dma_current_dest = 0xA1;
             if self.pending_delay > 0 {
                 self.pending_delay -= 1;
                 if self.pending_delay == 0
@@ -1061,6 +1099,8 @@ impl Mmu {
             let per_byte = if self.key1 & 0x80 != 0 { 2 } else { 4 };
             let initial = if self.key1 & 0x80 != 0 { 320 } else { 640 };
             let elapsed = initial - self.dma_cycles;
+            let current_dest = ((elapsed / per_byte) + 1).min(0xA1) as u8;
+            self.ppu.oam_dma_current_dest = current_dest;
             if elapsed.is_multiple_of(per_byte) {
                 let idx: u16 = elapsed / per_byte;
                 if idx < 0xA0 {
@@ -1073,7 +1113,6 @@ impl Mmu {
                         self.last_cpu_pc = None;
                     }
                     let byte = self.dma_read_byte(self.dma_source.wrapping_add(idx));
-                    self.ppu.oam_dma_write = Some((idx as u8, byte));
                     self.ppu.oam[idx as usize] = byte;
                 }
             }
