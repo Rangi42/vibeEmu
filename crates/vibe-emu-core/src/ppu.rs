@@ -3142,10 +3142,7 @@ impl Ppu {
             {
                 let first_x = self.line_sprites[0].x;
                 let mag = dmg_bgp_t_sample_first_x_phase_corr_mag().clamp(1, 24);
-                if first_x >= 0
-                    && (x as i16) == first_x
-                    && (first_x <= 4 || first_x >= 8)
-                {
+                if first_x >= 0 && (x as i16) == first_x && (first_x <= 4 || first_x >= 8) {
                     sample_t = (sample_t + mag).min(max_t);
                 }
             }

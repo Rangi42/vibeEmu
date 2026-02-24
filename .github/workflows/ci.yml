@@ -28,13 +28,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libx11-dev libgtk-3-dev build-essential pkg-config libfontconfig1-dev libudev-dev
 
-      - name: Cache rustup (optional)
-        uses: actions/cache@v3
-        with:
-          path: ~/.rustup
-          key: ${{ runner.os }}-rustup-${{ hashFiles('**/rust-toolchain') }}
-          restore-keys: ${{ runner.os }}-rustup-
-
       - name: Cache cargo registry and git
         uses: actions/cache@v3
         with:
