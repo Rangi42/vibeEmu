@@ -1,416 +1,242 @@
 use crate::hardware::{CgbRevision, DmgRevision};
 
-fn oam_bug_trace_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var_os("VIBEEMU_TRACE_OAMBUG")
-            .map(|v| {
-                let s = v.to_string_lossy();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-            .unwrap_or(false)
-    })
+#[inline]
+fn env_flag_from_str(value: &str) -> bool {
+    !(value.is_empty() || value == "0" || value.eq_ignore_ascii_case("false"))
 }
 
-fn dmg_mode3_lcdc_event_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_LCDC_EVENT_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-1)
-    })
+#[inline]
+fn env_i16_or(key: &str, default: i16) -> i16 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<i16>().ok())
+        .unwrap_or(default)
 }
 
-fn dmg_mode3_lcdc_fetch_bits_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_LCDC_FETCH_BITS_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-2)
-    })
+#[inline]
+fn env_u16_or(key: &str, default: u16) -> u16 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<u16>().ok())
+        .unwrap_or(default)
 }
 
-fn dmg_mode3_lcdc_win_en_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_LCDC_WIN_EN_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(2)
-    })
+#[inline]
+fn env_bool_or_false(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .is_some_and(|v| env_flag_from_str(v.trim()))
 }
 
-fn dmg_mode3_scx_start_delay_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCX_START_DELAY_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-1)
-    })
+#[inline]
+fn env_os_bool_or_false(key: &str) -> bool {
+    std::env::var_os(key).is_some_and(|v| env_flag_from_str(v.to_string_lossy().as_ref()))
 }
 
-fn dmg_bgp_tail_pixels() -> i16 {
-    use std::sync::OnceLock;
-    static PIXELS: OnceLock<i16> = OnceLock::new();
-    *PIXELS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_TAIL_PIXELS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(5)
-    })
+#[inline]
+fn env_bool_or_true(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .is_none_or(|v| env_flag_from_str(v.trim()))
 }
 
-fn dmg_bgp_fetcher_sample_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_FETCHER_SAMPLE_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-1)
-    })
+macro_rules! define_env_i16 {
+    ($func:ident, $key:literal, $default:expr) => {
+        fn $func() -> i16 {
+            use std::sync::OnceLock;
+            static VALUE: OnceLock<i16> = OnceLock::new();
+            *VALUE.get_or_init(|| env_i16_or($key, $default))
+        }
+    };
 }
 
-fn dmg_bgp_fetcher_wx0_extra_t() -> i16 {
-    use std::sync::OnceLock;
-    static EXTRA: OnceLock<i16> = OnceLock::new();
-    *EXTRA.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_FETCHER_WX0_EXTRA_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(8)
-    })
+macro_rules! define_env_u16 {
+    ($func:ident, $key:literal, $default:expr) => {
+        fn $func() -> u16 {
+            use std::sync::OnceLock;
+            static VALUE: OnceLock<u16> = OnceLock::new();
+            *VALUE.get_or_init(|| env_u16_or($key, $default))
+        }
+    };
 }
 
-fn dmg_bg_fetch_lead_pixels() -> i16 {
-    use std::sync::OnceLock;
-    static LEAD: OnceLock<i16> = OnceLock::new();
-    *LEAD.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_FETCH_LEAD_PIXELS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(9)
-    })
+macro_rules! define_env_bool_false {
+    ($func:ident, $key:literal) => {
+        fn $func() -> bool {
+            use std::sync::OnceLock;
+            static VALUE: OnceLock<bool> = OnceLock::new();
+            *VALUE.get_or_init(|| env_bool_or_false($key))
+        }
+    };
 }
 
-fn dmg_bg_fetch_sample_px_in_tile() -> i16 {
-    use std::sync::OnceLock;
-    static SAMPLE: OnceLock<i16> = OnceLock::new();
-    *SAMPLE.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_FETCH_SAMPLE_PX_IN_TILE")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
+macro_rules! define_env_os_bool_false {
+    ($func:ident, $key:literal) => {
+        fn $func() -> bool {
+            use std::sync::OnceLock;
+            static VALUE: OnceLock<bool> = OnceLock::new();
+            *VALUE.get_or_init(|| env_os_bool_or_false($key))
+        }
+    };
 }
 
-fn dmg_bg_en_sample_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_EN_SAMPLE_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-3)
-    })
+macro_rules! define_env_bool_true {
+    ($func:ident, $key:literal) => {
+        fn $func() -> bool {
+            use std::sync::OnceLock;
+            static VALUE: OnceLock<bool> = OnceLock::new();
+            *VALUE.get_or_init(|| env_bool_or_true($key))
+        }
+    };
 }
 
-fn dmg_bg_en_left_extra_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_EN_LEFT_EXTRA_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_bg_en_left_x_threshold() -> i16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<i16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_EN_LEFT_X_THRESHOLD")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_bg_en_left_raw_threshold() -> i16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<i16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_EN_LEFT_RAW_THRESHOLD")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(1)
-    })
-}
-
-fn dmg_bg_en_first_event_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_EN_FIRST_EVENT_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_bg_fetch_first_event_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_FETCH_FIRST_EVENT_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(8)
-    })
-}
-
-fn dmg_bg_en_left_raw_sample_shift() -> i16 {
-    use std::sync::OnceLock;
-    static SHIFT: OnceLock<i16> = OnceLock::new();
-    *SHIFT.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_EN_LEFT_RAW_SAMPLE_SHIFT")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(1)
-    })
-}
-
-fn dmg_bg_en_line0_sample_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BG_EN_LINE0_SAMPLE_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-4)
-    })
-}
-
-fn dmg_bgp_sprite_lag_pixels() -> i16 {
-    use std::sync::OnceLock;
-    static LAG: OnceLock<i16> = OnceLock::new();
-    *LAG.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_SPRITE_LAG_PIXELS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(1)
-    })
-}
-
-fn dmg_bgp_sprite_lag_line0_pixels() -> i16 {
-    use std::sync::OnceLock;
-    static LAG: OnceLock<i16> = OnceLock::new();
-    *LAG.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_SPRITE_LAG_LINE0_PIXELS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(5)
-    })
-}
-
-fn dmg_obj_en_pixel_shift() -> i16 {
-    use std::sync::OnceLock;
-    static SHIFT: OnceLock<i16> = OnceLock::new();
-    *SHIFT.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_OBJ_EN_PIXEL_SHIFT")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-1)
-    })
-}
-
-fn dmg_obj_en_shift_max_x() -> i16 {
-    use std::sync::OnceLock;
-    static MAX_X: OnceLock<i16> = OnceLock::new();
-    *MAX_X.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_OBJ_EN_SHIFT_MAX_X")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(7)
-    })
-}
-
-fn dmg_bgp_use_event_map() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_USE_EVENT_MAP")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_bgp_use_t_sample() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_USE_T_SAMPLE")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_bgp_sample_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_SAMPLE_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_bgp_line0_sample_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_LINE0_SAMPLE_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_bgp_use_simple_event_x() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_USE_SIMPLE_EVENT_X")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_bgp_simple_event_x_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_SIMPLE_EVENT_X_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_bgp_falling_edge_delay_t() -> i16 {
-    use std::sync::OnceLock;
-    static DELAY: OnceLock<i16> = OnceLock::new();
-    *DELAY.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_FALLING_EDGE_DELAY_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_bgp_rising_edge_delay_t() -> i16 {
-    use std::sync::OnceLock;
-    static DELAY: OnceLock<i16> = OnceLock::new();
-    *DELAY.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_RISING_EDGE_DELAY_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_bgp_t_sample_use_obj_x_corr() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_T_SAMPLE_USE_OBJ_X_CORR")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_bgp_t_sample_use_first_x_phase_corr() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_T_SAMPLE_USE_FIRST_X_PHASE_CORR")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_bgp_t_sample_include_line0() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_T_SAMPLE_INCLUDE_LINE0")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_bgp_line0_edge_backstep() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_LINE0_EDGE_BACKSTEP")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_bgp_t_sample_first_x_phase_corr_mag() -> i16 {
-    use std::sync::OnceLock;
-    static MAG: OnceLock<i16> = OnceLock::new();
-    *MAG.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_BGP_T_SAMPLE_FIRST_X_PHASE_CORR_MAG")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(1)
-    })
-}
-
-fn dmg_hblank_render_delay() -> u16 {
-    use std::sync::OnceLock;
-    static DELAY: OnceLock<u16> = OnceLock::new();
-    *DELAY.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_HBLANK_RENDER_DELAY")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(DMG_HBLANK_RENDER_DELAY)
-    })
-}
+define_env_os_bool_false!(oam_bug_trace_enabled, "VIBEEMU_TRACE_OAMBUG");
+define_env_i16!(
+    dmg_mode3_lcdc_event_t_bias,
+    "VIBEEMU_DMG_MODE3_LCDC_EVENT_T_BIAS",
+    -1
+);
+define_env_i16!(
+    dmg_mode3_lcdc_fetch_bits_t_bias,
+    "VIBEEMU_DMG_MODE3_LCDC_FETCH_BITS_T_BIAS",
+    -2
+);
+define_env_i16!(
+    dmg_mode3_lcdc_win_en_t_bias,
+    "VIBEEMU_DMG_MODE3_LCDC_WIN_EN_T_BIAS",
+    2
+);
+define_env_i16!(
+    dmg_mode3_scx_start_delay_bias,
+    "VIBEEMU_DMG_MODE3_SCX_START_DELAY_BIAS",
+    -1
+);
+define_env_i16!(dmg_bgp_tail_pixels, "VIBEEMU_DMG_BGP_TAIL_PIXELS", 5);
+define_env_i16!(
+    dmg_bgp_fetcher_sample_t_bias,
+    "VIBEEMU_DMG_BGP_FETCHER_SAMPLE_T_BIAS",
+    -1
+);
+define_env_i16!(
+    dmg_bgp_fetcher_wx0_extra_t,
+    "VIBEEMU_DMG_BGP_FETCHER_WX0_EXTRA_T",
+    8
+);
+define_env_i16!(
+    dmg_bg_fetch_lead_pixels,
+    "VIBEEMU_DMG_BG_FETCH_LEAD_PIXELS",
+    9
+);
+define_env_i16!(
+    dmg_bg_fetch_sample_px_in_tile,
+    "VIBEEMU_DMG_BG_FETCH_SAMPLE_PX_IN_TILE",
+    0
+);
+define_env_i16!(
+    dmg_bg_en_sample_t_bias,
+    "VIBEEMU_DMG_BG_EN_SAMPLE_T_BIAS",
+    -3
+);
+define_env_i16!(
+    dmg_bg_en_left_extra_bias,
+    "VIBEEMU_DMG_BG_EN_LEFT_EXTRA_BIAS",
+    0
+);
+define_env_i16!(
+    dmg_bg_en_left_x_threshold,
+    "VIBEEMU_DMG_BG_EN_LEFT_X_THRESHOLD",
+    0
+);
+define_env_i16!(
+    dmg_bg_en_left_raw_threshold,
+    "VIBEEMU_DMG_BG_EN_LEFT_RAW_THRESHOLD",
+    1
+);
+define_env_i16!(
+    dmg_bg_en_first_event_t_adjust,
+    "VIBEEMU_DMG_BG_EN_FIRST_EVENT_T_ADJUST",
+    0
+);
+define_env_i16!(
+    dmg_bg_fetch_first_event_t_adjust,
+    "VIBEEMU_DMG_BG_FETCH_FIRST_EVENT_T_ADJUST",
+    8
+);
+define_env_i16!(
+    dmg_bg_en_left_raw_sample_shift,
+    "VIBEEMU_DMG_BG_EN_LEFT_RAW_SAMPLE_SHIFT",
+    1
+);
+define_env_i16!(
+    dmg_bg_en_line0_sample_t_bias,
+    "VIBEEMU_DMG_BG_EN_LINE0_SAMPLE_T_BIAS",
+    -4
+);
+define_env_i16!(
+    dmg_bgp_sprite_lag_pixels,
+    "VIBEEMU_DMG_BGP_SPRITE_LAG_PIXELS",
+    1
+);
+define_env_i16!(
+    dmg_bgp_sprite_lag_line0_pixels,
+    "VIBEEMU_DMG_BGP_SPRITE_LAG_LINE0_PIXELS",
+    5
+);
+define_env_i16!(dmg_obj_en_pixel_shift, "VIBEEMU_DMG_OBJ_EN_PIXEL_SHIFT", -1);
+define_env_i16!(dmg_obj_en_shift_max_x, "VIBEEMU_DMG_OBJ_EN_SHIFT_MAX_X", 7);
+define_env_bool_false!(dmg_bgp_use_event_map, "VIBEEMU_DMG_BGP_USE_EVENT_MAP");
+define_env_bool_false!(dmg_bgp_use_t_sample, "VIBEEMU_DMG_BGP_USE_T_SAMPLE");
+define_env_i16!(dmg_bgp_sample_t_bias, "VIBEEMU_DMG_BGP_SAMPLE_T_BIAS", 0);
+define_env_i16!(
+    dmg_bgp_line0_sample_t_bias,
+    "VIBEEMU_DMG_BGP_LINE0_SAMPLE_T_BIAS",
+    0
+);
+define_env_bool_false!(
+    dmg_bgp_use_simple_event_x,
+    "VIBEEMU_DMG_BGP_USE_SIMPLE_EVENT_X"
+);
+define_env_i16!(
+    dmg_bgp_simple_event_x_bias,
+    "VIBEEMU_DMG_BGP_SIMPLE_EVENT_X_BIAS",
+    0
+);
+define_env_i16!(
+    dmg_bgp_falling_edge_delay_t,
+    "VIBEEMU_DMG_BGP_FALLING_EDGE_DELAY_T",
+    0
+);
+define_env_i16!(
+    dmg_bgp_rising_edge_delay_t,
+    "VIBEEMU_DMG_BGP_RISING_EDGE_DELAY_T",
+    0
+);
+define_env_bool_false!(
+    dmg_bgp_t_sample_use_obj_x_corr,
+    "VIBEEMU_DMG_BGP_T_SAMPLE_USE_OBJ_X_CORR"
+);
+define_env_bool_false!(
+    dmg_bgp_t_sample_use_first_x_phase_corr,
+    "VIBEEMU_DMG_BGP_T_SAMPLE_USE_FIRST_X_PHASE_CORR"
+);
+define_env_bool_false!(
+    dmg_bgp_t_sample_include_line0,
+    "VIBEEMU_DMG_BGP_T_SAMPLE_INCLUDE_LINE0"
+);
+define_env_bool_false!(
+    dmg_bgp_line0_edge_backstep,
+    "VIBEEMU_DMG_BGP_LINE0_EDGE_BACKSTEP"
+);
+define_env_i16!(
+    dmg_bgp_t_sample_first_x_phase_corr_mag,
+    "VIBEEMU_DMG_BGP_T_SAMPLE_FIRST_X_PHASE_CORR_MAG",
+    1
+);
+define_env_u16!(
+    dmg_hblank_render_delay,
+    "VIBEEMU_DMG_HBLANK_RENDER_DELAY",
+    DMG_HBLANK_RENDER_DELAY
+);
 
 #[cfg(feature = "ppu-trace")]
 macro_rules! ppu_trace {
@@ -662,926 +488,410 @@ pub struct Ppu {
     dmg_prev2_line_window_active: bool,
 }
 
-fn dmg_obp0_sample_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_OBP0_SAMPLE_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-1)
-    })
-}
-
-fn dmg_mode3_scx_event_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCX_EVENT_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-7)
-    })
-}
-
-fn dmg_mode3_scx_event_t_obj_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCX_EVENT_T_OBJ_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-3)
-    })
-}
-
-fn dmg_mode3_scx_event_push_state_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCX_EVENT_PUSH_STATE_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-8)
-    })
-}
-
-fn dmg_mode3_scx_event_first_x_ge8_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCX_EVENT_FIRST_X_GE8_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(4)
-    })
-}
-
-fn dmg_mode3_scy_event_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-13)
-    })
-}
-
-fn cgb_mode3_scy_event_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-14)
-    })
-}
-
-fn dmg_mode3_scy_event_early_threshold_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_EARLY_THRESHOLD_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(25)
-    })
-}
-
-fn cgb_mode3_scy_event_early_threshold_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_EARLY_THRESHOLD_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(28)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_early_threshold_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_EARLY_THRESHOLD_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(21)
-    })
-}
-
-fn dmg_mode3_scy_event_early_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_EARLY_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(8)
-    })
-}
-
-fn cgb_mode3_scy_event_early_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_EARLY_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(5)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_early_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_EARLY_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-2)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_line0_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_LINE0_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_mode3_scy_event_left_regime_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_LEFT_REGIME_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-2)
-    })
-}
-
-fn cgb_mode3_scy_event_left_regime_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_LEFT_REGIME_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_mode3_scy_event_left_regime_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_LEFT_REGIME_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0xFFFF)
-    })
-}
-
-fn cgb_mode3_scy_event_mid_regime_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_MID_REGIME_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-5)
-    })
-}
-
-fn cgb_mode3_scy_event_mid_regime_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_MID_REGIME_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_mode3_scy_event_mid_regime_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_MID_REGIME_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0xFFFF)
-    })
-}
-
-fn cgb_mode3_scy_event_right_regime_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_RIGHT_REGIME_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-2)
-    })
-}
-
-fn cgb_mode3_scy_event_right_regime_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_RIGHT_REGIME_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_mode3_scy_event_right_regime_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_RIGHT_REGIME_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0xFFFF)
-    })
-}
-
-fn cgb_mode3_scy_event_push_state_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_STATE_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(6)
-    })
-}
-
-fn cgb_mode3_scy_event_push_state_x0_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_STATE_X0_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-16)
-    })
-}
-
-fn cgb_mode3_scy_event_push_state_x0_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_STATE_X0_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(16)
-    })
-}
-
-fn cgb_mode3_scy_event_push_state_x0_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_STATE_X0_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(32)
-    })
-}
-
-fn cgb_mode3_scy_event_push_full_fifo_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_FULL_FIFO_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(8)
-    })
-}
-
-fn cgb_mode3_scy_event_push_full_fifo_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_FULL_FIFO_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(28)
-    })
-}
-
-fn cgb_mode3_scy_event_push_full_fifo_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_FULL_FIFO_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(32)
-    })
-}
-
-fn cgb_mode3_scy_event_x0_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_X0_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_mode3_scy_event_x0_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_X0_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_mode3_scy_event_x0_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_X0_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0xFFFF)
-    })
-}
-
-fn cgb_mode3_scy_event_x8_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_X8_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_mode3_scy_event_x8_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_X8_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_mode3_scy_event_x8_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_MODE3_SCY_EVENT_X8_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0xFFFF)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_startup_threshold_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_THRESHOLD_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(16)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_startup_tile_t1_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(15)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_startup_tile_t1_x0_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_X0_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_startup_tile_t1_x8_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_X8_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_startup_tile_t1_late_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_LATE_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(17)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_startup_tile_t1_late_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_LATE_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(31)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_startup_tile_t1_late_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_LATE_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(8)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_startup_push_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_PUSH_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-13)
-    })
-}
-
-fn cgb_dmg_mode3_scy_event_startup_hi_t2_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_HI_T2_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(8)
-    })
-}
-
-fn dmg_mode3_scy_event_push_state_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_PUSH_STATE_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-2)
-    })
-}
-
-fn dmg_mode3_scy_event_push_state_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_PUSH_STATE_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(1)
-    })
-}
-
-fn dmg_mode3_scy_event_push_previsible_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_PUSH_PREVISIBLE_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-2)
-    })
-}
-
-fn dmg_mode3_scy_event_push_visible_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_PUSH_VISIBLE_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-3)
-    })
-}
-
-fn dmg_mode3_scy_event_lo_t1_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_LO_T1_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(2)
-    })
-}
-
-fn dmg_mode3_scy_event_tile_t1_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_TILE_T1_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(6)
-    })
-}
-
-fn dmg_mode3_scy_event_tile_t1_threshold_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_TILE_T1_THRESHOLD_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(3)
-    })
-}
-
-fn dmg_mode3_scy_event_tile_t2_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_TILE_T2_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(5)
-    })
-}
-
-fn dmg_mode3_scy_event_tile_t2_threshold_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_TILE_T2_THRESHOLD_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(13)
-    })
-}
-
-fn dmg_mode3_scy_event_hi_t2_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_HI_T2_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-3)
-    })
-}
-
-fn dmg_mode3_scy_event_hi_t2_threshold_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_HI_T2_THRESHOLD_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(210)
-    })
-}
-
-fn dmg_mode3_scy_event_lo_t1_threshold_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_LO_T1_THRESHOLD_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(208)
-    })
-}
-
-fn dmg_mode3_scy_use_stage_sample_t() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_USE_STAGE_SAMPLE_T")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_mode3_scy_sample_tile_t_offset() -> i16 {
-    use std::sync::OnceLock;
-    static OFFSET: OnceLock<i16> = OnceLock::new();
-    *OFFSET.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_SAMPLE_TILE_T_OFFSET")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_mode3_scy_sample_lo_t_offset() -> i16 {
-    use std::sync::OnceLock;
-    static OFFSET: OnceLock<i16> = OnceLock::new();
-    *OFFSET.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_SAMPLE_LO_T_OFFSET")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_mode3_scy_sample_hi_t_offset() -> i16 {
-    use std::sync::OnceLock;
-    static OFFSET: OnceLock<i16> = OnceLock::new();
-    *OFFSET.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_SAMPLE_HI_T_OFFSET")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn cgb_dmg_mode3_scy_latch_start_pos() -> i16 {
-    use std::sync::OnceLock;
-    static POS: OnceLock<i16> = OnceLock::new();
-    *POS.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_LATCH_START_POS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-16)
-    })
-}
-
-fn cgb_dmg_mode3_scy_startup_allow_same_dot() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_STARTUP_ALLOW_SAME_DOT")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn cgb_dmg_mode3_scy_push_full_allow_same_dot() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_CGB_DMG_MODE3_SCY_PUSH_FULL_ALLOW_SAME_DOT")
-            .ok()
-            .is_some_and(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_mode3_scy_event_left_regime_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_REGIME_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-8)
-    })
-}
-
-fn dmg_mode3_scy_event_left_edge_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_EDGE_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_mode3_scy_event_left_edge_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_EDGE_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_mode3_scy_event_left_edge_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_EDGE_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_mode3_scy_event_left_regime_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_REGIME_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(19)
-    })
-}
-
-fn dmg_mode3_scy_event_left_regime_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_REGIME_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(26)
-    })
-}
-
-fn dmg_mode3_scy_event_right_regime_t_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_RIGHT_REGIME_T_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-14)
-    })
-}
-
-fn dmg_mode3_scy_event_right_regime_min_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_RIGHT_REGIME_MIN_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(36)
-    })
-}
-
-fn dmg_mode3_scy_event_right_regime_max_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_RIGHT_REGIME_MAX_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(43)
-    })
-}
-
-fn dmg_mode3_scy_event_startup_threshold_t() -> u16 {
-    use std::sync::OnceLock;
-    static THRESH: OnceLock<u16> = OnceLock::new();
-    *THRESH.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_THRESHOLD_T")
-            .ok()
-            .and_then(|v| v.trim().parse::<u16>().ok())
-            .unwrap_or(15)
-    })
-}
-
-fn dmg_mode3_scy_event_startup_tile_t1_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(-8)
-    })
-}
-
-fn dmg_mode3_scy_event_startup_lo_t1_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_LO_T1_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(7)
-    })
-}
-
-fn dmg_mode3_scy_event_startup_tile_t2_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T2_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(9)
-    })
-}
-
-fn dmg_mode3_scy_event_startup_hi_t2_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_HI_T2_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(6)
-    })
-}
-
-fn dmg_mode3_scy_event_startup_push_adjust() -> i16 {
-    use std::sync::OnceLock;
-    static ADJ: OnceLock<i16> = OnceLock::new();
-    *ADJ.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_PUSH_ADJUST")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(2)
-    })
-}
-
-fn dmg_mode3_wx_event_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_WX_EVENT_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(3)
-    })
-}
-
-fn dmg_mode3_wy_event_t_bias() -> i16 {
-    use std::sync::OnceLock;
-    static BIAS: OnceLock<i16> = OnceLock::new();
-    *BIAS.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_MODE3_WY_EVENT_T_BIAS")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn dmg_wx_activate_on_pos6() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_WX_ACTIVATE_ON_POS6")
-            .ok()
-            .is_none_or(|v| {
-                let s = v.trim();
-                !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-            })
-    })
-}
-
-fn dmg_wx_previsible_phase_max() -> i16 {
-    use std::sync::OnceLock;
-    static MAX: OnceLock<i16> = OnceLock::new();
-    *MAX.get_or_init(|| {
-        std::env::var("VIBEEMU_DMG_WX_PREVISIBLE_PHASE_MAX")
-            .ok()
-            .and_then(|v| v.trim().parse::<i16>().ok())
-            .unwrap_or(0)
-    })
-}
+define_env_i16!(dmg_obp0_sample_t_bias, "VIBEEMU_DMG_OBP0_SAMPLE_T_BIAS", -1);
+define_env_i16!(
+    dmg_mode3_scx_event_t_bias,
+    "VIBEEMU_DMG_MODE3_SCX_EVENT_T_BIAS",
+    -7
+);
+define_env_i16!(
+    dmg_mode3_scx_event_t_obj_bias,
+    "VIBEEMU_DMG_MODE3_SCX_EVENT_T_OBJ_BIAS",
+    -3
+);
+define_env_i16!(
+    dmg_mode3_scx_event_push_state_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCX_EVENT_PUSH_STATE_T_ADJUST",
+    -8
+);
+define_env_i16!(
+    dmg_mode3_scx_event_first_x_ge8_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCX_EVENT_FIRST_X_GE8_T_ADJUST",
+    4
+);
+define_env_i16!(
+    dmg_mode3_scy_event_t_bias,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_T_BIAS",
+    -13
+);
+define_env_i16!(
+    cgb_mode3_scy_event_t_bias,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_T_BIAS",
+    -14
+);
+define_env_u16!(
+    dmg_mode3_scy_event_early_threshold_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_EARLY_THRESHOLD_T",
+    25
+);
+define_env_u16!(
+    cgb_mode3_scy_event_early_threshold_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_EARLY_THRESHOLD_T",
+    28
+);
+define_env_u16!(
+    cgb_dmg_mode3_scy_event_early_threshold_t,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_EARLY_THRESHOLD_T",
+    21
+);
+define_env_i16!(
+    dmg_mode3_scy_event_early_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_EARLY_T_ADJUST",
+    8
+);
+define_env_i16!(
+    cgb_mode3_scy_event_early_t_adjust,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_EARLY_T_ADJUST",
+    5
+);
+define_env_i16!(
+    cgb_dmg_mode3_scy_event_early_t_adjust,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_EARLY_T_ADJUST",
+    -2
+);
+define_env_i16!(
+    cgb_dmg_mode3_scy_event_line0_t_adjust,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_LINE0_T_ADJUST",
+    0
+);
+define_env_i16!(
+    cgb_mode3_scy_event_left_regime_t_adjust,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_LEFT_REGIME_T_ADJUST",
+    -2
+);
+define_env_u16!(
+    cgb_mode3_scy_event_left_regime_min_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_LEFT_REGIME_MIN_T",
+    0
+);
+define_env_u16!(
+    cgb_mode3_scy_event_left_regime_max_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_LEFT_REGIME_MAX_T",
+    0xFFFF
+);
+define_env_i16!(
+    cgb_mode3_scy_event_mid_regime_t_adjust,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_MID_REGIME_T_ADJUST",
+    -5
+);
+define_env_u16!(
+    cgb_mode3_scy_event_mid_regime_min_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_MID_REGIME_MIN_T",
+    0
+);
+define_env_u16!(
+    cgb_mode3_scy_event_mid_regime_max_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_MID_REGIME_MAX_T",
+    0xFFFF
+);
+define_env_i16!(
+    cgb_mode3_scy_event_right_regime_t_adjust,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_RIGHT_REGIME_T_ADJUST",
+    -2
+);
+define_env_u16!(
+    cgb_mode3_scy_event_right_regime_min_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_RIGHT_REGIME_MIN_T",
+    0
+);
+define_env_u16!(
+    cgb_mode3_scy_event_right_regime_max_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_RIGHT_REGIME_MAX_T",
+    0xFFFF
+);
+define_env_i16!(
+    cgb_mode3_scy_event_push_state_t_adjust,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_STATE_T_ADJUST",
+    6
+);
+define_env_i16!(
+    cgb_mode3_scy_event_push_state_x0_t_adjust,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_STATE_X0_T_ADJUST",
+    -16
+);
+define_env_u16!(
+    cgb_mode3_scy_event_push_state_x0_min_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_STATE_X0_MIN_T",
+    16
+);
+define_env_u16!(
+    cgb_mode3_scy_event_push_state_x0_max_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_STATE_X0_MAX_T",
+    32
+);
+define_env_i16!(
+    cgb_mode3_scy_event_push_full_fifo_t_adjust,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_FULL_FIFO_T_ADJUST",
+    8
+);
+define_env_u16!(
+    cgb_mode3_scy_event_push_full_fifo_min_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_FULL_FIFO_MIN_T",
+    28
+);
+define_env_u16!(
+    cgb_mode3_scy_event_push_full_fifo_max_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_PUSH_FULL_FIFO_MAX_T",
+    32
+);
+define_env_i16!(
+    cgb_mode3_scy_event_x0_t_adjust,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_X0_T_ADJUST",
+    0
+);
+define_env_u16!(
+    cgb_mode3_scy_event_x0_min_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_X0_MIN_T",
+    0
+);
+define_env_u16!(
+    cgb_mode3_scy_event_x0_max_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_X0_MAX_T",
+    0xFFFF
+);
+define_env_i16!(
+    cgb_mode3_scy_event_x8_t_adjust,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_X8_T_ADJUST",
+    0
+);
+define_env_u16!(
+    cgb_mode3_scy_event_x8_min_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_X8_MIN_T",
+    0
+);
+define_env_u16!(
+    cgb_mode3_scy_event_x8_max_t,
+    "VIBEEMU_CGB_MODE3_SCY_EVENT_X8_MAX_T",
+    0xFFFF
+);
+define_env_u16!(
+    cgb_dmg_mode3_scy_event_startup_threshold_t,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_THRESHOLD_T",
+    16
+);
+define_env_i16!(
+    cgb_dmg_mode3_scy_event_startup_tile_t1_adjust,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_ADJUST",
+    15
+);
+define_env_i16!(
+    cgb_dmg_mode3_scy_event_startup_tile_t1_x0_adjust,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_X0_ADJUST",
+    0
+);
+define_env_i16!(
+    cgb_dmg_mode3_scy_event_startup_tile_t1_x8_adjust,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_X8_ADJUST",
+    0
+);
+define_env_u16!(
+    cgb_dmg_mode3_scy_event_startup_tile_t1_late_min_t,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_LATE_MIN_T",
+    17
+);
+define_env_u16!(
+    cgb_dmg_mode3_scy_event_startup_tile_t1_late_max_t,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_LATE_MAX_T",
+    31
+);
+define_env_i16!(
+    cgb_dmg_mode3_scy_event_startup_tile_t1_late_adjust,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_LATE_ADJUST",
+    8
+);
+define_env_i16!(
+    cgb_dmg_mode3_scy_event_startup_push_adjust,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_PUSH_ADJUST",
+    -13
+);
+define_env_i16!(
+    cgb_dmg_mode3_scy_event_startup_hi_t2_adjust,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_EVENT_STARTUP_HI_T2_ADJUST",
+    8
+);
+define_env_i16!(
+    dmg_mode3_scy_event_push_state_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_PUSH_STATE_T_ADJUST",
+    -2
+);
+define_env_u16!(
+    dmg_mode3_scy_event_push_state_min_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_PUSH_STATE_MIN_T",
+    1
+);
+define_env_i16!(
+    dmg_mode3_scy_event_push_previsible_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_PUSH_PREVISIBLE_T_ADJUST",
+    -2
+);
+define_env_i16!(
+    dmg_mode3_scy_event_push_visible_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_PUSH_VISIBLE_T_ADJUST",
+    -3
+);
+define_env_i16!(
+    dmg_mode3_scy_event_lo_t1_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_LO_T1_T_ADJUST",
+    2
+);
+define_env_i16!(
+    dmg_mode3_scy_event_tile_t1_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_TILE_T1_T_ADJUST",
+    6
+);
+define_env_u16!(
+    dmg_mode3_scy_event_tile_t1_threshold_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_TILE_T1_THRESHOLD_T",
+    3
+);
+define_env_i16!(
+    dmg_mode3_scy_event_tile_t2_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_TILE_T2_T_ADJUST",
+    5
+);
+define_env_u16!(
+    dmg_mode3_scy_event_tile_t2_threshold_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_TILE_T2_THRESHOLD_T",
+    13
+);
+define_env_i16!(
+    dmg_mode3_scy_event_hi_t2_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_HI_T2_T_ADJUST",
+    -3
+);
+define_env_u16!(
+    dmg_mode3_scy_event_hi_t2_threshold_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_HI_T2_THRESHOLD_T",
+    210
+);
+define_env_u16!(
+    dmg_mode3_scy_event_lo_t1_threshold_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_LO_T1_THRESHOLD_T",
+    208
+);
+define_env_bool_false!(
+    dmg_mode3_scy_use_stage_sample_t,
+    "VIBEEMU_DMG_MODE3_SCY_USE_STAGE_SAMPLE_T"
+);
+define_env_i16!(
+    dmg_mode3_scy_sample_tile_t_offset,
+    "VIBEEMU_DMG_MODE3_SCY_SAMPLE_TILE_T_OFFSET",
+    0
+);
+define_env_i16!(
+    dmg_mode3_scy_sample_lo_t_offset,
+    "VIBEEMU_DMG_MODE3_SCY_SAMPLE_LO_T_OFFSET",
+    0
+);
+define_env_i16!(
+    dmg_mode3_scy_sample_hi_t_offset,
+    "VIBEEMU_DMG_MODE3_SCY_SAMPLE_HI_T_OFFSET",
+    0
+);
+define_env_i16!(
+    cgb_dmg_mode3_scy_latch_start_pos,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_LATCH_START_POS",
+    -16
+);
+define_env_bool_false!(
+    cgb_dmg_mode3_scy_startup_allow_same_dot,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_STARTUP_ALLOW_SAME_DOT"
+);
+define_env_bool_false!(
+    cgb_dmg_mode3_scy_push_full_allow_same_dot,
+    "VIBEEMU_CGB_DMG_MODE3_SCY_PUSH_FULL_ALLOW_SAME_DOT"
+);
+define_env_i16!(
+    dmg_mode3_scy_event_left_regime_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_REGIME_T_ADJUST",
+    -8
+);
+define_env_i16!(
+    dmg_mode3_scy_event_left_edge_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_EDGE_T_ADJUST",
+    0
+);
+define_env_u16!(
+    dmg_mode3_scy_event_left_edge_min_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_EDGE_MIN_T",
+    0
+);
+define_env_u16!(
+    dmg_mode3_scy_event_left_edge_max_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_EDGE_MAX_T",
+    0
+);
+define_env_u16!(
+    dmg_mode3_scy_event_left_regime_min_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_REGIME_MIN_T",
+    19
+);
+define_env_u16!(
+    dmg_mode3_scy_event_left_regime_max_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_LEFT_REGIME_MAX_T",
+    26
+);
+define_env_i16!(
+    dmg_mode3_scy_event_right_regime_t_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_RIGHT_REGIME_T_ADJUST",
+    -14
+);
+define_env_u16!(
+    dmg_mode3_scy_event_right_regime_min_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_RIGHT_REGIME_MIN_T",
+    36
+);
+define_env_u16!(
+    dmg_mode3_scy_event_right_regime_max_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_RIGHT_REGIME_MAX_T",
+    43
+);
+define_env_u16!(
+    dmg_mode3_scy_event_startup_threshold_t,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_THRESHOLD_T",
+    15
+);
+define_env_i16!(
+    dmg_mode3_scy_event_startup_tile_t1_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T1_ADJUST",
+    -8
+);
+define_env_i16!(
+    dmg_mode3_scy_event_startup_lo_t1_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_LO_T1_ADJUST",
+    7
+);
+define_env_i16!(
+    dmg_mode3_scy_event_startup_tile_t2_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_TILE_T2_ADJUST",
+    9
+);
+define_env_i16!(
+    dmg_mode3_scy_event_startup_hi_t2_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_HI_T2_ADJUST",
+    6
+);
+define_env_i16!(
+    dmg_mode3_scy_event_startup_push_adjust,
+    "VIBEEMU_DMG_MODE3_SCY_EVENT_STARTUP_PUSH_ADJUST",
+    2
+);
+define_env_i16!(
+    dmg_mode3_wx_event_t_bias,
+    "VIBEEMU_DMG_MODE3_WX_EVENT_T_BIAS",
+    3
+);
+define_env_i16!(
+    dmg_mode3_wy_event_t_bias,
+    "VIBEEMU_DMG_MODE3_WY_EVENT_T_BIAS",
+    0
+);
+define_env_bool_true!(dmg_wx_activate_on_pos6, "VIBEEMU_DMG_WX_ACTIVATE_ON_POS6");
+define_env_i16!(
+    dmg_wx_previsible_phase_max,
+    "VIBEEMU_DMG_WX_PREVISIBLE_PHASE_MAX",
+    0
+);
 
 #[derive(Copy, Clone, Default)]
 struct DmgBgpEvent {
@@ -1655,23 +965,6 @@ struct DmgObjSizeTuning {
     fetch_ready_state: i16,
 }
 
-fn read_obj_size_i16_env(key: &str, default: i16) -> i16 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.trim().parse::<i16>().ok())
-        .unwrap_or(default)
-}
-
-fn read_obj_size_bool_env(key: &str, default: bool) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|v| {
-            let s = v.trim();
-            !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
-        })
-        .unwrap_or(default)
-}
-
 fn dmg_mode3_obj_fetch_sim_dots() -> u16 {
     use std::sync::OnceLock;
     static DOTS: OnceLock<u16> = OnceLock::new();
@@ -1688,105 +981,77 @@ fn dmg_obj_size_tuning() -> &'static DmgObjSizeTuning {
     use std::sync::OnceLock;
     static TUNING: OnceLock<DmgObjSizeTuning> = OnceLock::new();
     TUNING.get_or_init(|| DmgObjSizeTuning {
-        capture_bias: read_obj_size_i16_env(
+        capture_bias: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_CAPTURE_BIAS",
             DMG_OBJ_SIZE_CAPTURE_BIAS_DEFAULT,
         ),
-        capture_phase_weight: read_obj_size_i16_env(
+        capture_phase_weight: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_CAPTURE_PHASE_WEIGHT",
             DMG_OBJ_SIZE_CAPTURE_PHASE_WEIGHT_DEFAULT,
         ),
-        line_bias: read_obj_size_i16_env(
+        line_bias: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_LINE_BIAS",
             DMG_OBJ_SIZE_LINE_BIAS_DEFAULT,
         ),
-        sample_bias_scx0: read_obj_size_i16_env(
+        sample_bias_scx0: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_SAMPLE_BIAS_SCX0",
             DMG_OBJ_SIZE_SAMPLE_BIAS_SCX0_DEFAULT,
         ),
-        sample_bias_scxnz: read_obj_size_i16_env(
+        sample_bias_scxnz: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_SAMPLE_BIAS_SCXNZ",
             DMG_OBJ_SIZE_SAMPLE_BIAS_SCXNZ_DEFAULT,
         ),
-        scx_fine_weight: read_obj_size_i16_env(
+        scx_fine_weight: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_SCX_FINE_WEIGHT",
             DMG_OBJ_SIZE_SCX_FINE_WEIGHT_DEFAULT,
         ),
-        scx0_use_fetch_control: read_obj_size_bool_env(
-            "VIBEEMU_DMG_OBJ_SIZE_SCX0_USE_FETCH_CONTROL",
-            DMG_OBJ_SIZE_SCX0_USE_FETCH_CONTROL_DEFAULT,
-        ),
-        size8_clamp: read_obj_size_bool_env(
-            "VIBEEMU_DMG_OBJ_SIZE_8X8_CLAMP",
-            DMG_OBJ_SIZE_8X8_CLAMP_DEFAULT,
-        ),
-        capture_use_position: read_obj_size_bool_env(
-            "VIBEEMU_DMG_OBJ_SIZE_CAPTURE_USE_POSITION",
-            DMG_OBJ_SIZE_CAPTURE_USE_POSITION_DEFAULT,
-        ),
-        sample_px_weight: read_obj_size_i16_env(
+        scx0_use_fetch_control: env_bool_or_false("VIBEEMU_DMG_OBJ_SIZE_SCX0_USE_FETCH_CONTROL"),
+        size8_clamp: env_bool_or_false("VIBEEMU_DMG_OBJ_SIZE_8X8_CLAMP"),
+        capture_use_position: env_bool_or_false("VIBEEMU_DMG_OBJ_SIZE_CAPTURE_USE_POSITION"),
+        sample_px_weight: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_SAMPLE_PX_WEIGHT",
             DMG_OBJ_SIZE_SAMPLE_PX_WEIGHT_DEFAULT,
         ),
-        sample_hi_delta: read_obj_size_i16_env(
+        sample_hi_delta: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_SAMPLE_HI_DELTA",
             DMG_OBJ_SIZE_SAMPLE_HI_DELTA_DEFAULT,
         ),
-        fetch_sample_px: read_obj_size_i16_env(
+        fetch_sample_px: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_FETCH_SAMPLE_PX",
             DMG_OBJ_SIZE_FETCH_SAMPLE_PX_DEFAULT,
         ),
-        use_fetch_latch: read_obj_size_bool_env(
-            "VIBEEMU_DMG_OBJ_SIZE_FETCH_LATCH",
-            DMG_OBJ_SIZE_FETCH_LATCH_DEFAULT,
-        ),
-        object_match_bias: read_obj_size_i16_env(
+        use_fetch_latch: env_bool_or_false("VIBEEMU_DMG_OBJ_SIZE_FETCH_LATCH"),
+        object_match_bias: env_i16_or(
             "VIBEEMU_DMG_MODE3_OBJECT_MATCH_BIAS",
             DMG_MODE3_OBJECT_MATCH_BIAS_DEFAULT,
         ),
-        fetch_t_bias: read_obj_size_i16_env(
+        fetch_t_bias: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_FETCH_T_BIAS",
             DMG_OBJ_SIZE_FETCH_T_BIAS_DEFAULT,
         ),
-        fetch_hi_t_delta: read_obj_size_i16_env(
+        fetch_hi_t_delta: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_FETCH_HI_T_DELTA",
             DMG_OBJ_SIZE_FETCH_HI_T_DELTA_DEFAULT,
         ),
-        fetch_lo_scxnz_bias: read_obj_size_i16_env(
+        fetch_lo_scxnz_bias: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_FETCH_LO_SCXNZ_BIAS",
             DMG_OBJ_SIZE_FETCH_LO_SCXNZ_BIAS_DEFAULT,
         ),
-        fetch_stall_extra: read_obj_size_i16_env(
+        fetch_stall_extra: env_i16_or(
             "VIBEEMU_DMG_MODE3_OBJ_FETCH_STALL_EXTRA",
             DMG_MODE3_OBJ_FETCH_STALL_EXTRA_DEFAULT,
         ),
-        fetch_use_live_lcdc: read_obj_size_bool_env(
-            "VIBEEMU_DMG_OBJ_SIZE_FETCH_USE_LIVE_LCDC",
-            DMG_OBJ_SIZE_FETCH_USE_LIVE_LCDC_DEFAULT,
-        ),
-        sample_use_t: read_obj_size_bool_env(
-            "VIBEEMU_DMG_OBJ_SIZE_SAMPLE_USE_T",
-            DMG_OBJ_SIZE_SAMPLE_USE_T_DEFAULT,
-        ),
-        sample_t_bias: read_obj_size_i16_env(
+        fetch_use_live_lcdc: env_bool_or_false("VIBEEMU_DMG_OBJ_SIZE_FETCH_USE_LIVE_LCDC"),
+        sample_use_t: env_bool_or_false("VIBEEMU_DMG_OBJ_SIZE_SAMPLE_USE_T"),
+        sample_t_bias: env_i16_or(
             "VIBEEMU_DMG_OBJ_SIZE_SAMPLE_T_BIAS",
             DMG_OBJ_SIZE_SAMPLE_T_BIAS_DEFAULT,
         ),
-        use_fetch_t_for_fetched: read_obj_size_bool_env(
-            "VIBEEMU_DMG_OBJ_SIZE_USE_FETCH_T_FOR_FETCHED",
-            DMG_OBJ_SIZE_USE_FETCH_T_FOR_FETCHED_DEFAULT,
-        ),
-        fetch_ready_state: read_obj_size_i16_env(
+        use_fetch_t_for_fetched: env_bool_or_false("VIBEEMU_DMG_OBJ_SIZE_USE_FETCH_T_FOR_FETCHED"),
+        fetch_ready_state: env_i16_or(
             "VIBEEMU_DMG_MODE3_OBJ_FETCH_READY_STATE",
             DMG_MODE3_OBJ_FETCH_READY_STATE_DEFAULT,
         ),
-    })
-}
-
-fn read_trace_bool_env(key: &str) -> bool {
-    std::env::var(key).ok().is_some_and(|v| {
-        let s = v.trim();
-        !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
     })
 }
 
@@ -1821,7 +1086,7 @@ fn parse_trace_line_set(spec: &str) -> [bool; SCREEN_HEIGHT] {
 }
 
 fn trace_obj_debug_line_enabled(ly: u8) -> bool {
-    if !read_trace_bool_env("VIBEEMU_TRACE_OBJ_DEBUG") {
+    if !env_bool_or_false("VIBEEMU_TRACE_OBJ_DEBUG") {
         return false;
     }
     use std::sync::OnceLock;
@@ -1841,154 +1106,90 @@ fn read_trace_u64_env(key: &str) -> Option<u64> {
         .and_then(|v| v.trim().parse::<u64>().ok())
 }
 
-fn trace_scx_writes_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| read_trace_bool_env("VIBEEMU_TRACE_SCX_WRITES_ALL"))
+define_env_bool_false!(trace_scx_writes_enabled, "VIBEEMU_TRACE_SCX_WRITES_ALL");
+define_env_bool_false!(
+    trace_lcd_reg_writes_enabled,
+    "VIBEEMU_TRACE_LCD_REG_WRITES_ALL"
+);
+
+macro_rules! define_trace_line_filter {
+    ($func:ident, $key:literal) => {
+        fn $func(ly: u8) -> bool {
+            if ly as usize >= SCREEN_HEIGHT {
+                return false;
+            }
+            use std::sync::OnceLock;
+            static LINES: OnceLock<[bool; SCREEN_HEIGHT]> = OnceLock::new();
+            static HAS_FILTER: OnceLock<bool> = OnceLock::new();
+            let has_filter = *HAS_FILTER.get_or_init(|| std::env::var_os($key).is_some());
+            if !has_filter {
+                return true;
+            }
+            let set = LINES.get_or_init(|| {
+                std::env::var($key)
+                    .ok()
+                    .map(|v| parse_trace_line_set(&v))
+                    .unwrap_or([true; SCREEN_HEIGHT])
+            });
+            set[ly as usize]
+        }
+    };
 }
 
-fn trace_lcd_reg_writes_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| read_trace_bool_env("VIBEEMU_TRACE_LCD_REG_WRITES_ALL"))
+define_trace_line_filter!(
+    trace_scx_write_line_enabled,
+    "VIBEEMU_TRACE_SCX_WRITES_LINES"
+);
+define_trace_line_filter!(
+    trace_lcd_reg_write_line_enabled,
+    "VIBEEMU_TRACE_LCD_REG_WRITES_LINES"
+);
+
+macro_rules! define_trace_frame_filter {
+    ($func:ident, $min_key:literal, $max_key:literal) => {
+        fn $func(frame: u64) -> bool {
+            use std::sync::OnceLock;
+            static FRAME_MIN: OnceLock<Option<u64>> = OnceLock::new();
+            static FRAME_MAX: OnceLock<Option<u64>> = OnceLock::new();
+
+            let min = *FRAME_MIN.get_or_init(|| read_trace_u64_env($min_key));
+            if let Some(v) = min
+                && frame < v
+            {
+                return false;
+            }
+            let max = *FRAME_MAX.get_or_init(|| read_trace_u64_env($max_key));
+            if let Some(v) = max
+                && frame > v
+            {
+                return false;
+            }
+            true
+        }
+    };
 }
 
-fn trace_scx_write_line_enabled(ly: u8) -> bool {
-    if ly as usize >= SCREEN_HEIGHT {
-        return false;
-    }
+define_trace_frame_filter!(
+    trace_scx_write_frame_enabled,
+    "VIBEEMU_TRACE_SCX_WRITES_FRAME_MIN",
+    "VIBEEMU_TRACE_SCX_WRITES_FRAME_MAX"
+);
+define_trace_frame_filter!(
+    trace_lcd_reg_write_frame_enabled,
+    "VIBEEMU_TRACE_LCD_REG_WRITES_FRAME_MIN",
+    "VIBEEMU_TRACE_LCD_REG_WRITES_FRAME_MAX"
+);
 
-    use std::sync::OnceLock;
-    static LINES: OnceLock<[bool; SCREEN_HEIGHT]> = OnceLock::new();
-    static HAS_FILTER: OnceLock<bool> = OnceLock::new();
+define_trace_frame_filter!(
+    trace_frame_window_enabled,
+    "VIBEEMU_TRACE_FRAME_MIN",
+    "VIBEEMU_TRACE_FRAME_MAX"
+);
 
-    let has_filter =
-        *HAS_FILTER.get_or_init(|| std::env::var_os("VIBEEMU_TRACE_SCX_WRITES_LINES").is_some());
-    if !has_filter {
-        return true;
-    }
-    let set = LINES.get_or_init(|| {
-        std::env::var("VIBEEMU_TRACE_SCX_WRITES_LINES")
-            .ok()
-            .map(|v| parse_trace_line_set(&v))
-            .unwrap_or([true; SCREEN_HEIGHT])
-    });
-    set[ly as usize]
-}
-
-fn trace_scx_write_frame_enabled(frame: u64) -> bool {
-    use std::sync::OnceLock;
-    static FRAME_MIN: OnceLock<Option<u64>> = OnceLock::new();
-    static FRAME_MAX: OnceLock<Option<u64>> = OnceLock::new();
-
-    let min = *FRAME_MIN.get_or_init(|| read_trace_u64_env("VIBEEMU_TRACE_SCX_WRITES_FRAME_MIN"));
-    if let Some(v) = min
-        && frame < v
-    {
-        return false;
-    }
-    let max = *FRAME_MAX.get_or_init(|| read_trace_u64_env("VIBEEMU_TRACE_SCX_WRITES_FRAME_MAX"));
-    if let Some(v) = max
-        && frame > v
-    {
-        return false;
-    }
-    true
-}
-
-fn trace_lcd_reg_write_frame_enabled(frame: u64) -> bool {
-    use std::sync::OnceLock;
-    static FRAME_MIN: OnceLock<Option<u64>> = OnceLock::new();
-    static FRAME_MAX: OnceLock<Option<u64>> = OnceLock::new();
-
-    let min =
-        *FRAME_MIN.get_or_init(|| read_trace_u64_env("VIBEEMU_TRACE_LCD_REG_WRITES_FRAME_MIN"));
-    if let Some(min_frame) = min
-        && frame < min_frame
-    {
-        return false;
-    }
-
-    let max =
-        *FRAME_MAX.get_or_init(|| read_trace_u64_env("VIBEEMU_TRACE_LCD_REG_WRITES_FRAME_MAX"));
-    if let Some(max_frame) = max
-        && frame > max_frame
-    {
-        return false;
-    }
-
-    true
-}
-
-fn trace_lcd_reg_write_line_enabled(ly: u8) -> bool {
-    use std::sync::OnceLock;
-    static HAS_FILTER: OnceLock<bool> = OnceLock::new();
-    static LINES: OnceLock<Option<Vec<u8>>> = OnceLock::new();
-
-    let has_filter = *HAS_FILTER
-        .get_or_init(|| std::env::var_os("VIBEEMU_TRACE_LCD_REG_WRITES_LINES").is_some());
-    if !has_filter {
-        return true;
-    }
-
-    let lines = LINES.get_or_init(|| {
-        std::env::var("VIBEEMU_TRACE_LCD_REG_WRITES_LINES")
-            .ok()
-            .map(|v| {
-                v.split(',')
-                    .filter_map(|s| s.trim().parse::<u16>().ok())
-                    .filter(|&n| n <= u8::MAX as u16)
-                    .map(|n| n as u8)
-                    .collect::<Vec<_>>()
-            })
-    });
-
-    lines.as_ref().is_some_and(|vals| vals.contains(&ly))
-}
-
-fn trace_frame_window_enabled(frame: u64) -> bool {
-    use std::sync::OnceLock;
-    static FRAME_MIN: OnceLock<Option<u64>> = OnceLock::new();
-    static FRAME_MAX: OnceLock<Option<u64>> = OnceLock::new();
-
-    let min = *FRAME_MIN.get_or_init(|| read_trace_u64_env("VIBEEMU_TRACE_FRAME_MIN"));
-    if let Some(v) = min
-        && frame < v
-    {
-        return false;
-    }
-    let max = *FRAME_MAX.get_or_init(|| read_trace_u64_env("VIBEEMU_TRACE_FRAME_MAX"));
-    if let Some(v) = max
-        && frame > v
-    {
-        return false;
-    }
-    true
-}
-
-fn trace_bg_output_line_enabled(ly: u8) -> bool {
-    if ly as usize >= SCREEN_HEIGHT {
-        return false;
-    }
-
-    use std::sync::OnceLock;
-    static LINES: OnceLock<[bool; SCREEN_HEIGHT]> = OnceLock::new();
-    static HAS_FILTER: OnceLock<bool> = OnceLock::new();
-
-    let has_filter =
-        *HAS_FILTER.get_or_init(|| std::env::var_os("VIBEEMU_TRACE_DMG_BG_OUTPUT_LINES").is_some());
-    if !has_filter {
-        return true;
-    }
-
-    let set = LINES.get_or_init(|| {
-        std::env::var("VIBEEMU_TRACE_DMG_BG_OUTPUT_LINES")
-            .ok()
-            .map(|v| parse_trace_line_set(&v))
-            .unwrap_or([true; SCREEN_HEIGHT])
-    });
-    set[ly as usize]
-}
+define_trace_line_filter!(
+    trace_bg_output_line_enabled,
+    "VIBEEMU_TRACE_DMG_BG_OUTPUT_LINES"
+);
 
 #[derive(Copy, Clone, Default)]
 struct Mode3LcdcEvent {
@@ -2030,6 +1231,17 @@ struct Sprite {
     obj_data_valid: bool,
     fetch_t: u16,
     fetch_t_valid: bool,
+}
+
+impl Sprite {
+    #[inline]
+    fn clear_fetch_state(&mut self) {
+        self.fetched = false;
+        self.obj_row_valid = false;
+        self.obj_size16_low = false;
+        self.obj_data_valid = false;
+        self.fetch_t_valid = false;
+    }
 }
 
 impl Ppu {
@@ -2287,12 +1499,37 @@ impl Ppu {
         self.cgb && self.dmg_compat
     }
 
+    // Returns true when all LCDC events in the current mode-3 window only
+    // toggled a single bit identified by `allowed_mask`.
+    fn lcdc_events_only_toggled_bit(&self, allowed_mask: u8) -> bool {
+        if self.mode3_lcdc_event_count == 0 {
+            return false;
+        }
+        let mut prev = self.mode3_lcdc_base;
+        for ev in self.mode3_lcdc_events[..self.mode3_lcdc_event_count].iter() {
+            let changed = prev ^ ev.val;
+            if changed == 0 || (changed & !allowed_mask) != 0 {
+                return false;
+            }
+            prev = ev.val;
+        }
+        true
+    }
+
     #[inline]
     fn should_record_mode3_reg_event(&self) -> bool {
         self.mode == MODE_TRANSFER
             && self.ly < SCREEN_HEIGHT as u8
             && (self.lcdc & 0x80) != 0
             && self.mode_clock <= self.mode3_target_cycles
+    }
+
+    #[inline]
+    fn should_trace_lcd_reg_write(&self) -> bool {
+        trace_lcd_reg_writes_enabled()
+            && trace_frame_window_enabled(self.frame_counter)
+            && trace_lcd_reg_write_line_enabled(self.ly)
+            && trace_lcd_reg_write_frame_enabled(self.frame_counter)
     }
 
     fn record_mode3_lcdc_event(&mut self, mode3_t: u16, val: u8) {
@@ -2490,7 +1727,7 @@ impl Ppu {
             // applies to CGB DMG-compat mode.
             bias -= 1;
         }
-        if self.cgb && self.dmg_compat {
+        if self.is_cgb_dmg_compat_mode() {
             let changed = self.scx ^ val;
             if (changed & 0xF8) != 0 {
                 // On CGB in DMG compatibility mode, coarse SCX bits are sampled
@@ -2526,8 +1763,7 @@ impl Ppu {
             bias += dmg_mode3_scx_event_push_state_t_adjust();
         }
         let t = (mode3_t as i16 + bias).clamp(0, max_t) as u16;
-        if read_trace_bool_env("VIBEEMU_TRACE_SCX_EVENTS") && trace_obj_debug_line_enabled(self.ly)
-        {
+        if env_bool_or_false("VIBEEMU_TRACE_SCX_EVENTS") && trace_obj_debug_line_enabled(self.ly) {
             let first_x = if self.sprite_count > 0 {
                 self.line_sprites[0].x
             } else {
@@ -2572,7 +1808,7 @@ impl Ppu {
         } else {
             dmg_mode3_scy_event_t_bias()
         };
-        let (early_threshold, early_adjust) = if self.cgb && self.dmg_compat {
+        let (early_threshold, early_adjust) = if self.is_cgb_dmg_compat_mode() {
             (
                 cgb_dmg_mode3_scy_event_early_threshold_t(),
                 cgb_dmg_mode3_scy_event_early_t_adjust(),
@@ -2588,13 +1824,13 @@ impl Ppu {
                 dmg_mode3_scy_event_early_t_adjust(),
             )
         };
-        if self.cgb && self.dmg_compat && self.ly == 0 {
+        if self.is_cgb_dmg_compat_mode() && self.ly == 0 {
             bias += cgb_dmg_mode3_scy_event_line0_t_adjust();
         }
         if mode3_t <= early_threshold {
             bias += early_adjust;
         }
-        if self.cgb && self.dmg_compat && self.sprite_count > 0 {
+        if self.is_cgb_dmg_compat_mode() && self.sprite_count > 0 {
             let first_x = self.line_sprites[0].x;
             if first_x <= -7
                 && mode3_t >= cgb_mode3_scy_event_left_regime_min_t()
@@ -2743,8 +1979,7 @@ impl Ppu {
             }
         }
         let t = (mode3_t as i16 + bias).clamp(0, max_t) as u16;
-        if read_trace_bool_env("VIBEEMU_TRACE_SCY_EVENTS") && trace_obj_debug_line_enabled(self.ly)
-        {
+        if env_bool_or_false("VIBEEMU_TRACE_SCY_EVENTS") && trace_obj_debug_line_enabled(self.ly) {
             let first_x = if self.sprite_count > 0 {
                 self.line_sprites[0].x
             } else {
@@ -2803,24 +2038,37 @@ impl Ppu {
         }
     }
 
+    fn record_simple_mode3_reg_event(
+        events: &mut [Mode3RegEvent; MODE3_REG_EVENTS_MAX],
+        count: &mut usize,
+        mode3_t: u16,
+        max_mode3_t: u16,
+        bias: i16,
+        val: u8,
+    ) {
+        let max_t = max_mode3_t.saturating_sub(1) as i16;
+        let t = (mode3_t as i16 + bias).clamp(0, max_t) as u16;
+        Self::push_mode3_reg_event(events, count, t, val);
+    }
+
     fn record_mode3_wx_event(&mut self, mode3_t: u16, val: u8) {
-        let max_t = self.mode3_target_cycles.saturating_sub(1) as i16;
-        let t = (mode3_t as i16 + dmg_mode3_wx_event_t_bias()).clamp(0, max_t) as u16;
-        Self::push_mode3_reg_event(
+        Self::record_simple_mode3_reg_event(
             &mut self.mode3_wx_events,
             &mut self.mode3_wx_event_count,
-            t,
+            mode3_t,
+            self.mode3_target_cycles,
+            dmg_mode3_wx_event_t_bias(),
             val,
         );
     }
 
     fn record_mode3_wy_event(&mut self, mode3_t: u16, val: u8) {
-        let max_t = self.mode3_target_cycles.saturating_sub(1) as i16;
-        let t = (mode3_t as i16 + dmg_mode3_wy_event_t_bias()).clamp(0, max_t) as u16;
-        Self::push_mode3_reg_event(
+        Self::record_simple_mode3_reg_event(
             &mut self.mode3_wy_events,
             &mut self.mode3_wy_event_count,
-            t,
+            mode3_t,
+            self.mode3_target_cycles,
+            dmg_mode3_wy_event_t_bias(),
             val,
         );
     }
@@ -2919,21 +2167,7 @@ impl Ppu {
     fn record_dmg_bgp_event(&mut self, mode3_t: u16, val: u8) {
         let dmg_mode = self.is_dmg_mode();
         let cgb_dmg_obj_en_only_line =
-            if self.cgb && self.dmg_compat && self.mode3_lcdc_event_count > 0 {
-                let mut only = true;
-                let mut prev = self.mode3_lcdc_base;
-                for ev in self.mode3_lcdc_events[..self.mode3_lcdc_event_count].iter() {
-                    let changed = prev ^ ev.val;
-                    if changed == 0 || (changed & !0x02) != 0 {
-                        only = false;
-                        break;
-                    }
-                    prev = ev.val;
-                }
-                only
-            } else {
-                false
-            };
+            self.is_cgb_dmg_compat_mode() && self.lcdc_events_only_toggled_bit(0x02);
         // Convert MODE3 timestamp to an approximate output pixel coordinate.
         //
         // On DMG with OBJ enabled, the simplified mode 3 model tracks the live
@@ -3024,7 +2258,7 @@ impl Ppu {
             // earlier than the baseline mode3_lcd_x mapping.
             x = x.saturating_sub(1);
         }
-        if self.cgb && self.dmg_compat && cgb_dmg_obj_en_only_line && self.sprite_count > 0 {
+        if self.is_cgb_dmg_compat_mode() && cgb_dmg_obj_en_only_line && self.sprite_count > 0 {
             // CGB DMG-compat OBJ_EN-only lines split into two regimes:
             // - If the first sprite fetch has already started, BGP writes trail
             //   by several pixels (phase depends on first sprite X).
@@ -3199,7 +2433,7 @@ impl Ppu {
         // the mode-3 write timestamp map than to the DMG line-latch fallback.
         let use_event_map = dmg_bgp_use_event_map()
             || (!self.cgb && self.sprite_count == 0)
-            || (self.cgb && self.dmg_compat);
+            || (self.is_cgb_dmg_compat_mode());
         if use_event_map {
             let mut current = self.dmg_line_bgp_base;
             let x = x as u8;
@@ -3295,7 +2529,7 @@ impl Ppu {
                     sample_x = (sample_x + 2).min(SCREEN_WIDTH - 1);
                 }
             }
-            if read_trace_bool_env("VIBEEMU_TRACE_BGP_SAMPLE")
+            if env_bool_or_false("VIBEEMU_TRACE_BGP_SAMPLE")
                 && (self.ly == 64 || self.ly == 120)
                 && x <= 16
             {
@@ -3423,7 +2657,7 @@ impl Ppu {
         // corresponding tile pixels are popped. Use the recorded mode-3 dot of
         // tile output and sample LCDC at a configurable dot backshift.
         let mut backshift_t = dmg_bg_fetch_lead_pixels().clamp(0, 64) as u16;
-        if self.cgb && self.dmg_compat && self.sprite_count > 0 {
+        if self.is_cgb_dmg_compat_mode() && self.sprite_count > 0 {
             let first_x = self.line_sprites[0].x;
             let mut bg_map_only_line = self.mode3_lcdc_event_count > 0;
             let mut prev_lcdc = self.mode3_lcdc_base;
@@ -3489,21 +2723,8 @@ impl Ppu {
     #[inline]
     fn dmg_lcdc_for_bg_fetch_t(&self, t: u16) -> u8 {
         let mut current = self.mode3_lcdc_base;
-        let cgb_dmg_compat_tile_sel_only_line = if self.cgb && self.dmg_compat {
-            let mut only = self.mode3_lcdc_event_count > 0;
-            let mut prev = self.mode3_lcdc_base;
-            for ev in self.mode3_lcdc_events[..self.mode3_lcdc_event_count].iter() {
-                let changed = prev ^ ev.val;
-                if changed == 0 || (changed & !0x10) != 0 {
-                    only = false;
-                    break;
-                }
-                prev = ev.val;
-            }
-            only
-        } else {
-            false
-        };
+        let cgb_dmg_compat_tile_sel_only_line =
+            self.is_cgb_dmg_compat_mode() && self.lcdc_events_only_toggled_bit(0x10);
         for (i, ev) in self.mode3_lcdc_events[..self.mode3_lcdc_event_count]
             .iter()
             .enumerate()
@@ -3564,7 +2785,7 @@ impl Ppu {
                 } else if adj > 0 {
                     event_t = event_t.saturating_add(adj as u16);
                 }
-            } else if self.cgb && self.dmg_compat {
+            } else if self.is_cgb_dmg_compat_mode() {
                 let changed = self.mode3_lcdc_base ^ ev.val;
                 let bg_map_only = (changed & 0x08) != 0 && (changed & !0x08) == 0;
                 let win_map_only = (changed & 0x40) != 0 && (changed & !0x40) == 0;
@@ -3708,7 +2929,7 @@ impl Ppu {
         // seen in mealybug TILE_SEL timing without affecting other LCDC bits.
         let mut current = self.mode3_lcdc_base;
         let max_t = self.mode3_target_cycles.saturating_sub(1) as i16;
-        let dmg_like = !self.cgb || self.dmg_compat;
+        let dmg_like = self.is_dmg_mode();
         let first_x = if self.sprite_count > 0 {
             self.line_sprites[0].x
         } else {
@@ -3728,7 +2949,7 @@ impl Ppu {
                 } else {
                     0
                 };
-                if self.cgb && self.dmg_compat && first_x >= 8 && i == 0 && delay >= 7 {
+                if self.is_cgb_dmg_compat_mode() && first_x >= 8 && i == 0 && delay >= 7 {
                     // Right-edge-first CGB DMG-compat lines keep bit-4 latched
                     // one more fetch slot before the first visible affected tile.
                     let sprite_row0 = self.sprite_count > 0
@@ -3807,13 +3028,13 @@ impl Ppu {
                     // On left-clipped sprite lines, a TILE_SEL write landing
                     // during LO setup is observed by the subsequent HI phase
                     // one dot earlier than LO.
-                    if !(self.cgb && self.dmg_compat) {
+                    if !(self.is_cgb_dmg_compat_mode()) {
                         transition_x = transition_x.saturating_sub(1);
                     }
                 } else if right_sprite_regime && ev.fetcher_state == 0 {
                     // Right-edge-first lines keep the first TILE_SEL edge
                     // slightly earlier on HI than LO.
-                    let hi_early = if self.cgb && self.dmg_compat {
+                    let hi_early = if self.is_cgb_dmg_compat_mode() {
                         if first_x >= 9 { 4 } else { 3 }
                     } else if first_x >= 9 {
                         5
@@ -3829,7 +3050,7 @@ impl Ppu {
                 //
                 // CGB DMG-compat keeps LO one step later than HI in this
                 // regime (producing the mixed low/high tile-data phase).
-                if self.cgb && self.dmg_compat {
+                if self.is_cgb_dmg_compat_mode() {
                     if hi_phase {
                         transition_x = transition_x.saturating_sub(1);
                     }
@@ -3843,7 +3064,8 @@ impl Ppu {
                 let step = if right_sprite_regime { 3 } else { 1 };
                 transition_x = prev_transition_x.saturating_add(step);
             }
-            if self.cgb && self.dmg_compat && i > 0 && left_sprite_regime && ev.fetcher_state != 0 {
+            if self.is_cgb_dmg_compat_mode() && i > 0 && left_sprite_regime && ev.fetcher_state != 0
+            {
                 // CGB DMG-compat keeps restore edges one phase later on
                 // left-clipped non-state0 regimes.
                 transition_x = transition_x.saturating_add(1);
@@ -3981,7 +3203,7 @@ impl Ppu {
 
     #[inline]
     fn dmg_obj_size_fetch_t_compat_adjust(&self) -> i16 {
-        if self.cgb && self.dmg_compat {
+        if self.is_cgb_dmg_compat_mode() {
             // CGB DMG-compat samples OBJ size a little earlier than DMG.
             -2
         } else {
@@ -3991,7 +3213,7 @@ impl Ppu {
 
     #[inline]
     fn dmg_obj_size_fetch_hi_t_compat_adjust(&self) -> i16 {
-        if self.cgb && self.dmg_compat && (self.scx & 0x07) != 0 {
+        if self.is_cgb_dmg_compat_mode() && (self.scx & 0x07) != 0 {
             // Fine-scroll OBJ fetches on CGB DMG-compat observe the high-byte
             // size sample one dot later than the DMG-oriented baseline.
             1
@@ -4066,11 +3288,7 @@ impl Ppu {
             self.line_sprites[idx].obj_data_valid = true;
             self.line_sprites[idx].fetch_t_valid = false;
         } else {
-            self.line_sprites[idx].fetched = false;
-            self.line_sprites[idx].obj_row_valid = false;
-            self.line_sprites[idx].obj_size16_low = false;
-            self.line_sprites[idx].obj_data_valid = false;
-            self.line_sprites[idx].fetch_t_valid = false;
+            self.line_sprites[idx].clear_fetch_state();
         }
 
         self.mode3_obj_fetch_active = false;
@@ -4189,26 +3407,12 @@ impl Ppu {
                 self.mode3_sprite_latch_index += 1;
             }
         } else {
-            let advance_fetcher = |bg_fifo: &mut u8, fetcher_state: &mut u8| {
-                if *fetcher_state == 6 {
-                    if *bg_fifo == 0 {
-                        *bg_fifo = 8;
-                        *fetcher_state = 0;
-                    }
-                    return;
-                }
-                *fetcher_state += 1;
-                if *fetcher_state > 6 {
-                    *fetcher_state = 0;
-                }
-            };
-
             let tick_no_render =
                 |render_delay: &mut u16, bg_fifo: &mut u8, fetcher_state: &mut u8| {
                     if *render_delay > 0 {
                         *render_delay -= 1;
                     }
-                    advance_fetcher(bg_fifo, fetcher_state);
+                    Self::advance_bg_fetcher(bg_fifo, fetcher_state);
                 };
 
             let tick_render = |position_in_line: &mut i16,
@@ -4220,7 +3424,7 @@ impl Ppu {
                 if *position_in_line >= 0 {
                     *lcd_x = lcd_x.saturating_add(1);
                 }
-                advance_fetcher(bg_fifo, fetcher_state);
+                Self::advance_bg_fetcher(bg_fifo, fetcher_state);
             };
 
             // One "dot" of simplified mode 3 progression.
@@ -4259,10 +3463,8 @@ impl Ppu {
                             let flags = self.oam_read_for_ppu(base + 3);
                             self.line_sprites[idx].tile = tile;
                             self.line_sprites[idx].flags = flags;
+                            self.line_sprites[idx].clear_fetch_state();
                             self.line_sprites[idx].fetched = true;
-                            self.line_sprites[idx].obj_row_valid = false;
-                            self.line_sprites[idx].obj_size16_low = false;
-                            self.line_sprites[idx].obj_data_valid = false;
                             if !self.line_sprites[idx].fetch_t_valid {
                                 self.line_sprites[idx].fetch_t = self.mode_clock;
                                 self.line_sprites[idx].fetch_t_valid = true;
@@ -4341,7 +3543,7 @@ impl Ppu {
                                 && self.line_sprites[idx].obj_row_valid
                                 && self.line_sprites[idx].obj_size16_low
                                 && !size_16
-                                && !(self.cgb && self.dmg_compat && (self.scx & 0x07) >= 4)
+                                && !(self.is_cgb_dmg_compat_mode() && (self.scx & 0x07) >= 4)
                             {
                                 size_16 = true;
                             }
@@ -4390,11 +3592,7 @@ impl Ppu {
                     let base = sprite.oam_index * 4;
                     self.line_sprites[idx].tile = self.oam_read_for_ppu(base + 2);
                     self.line_sprites[idx].flags = self.oam_read_for_ppu(base + 3);
-                    self.line_sprites[idx].fetched = false;
-                    self.line_sprites[idx].obj_data_valid = false;
-                    self.line_sprites[idx].obj_row_valid = false;
-                    self.line_sprites[idx].obj_size16_low = false;
-                    self.line_sprites[idx].fetch_t_valid = false;
+                    self.line_sprites[idx].clear_fetch_state();
                     self.mode3_sprite_latch_index += 1;
                 }
             }
@@ -4428,10 +3626,7 @@ impl Ppu {
                         return;
                     }
 
-                    self.line_sprites[idx].fetched = false;
-                    self.line_sprites[idx].obj_row_valid = false;
-                    self.line_sprites[idx].obj_size16_low = false;
-                    self.line_sprites[idx].obj_data_valid = false;
+                    self.line_sprites[idx].clear_fetch_state();
                     self.line_sprites[idx].fetch_t_valid = true;
                     self.line_sprites[idx].fetch_t = self.mode_clock;
                     self.mode3_obj_fetch_active = true;
@@ -4606,6 +3801,40 @@ impl Ppu {
     }
 
     #[inline]
+    fn advance_bg_fetcher(bg_fifo: &mut u8, fetcher_state: &mut u8) {
+        if *fetcher_state == 6 {
+            if *bg_fifo == 0 {
+                *bg_fifo = 8;
+                *fetcher_state = 0;
+            }
+            return;
+        }
+        *fetcher_state += 1;
+        if *fetcher_state > 6 {
+            *fetcher_state = 0;
+        }
+    }
+
+    // CGB DMG-compat sprite-aware sample_t computation for tile data fetches.
+    // LO and HI bitplane stages use slightly different first_x ranges.
+    #[inline]
+    fn cgb_compat_tile_data_sample_t(first_x: i16, t: u16, is_high: bool) -> u16 {
+        if is_high {
+            if (4..=6).contains(&first_x) {
+                t.saturating_sub(3)
+            } else if (2..=3).contains(&first_x) {
+                t.saturating_sub(2)
+            } else {
+                t
+            }
+        } else if (2..=6).contains(&first_x) {
+            t.saturating_sub(2)
+        } else {
+            t
+        }
+    }
+
+    #[inline]
     fn dmg_mode3_phase_group_penalty_mcycles(phase: u8, high: u16, mid: u16, low: u16) -> u16 {
         match phase & 0x07 {
             0 | 1 => high,
@@ -4777,26 +4006,12 @@ impl Ppu {
             }
         }
 
-        let advance_fetcher = |bg_fifo: &mut u8, fetcher_state: &mut u8| {
-            if *fetcher_state == 6 {
-                if *bg_fifo == 0 {
-                    *bg_fifo = 8;
-                    *fetcher_state = 0;
-                }
-                return;
-            }
-            *fetcher_state += 1;
-            if *fetcher_state > 6 {
-                *fetcher_state = 0;
-            }
-        };
-
         let tick_no_render =
             |cycles: &mut u16, render_delay: &mut u16, bg_fifo: &mut u8, fetcher_state: &mut u8| {
                 if *render_delay > 0 {
                     *render_delay -= 1;
                 }
-                advance_fetcher(bg_fifo, fetcher_state);
+                Self::advance_bg_fetcher(bg_fifo, fetcher_state);
                 *cycles = cycles.wrapping_add(1);
             };
 
@@ -4961,7 +4176,7 @@ impl Ppu {
             if position_in_line >= 0 {
                 lcd_x += 1;
             }
-            advance_fetcher(&mut bg_fifo, &mut fetcher_state);
+            Self::advance_bg_fetcher(&mut bg_fifo, &mut fetcher_state);
             cycles = cycles.wrapping_add(1);
         }
 
@@ -5228,8 +4443,8 @@ impl Ppu {
 
     /// Return a 0x00RRGGBB colour from **OBJ** palette RAM.
     ///
-    /// * `palette` – CGB OBJ palette index (0-7)
-    /// * `color_id` – colour within that palette (0-3)
+    /// * `palette` â€“ CGB OBJ palette index (0-7)
+    /// * `color_id` â€“ colour within that palette (0-3)
     ///
     /// This is identical to `bg_palette_color` but uses the object-palette
     /// data (OBPD) instead of BGPD.
@@ -5279,6 +4494,12 @@ impl Ppu {
     }
 
     #[inline]
+    fn cgb_obj_color_from_color_id(&self, palette: u8, color_id: u8) -> u32 {
+        let off = palette as usize * 8 + color_id as usize * 2;
+        Self::decode_cgb_color(self.obpd[off], self.obpd[off + 1])
+    }
+
+    #[inline]
     fn dmg_bg_color_for_pixel(&self, x: usize, color_id: u8) -> u32 {
         let bgp = self.dmg_bgp_for_pixel(x);
         let shade = Self::dmg_shade(bgp, color_id);
@@ -5286,6 +4507,15 @@ impl Ppu {
             self.cgb_bg_color_from_color_id(0, shade)
         } else {
             self.dmg_palette[shade as usize]
+        }
+    }
+
+    #[inline]
+    fn dmg_obj_color_from_shade(&self, palette: usize, shade: usize) -> u32 {
+        if self.dmg_compat {
+            self.ob_palette_color(palette, shade)
+        } else {
+            self.dmg_palette[shade]
         }
     }
 
@@ -5501,8 +4731,12 @@ impl Ppu {
         self.oam[word_index * 2 + 1] = (value >> 8) as u8;
     }
 
-    fn oam_bug_apply_write_corruption(&mut self, row: usize, word_in_row: usize) {
-        // Objects 0 and 1 (first row) are not affected.
+    fn oam_bug_apply_corruption(
+        &mut self,
+        row: usize,
+        word_in_row: usize,
+        glitch: fn(u16, u16, u16) -> u16,
+    ) {
         if row == 0 {
             return;
         }
@@ -5517,7 +4751,7 @@ impl Ppu {
         let a = self.oam_get_word(target);
         let b = self.oam_get_word(prev_same);
         let c = self.oam_get_word(prev_plus2);
-        let new_val = ((a ^ c) & (b ^ c)) ^ c;
+        let new_val = glitch(a, b, c);
 
         let prev_words = [
             self.oam_get_word(prev),
@@ -5531,33 +4765,12 @@ impl Ppu {
         self.oam_set_word(target, new_val);
     }
 
+    fn oam_bug_apply_write_corruption(&mut self, row: usize, word_in_row: usize) {
+        self.oam_bug_apply_corruption(row, word_in_row, |a, b, c| ((a ^ c) & (b ^ c)) ^ c);
+    }
+
     fn oam_bug_apply_read_corruption(&mut self, row: usize, word_in_row: usize) {
-        if row == 0 {
-            return;
-        }
-        debug_assert!(word_in_row < 4);
-
-        let base = row * 4;
-        let prev = (row - 1) * 4;
-        let target = base + word_in_row;
-        let prev_same = prev + word_in_row;
-        let prev_plus2 = prev + ((word_in_row + 2) & 3);
-
-        let a = self.oam_get_word(target);
-        let b = self.oam_get_word(prev_same);
-        let c = self.oam_get_word(prev_plus2);
-        let new_val = b | (a & c);
-
-        let prev_words = [
-            self.oam_get_word(prev),
-            self.oam_get_word(prev + 1),
-            self.oam_get_word(prev + 2),
-            self.oam_get_word(prev + 3),
-        ];
-        for (i, &word) in prev_words.iter().enumerate() {
-            self.oam_set_word(base + i, word);
-        }
-        self.oam_set_word(target, new_val);
+        self.oam_bug_apply_corruption(row, word_in_row, |a, b, c| b | (a & c));
     }
 
     fn oam_bug_apply_read_during_incdec(&mut self, row: usize, word_in_row: usize) {
@@ -5768,6 +4981,22 @@ impl Ppu {
         }
     }
 
+    fn oam_bug_copy_row_to_two_predecessors(&mut self, accessed_oam_row: usize) {
+        for i in 0..8 {
+            let src = accessed_oam_row - 0x08 + i;
+            let dst1 = accessed_oam_row - 0x10 + i;
+            let dst2 = accessed_oam_row - 0x20 + i;
+            if src < OAM_SIZE {
+                if dst1 < OAM_SIZE {
+                    self.oam[dst1] = self.oam[src];
+                }
+                if dst2 < OAM_SIZE {
+                    self.oam[dst2] = self.oam[src];
+                }
+            }
+        }
+    }
+
     fn oam_bug_tertiary_read_corruption(
         &mut self,
         accessed_oam_row: usize,
@@ -5790,19 +5019,7 @@ impl Ppu {
         );
         self.oam_set_word(base - 4, new_val);
 
-        for i in 0..8 {
-            let src = accessed_oam_row - 0x08 + i;
-            let dst1 = accessed_oam_row - 0x10 + i;
-            let dst2 = accessed_oam_row - 0x20 + i;
-            if src < OAM_SIZE {
-                if dst1 < OAM_SIZE {
-                    self.oam[dst1] = self.oam[src];
-                }
-                if dst2 < OAM_SIZE {
-                    self.oam[dst2] = self.oam[src];
-                }
-            }
-        }
+        self.oam_bug_copy_row_to_two_predecessors(accessed_oam_row);
     }
 
     fn oam_bug_quaternary_read_corruption_dmg(&mut self, accessed_oam_row: usize) {
@@ -5826,19 +5043,7 @@ impl Ppu {
         ]);
         self.oam_set_word(base - 4, new_val);
 
-        for i in 0..8 {
-            let src = accessed_oam_row - 0x08 + i;
-            let dst1 = accessed_oam_row - 0x10 + i;
-            let dst2 = accessed_oam_row - 0x20 + i;
-            if src < OAM_SIZE {
-                if dst1 < OAM_SIZE {
-                    self.oam[dst1] = self.oam[src];
-                }
-                if dst2 < OAM_SIZE {
-                    self.oam[dst2] = self.oam[src];
-                }
-            }
-        }
+        self.oam_bug_copy_row_to_two_predecessors(accessed_oam_row);
     }
 
     pub fn vram_read_accessible(&self) -> bool {
@@ -6087,11 +5292,7 @@ impl Ppu {
                 if self.lcdc & 0x80 != 0 {
                     self.update_lyc_compare();
                 }
-                if trace_lcd_reg_writes_enabled()
-                    && trace_frame_window_enabled(self.frame_counter)
-                    && trace_lcd_reg_write_line_enabled(self.ly)
-                    && trace_lcd_reg_write_frame_enabled(self.frame_counter)
-                {
+                if self.should_trace_lcd_reg_write() {
                     eprintln!(
                         "LCDWR frame={} ly={} mode={} mode_clock={} reg=FF40 old={:02X} new={:02X} scx={} wx={} wy={}",
                         self.frame_counter,
@@ -6113,11 +5314,7 @@ impl Ppu {
                     self.record_mode3_scy_event(self.mode_clock, val);
                 }
                 self.scy = val;
-                if trace_lcd_reg_writes_enabled()
-                    && trace_frame_window_enabled(self.frame_counter)
-                    && trace_lcd_reg_write_line_enabled(self.ly)
-                    && trace_lcd_reg_write_frame_enabled(self.frame_counter)
-                {
+                if self.should_trace_lcd_reg_write() {
                     eprintln!(
                         "LCDWR frame={} ly={} mode={} mode_clock={} reg=FF42 old={:02X} new={:02X} scx={} wx={} wy={} lcdc={:02X}",
                         self.frame_counter,
@@ -6231,11 +5428,7 @@ impl Ppu {
                     self.record_mode3_wy_event(self.mode_clock, val);
                 }
                 self.wy = val;
-                if trace_lcd_reg_writes_enabled()
-                    && trace_frame_window_enabled(self.frame_counter)
-                    && trace_lcd_reg_write_line_enabled(self.ly)
-                    && trace_lcd_reg_write_frame_enabled(self.frame_counter)
-                {
+                if self.should_trace_lcd_reg_write() {
                     eprintln!(
                         "LCDWR frame={} ly={} mode={} mode_clock={} reg=FF4A old={:02X} new={:02X} scx={} wx={} lcdc={:02X}",
                         self.frame_counter,
@@ -6256,11 +5449,7 @@ impl Ppu {
                     self.record_mode3_wx_event(self.mode_clock, val);
                 }
                 self.wx = val;
-                if trace_lcd_reg_writes_enabled()
-                    && trace_frame_window_enabled(self.frame_counter)
-                    && trace_lcd_reg_write_line_enabled(self.ly)
-                    && trace_lcd_reg_write_frame_enabled(self.frame_counter)
-                {
+                if self.should_trace_lcd_reg_write() {
                     eprintln!(
                         "LCDWR frame={} ly={} mode={} mode_clock={} reg=FF4B old={:02X} new={:02X} scx={} wy={} lcdc={:02X}",
                         self.frame_counter,
@@ -6381,6 +5570,131 @@ impl Ppu {
         false
     }
 
+    fn trace_obj_debug_line(&self, cgb_render: bool) {
+        eprintln!(
+            "OBJDBG_LINE ly={} scx={} mode={} mode_clock={} mode3_target={} lcdc_base={:02X} lcdc_now={:02X} obj_events={} bgp_events={} bgp_base={:02X} bgp_now={:02X}",
+            self.ly,
+            self.scx,
+            self.mode,
+            self.mode_clock,
+            self.mode3_target_cycles,
+            self.mode3_lcdc_base,
+            self.lcdc,
+            self.mode3_lcdc_event_count,
+            self.dmg_bgp_event_count,
+            self.dmg_line_bgp_base,
+            self.bgp
+        );
+        for (i, ev) in self.mode3_lcdc_events[..self.mode3_lcdc_event_count]
+            .iter()
+            .enumerate()
+        {
+            eprintln!(
+                "  OBJDBG_EVT i={} t={} x={} val={:02X} fetcher_state={} bg_fifo={}",
+                i, ev.t, ev.x, ev.val, ev.fetcher_state, ev.bg_fifo
+            );
+        }
+        for (i, ev) in self.dmg_bgp_events[..self.dmg_bgp_event_count]
+            .iter()
+            .enumerate()
+        {
+            eprintln!(
+                "  OBJDBG_BGP i={} t={} x={} val={:02X}",
+                i, ev.t, ev.x, ev.val
+            );
+        }
+        macro_rules! trace_reg_events {
+            ($label:literal, $events:expr, $count:expr) => {
+                for (i, ev) in $events[..$count].iter().enumerate() {
+                    eprintln!(
+                        concat!("  ", $label, " i={} t={} val={:02X}"),
+                        i, ev.t, ev.val
+                    );
+                }
+            };
+        }
+        trace_reg_events!(
+            "OBJDBG_SCX",
+            self.mode3_scx_events,
+            self.mode3_scx_event_count
+        );
+        trace_reg_events!(
+            "OBJDBG_SCY",
+            self.mode3_scy_events,
+            self.mode3_scy_event_count
+        );
+        trace_reg_events!("OBJDBG_WX", self.mode3_wx_events, self.mode3_wx_event_count);
+        trace_reg_events!("OBJDBG_WY", self.mode3_wy_events, self.mode3_wy_event_count);
+        if self.mode3_pop_event_count > 0 {
+            let visible = self.mode3_pop_events[..self.mode3_pop_event_count]
+                .iter()
+                .filter(|ev| (0..SCREEN_WIDTH as i16).contains(&ev.position_in_line))
+                .count();
+            let has_159 = self.mode3_pop_events[..self.mode3_pop_event_count]
+                .iter()
+                .any(|ev| ev.position_in_line == (SCREEN_WIDTH - 1) as i16);
+            eprintln!(
+                "  OBJDBG_POP count={} visible={} has_x159={}",
+                self.mode3_pop_event_count, visible, has_159
+            );
+        }
+        if !cgb_render {
+            let mut runs: Vec<(usize, usize, bool)> = Vec::new();
+            let mut start = 0usize;
+            let mut cur = self.dmg_line_obj_size_16[0];
+            for x in 1..SCREEN_WIDTH {
+                let v = self.dmg_line_obj_size_16[x];
+                if v != cur {
+                    runs.push((start, x.saturating_sub(1), cur));
+                    start = x;
+                    cur = v;
+                }
+            }
+            runs.push((start, SCREEN_WIDTH - 1, cur));
+            for (a, b, v) in runs {
+                if b >= 48 {
+                    break;
+                }
+                eprintln!("  OBJDBG_SIZE_RUN x={}..{} size16={}", a, b, v);
+            }
+
+            let mut bgp_runs: Vec<(usize, usize, u8)> = Vec::new();
+            let mut bgp_start = 0usize;
+            let mut bgp_cur = self.dmg_line_bgp_at_pixel[0];
+            for x in 1..SCREEN_WIDTH {
+                let v = self.dmg_line_bgp_at_pixel[x];
+                if v != bgp_cur {
+                    bgp_runs.push((bgp_start, x.saturating_sub(1), bgp_cur));
+                    bgp_start = x;
+                    bgp_cur = v;
+                }
+            }
+            bgp_runs.push((bgp_start, SCREEN_WIDTH - 1, bgp_cur));
+            for (a, b, v) in bgp_runs {
+                eprintln!("  OBJDBG_BGP_RUN x={}..{} bgp={:02X}", a, b, v);
+            }
+        }
+        for (i, s) in self.line_sprites[..self.sprite_count].iter().enumerate() {
+            eprintln!(
+                "  OBJDBG_SPR i={} oam={} x={} y={} tile={:02X} flags={:02X} fetched={} obj_valid={} fetch_t_valid={} fetch_t={} obj_row_valid={} obj_row={:04X} obj_lo={:02X} obj_hi={:02X}",
+                i,
+                s.oam_index,
+                s.x,
+                s.y,
+                s.tile,
+                s.flags,
+                s.fetched,
+                s.obj_data_valid,
+                s.fetch_t_valid,
+                s.fetch_t,
+                s.obj_row_valid,
+                s.obj_row_addr,
+                s.obj_lo,
+                s.obj_hi
+            );
+        }
+    }
+
     fn render_scanline(&mut self) {
         if self.lcdc & 0x80 == 0 || self.ly as usize >= SCREEN_HEIGHT {
             self.dmg_prev_line_window_active = false;
@@ -6394,41 +5708,22 @@ impl Ppu {
 
         let cgb_render = self.is_cgb_native_mode();
 
-        let bg_enabled = if cgb_render {
-            true
-        } else {
-            self.mode3_lcdc_base & 0x01 != 0
-        };
-        let master_priority = if cgb_render {
-            self.lcdc & 0x01 != 0
-        } else {
-            true
-        };
+        let bg_enabled = cgb_render || (self.mode3_lcdc_base & 0x01 != 0);
+        let master_priority = !cgb_render || (self.lcdc & 0x01 != 0);
 
         // Pre-fill the scanline. When the background is disabled via LCDC bit 0
         // in DMG mode, the Game Boy outputs color 0 for every pixel and sprites
         // treat the line as having color 0. The framebuffer is initialized with
         // this color so sprite rendering can overlay on top.
-        if cgb_render {
-            let bg_color = Self::decode_cgb_color(self.bgpd[0], self.bgpd[1]);
-            for x in 0..SCREEN_WIDTH {
-                let idx = self.ly as usize * SCREEN_WIDTH + x;
-                self.framebuffer[idx] = bg_color;
-                self.line_color_zero[x] = true;
-            }
-        } else {
-            for x in 0..SCREEN_WIDTH {
-                let bgp = self.dmg_bgp_for_pixel(x);
-                let idxc = Self::dmg_shade(bgp, 0);
-                let idx = self.ly as usize * SCREEN_WIDTH + x;
-                self.framebuffer[idx] = if self.dmg_compat {
-                    let off = (idxc as usize) * 2;
-                    Self::decode_cgb_color(self.bgpd[off], self.bgpd[off + 1])
-                } else {
-                    self.dmg_palette[idxc as usize]
-                };
-                self.line_color_zero[x] = true;
-            }
+        let cgb_bg_color0 = self.cgb_bg_color_from_color_id(0, 0);
+        for x in 0..SCREEN_WIDTH {
+            let idx = self.ly as usize * SCREEN_WIDTH + x;
+            self.framebuffer[idx] = if cgb_render {
+                cgb_bg_color0
+            } else {
+                self.dmg_bg_color_for_pixel(x, 0)
+            };
+            self.line_color_zero[x] = true;
         }
 
         let mut window_line_active_for_continuity = false;
@@ -6474,7 +5769,7 @@ impl Ppu {
                         && window_possible_this_line
                         && self.mode3_wy_event_count > 0)
             };
-            if read_trace_bool_env("VIBEEMU_TRACE_WINDOW_EVENT_GATE")
+            if env_bool_or_false("VIBEEMU_TRACE_WINDOW_EVENT_GATE")
                 && window_event_activity
                 && !window_line_active
             {
@@ -6513,7 +5808,7 @@ impl Ppu {
                     eprintln!("  WINGATE_LCDC i={} t={} val={:02X}", i, ev.t, ev.val);
                 }
             }
-            if read_trace_bool_env("VIBEEMU_TRACE_BG_FETCHER") {
+            if env_bool_or_false("VIBEEMU_TRACE_BG_FETCHER") {
                 let (scx_t0, scx_v0) = if self.mode3_scx_event_count > 0 {
                     (self.mode3_scx_events[0].t, self.mode3_scx_events[0].val)
                 } else {
@@ -6540,16 +5835,13 @@ impl Ppu {
                 self.render_dmg_bg_window_scanline_simple();
             }
         }
-        self.dmg_prev2_line_window_active = if cgb_render {
-            false
+        if !cgb_render {
+            self.dmg_prev2_line_window_active = prev1_window_active;
+            self.dmg_prev_line_window_active = window_line_active_for_continuity;
         } else {
-            prev1_window_active
-        };
-        self.dmg_prev_line_window_active = if cgb_render {
-            false
-        } else {
-            window_line_active_for_continuity
-        };
+            self.dmg_prev2_line_window_active = false;
+            self.dmg_prev_line_window_active = false;
+        }
 
         // sprites
         let any_obj_enabled = if cgb_render {
@@ -6566,7 +5858,7 @@ impl Ppu {
                 .any(|ev| ((self.mode3_lcdc_base ^ ev.val) & 0x02) != 0);
 
         if any_obj_enabled {
-            if !cgb_render && read_trace_bool_env("VIBEEMU_TRACE_DMG_RIGHT_OBJ") {
+            if !cgb_render && env_bool_or_false("VIBEEMU_TRACE_DMG_RIGHT_OBJ") {
                 let right_invalid = self.line_sprites[..self.sprite_count]
                     .iter()
                     .filter(|s| (120..=159).contains(&s.x) && !s.obj_data_valid)
@@ -6619,130 +5911,7 @@ impl Ppu {
             }
             let trace_obj_line = !cgb_render && trace_obj_debug_line_enabled(self.ly);
             if trace_obj_line {
-                eprintln!(
-                    "OBJDBG_LINE ly={} scx={} mode={} mode_clock={} mode3_target={} lcdc_base={:02X} lcdc_now={:02X} obj_events={} bgp_events={} bgp_base={:02X} bgp_now={:02X}",
-                    self.ly,
-                    self.scx,
-                    self.mode,
-                    self.mode_clock,
-                    self.mode3_target_cycles,
-                    self.mode3_lcdc_base,
-                    self.lcdc,
-                    self.mode3_lcdc_event_count,
-                    self.dmg_bgp_event_count,
-                    self.dmg_line_bgp_base,
-                    self.bgp
-                );
-                for (i, ev) in self.mode3_lcdc_events[..self.mode3_lcdc_event_count]
-                    .iter()
-                    .enumerate()
-                {
-                    eprintln!(
-                        "  OBJDBG_EVT i={} t={} x={} val={:02X} fetcher_state={} bg_fifo={}",
-                        i, ev.t, ev.x, ev.val, ev.fetcher_state, ev.bg_fifo
-                    );
-                }
-                for (i, ev) in self.dmg_bgp_events[..self.dmg_bgp_event_count]
-                    .iter()
-                    .enumerate()
-                {
-                    eprintln!(
-                        "  OBJDBG_BGP i={} t={} x={} val={:02X}",
-                        i, ev.t, ev.x, ev.val
-                    );
-                }
-                for (i, ev) in self.mode3_scx_events[..self.mode3_scx_event_count]
-                    .iter()
-                    .enumerate()
-                {
-                    eprintln!("  OBJDBG_SCX i={} t={} val={:02X}", i, ev.t, ev.val);
-                }
-                for (i, ev) in self.mode3_scy_events[..self.mode3_scy_event_count]
-                    .iter()
-                    .enumerate()
-                {
-                    eprintln!("  OBJDBG_SCY i={} t={} val={:02X}", i, ev.t, ev.val);
-                }
-                for (i, ev) in self.mode3_wx_events[..self.mode3_wx_event_count]
-                    .iter()
-                    .enumerate()
-                {
-                    eprintln!("  OBJDBG_WX i={} t={} val={:02X}", i, ev.t, ev.val);
-                }
-                for (i, ev) in self.mode3_wy_events[..self.mode3_wy_event_count]
-                    .iter()
-                    .enumerate()
-                {
-                    eprintln!("  OBJDBG_WY i={} t={} val={:02X}", i, ev.t, ev.val);
-                }
-                if self.mode3_pop_event_count > 0 {
-                    let visible = self.mode3_pop_events[..self.mode3_pop_event_count]
-                        .iter()
-                        .filter(|ev| (0..SCREEN_WIDTH as i16).contains(&ev.position_in_line))
-                        .count();
-                    let has_159 = self.mode3_pop_events[..self.mode3_pop_event_count]
-                        .iter()
-                        .any(|ev| ev.position_in_line == (SCREEN_WIDTH - 1) as i16);
-                    eprintln!(
-                        "  OBJDBG_POP count={} visible={} has_x159={}",
-                        self.mode3_pop_event_count, visible, has_159
-                    );
-                }
-                if !cgb_render {
-                    let mut runs: Vec<(usize, usize, bool)> = Vec::new();
-                    let mut start = 0usize;
-                    let mut cur = self.dmg_line_obj_size_16[0];
-                    for x in 1..SCREEN_WIDTH {
-                        let v = self.dmg_line_obj_size_16[x];
-                        if v != cur {
-                            runs.push((start, x.saturating_sub(1), cur));
-                            start = x;
-                            cur = v;
-                        }
-                    }
-                    runs.push((start, SCREEN_WIDTH - 1, cur));
-                    for (a, b, v) in runs {
-                        if b >= 48 {
-                            break;
-                        }
-                        eprintln!("  OBJDBG_SIZE_RUN x={}..{} size16={}", a, b, v);
-                    }
-
-                    let mut bgp_runs: Vec<(usize, usize, u8)> = Vec::new();
-                    let mut bgp_start = 0usize;
-                    let mut bgp_cur = self.dmg_line_bgp_at_pixel[0];
-                    for x in 1..SCREEN_WIDTH {
-                        let v = self.dmg_line_bgp_at_pixel[x];
-                        if v != bgp_cur {
-                            bgp_runs.push((bgp_start, x.saturating_sub(1), bgp_cur));
-                            bgp_start = x;
-                            bgp_cur = v;
-                        }
-                    }
-                    bgp_runs.push((bgp_start, SCREEN_WIDTH - 1, bgp_cur));
-                    for (a, b, v) in bgp_runs {
-                        eprintln!("  OBJDBG_BGP_RUN x={}..{} bgp={:02X}", a, b, v);
-                    }
-                }
-                for (i, s) in self.line_sprites[..self.sprite_count].iter().enumerate() {
-                    eprintln!(
-                        "  OBJDBG_SPR i={} oam={} x={} y={} tile={:02X} flags={:02X} fetched={} obj_valid={} fetch_t_valid={} fetch_t={} obj_row_valid={} obj_row={:04X} obj_lo={:02X} obj_hi={:02X}",
-                        i,
-                        s.oam_index,
-                        s.x,
-                        s.y,
-                        s.tile,
-                        s.flags,
-                        s.fetched,
-                        s.obj_data_valid,
-                        s.fetch_t_valid,
-                        s.fetch_t,
-                        s.obj_row_valid,
-                        s.obj_row_addr,
-                        s.obj_lo,
-                        s.obj_hi
-                    );
-                }
+                self.trace_obj_debug_line(cgb_render);
             }
             let mut drawn = [false; SCREEN_WIDTH];
             for s in &self.line_sprites[..self.sprite_count] {
@@ -6796,14 +5965,14 @@ impl Ppu {
                         let hi = self.vram_read_for_render(bank, addr + 1);
                         ((hi >> bit) & 1) << 1 | ((lo >> bit) & 1)
                     } else {
-                        let (obj_en_shift_base, obj_en_shift_max_x) = if self.cgb && self.dmg_compat
-                        {
-                            // CGB DMG-compat samples OBJ_EN one pixel earlier on
-                            // the left edge than the DMG-oriented baseline.
-                            (-2, 8)
-                        } else {
-                            (dmg_obj_en_pixel_shift(), dmg_obj_en_shift_max_x())
-                        };
+                        let (obj_en_shift_base, obj_en_shift_max_x) =
+                            if self.is_cgb_dmg_compat_mode() {
+                                // CGB DMG-compat samples OBJ_EN one pixel earlier on
+                                // the left edge than the DMG-oriented baseline.
+                                (-2, 8)
+                            } else {
+                                (dmg_obj_en_pixel_shift(), dmg_obj_en_shift_max_x())
+                            };
                         let apply_shift =
                             sx <= obj_en_shift_max_x || (s.x >= 8 && sx >= 0 && sx <= s.x);
                         let obj_en_shift = if apply_shift { obj_en_shift_base } else { 0 };
@@ -6883,8 +6052,7 @@ impl Ppu {
                     }
                     let color = if cgb_render {
                         let palette = (s.flags & 0x07) as usize;
-                        let off = palette * 8 + color_id as usize * 2;
-                        Self::decode_cgb_color(self.obpd[off], self.obpd[off + 1])
+                        self.cgb_obj_color_from_color_id(palette as u8, color_id)
                     } else {
                         // DMG and CGB DMG-compat both use OBP0/OBP1 mapping.
                         let (pal_reg, pal_idx) = if s.flags & 0x10 != 0 {
@@ -6899,12 +6067,7 @@ impl Ppu {
                         };
                         first_nonzero_obj_pixel = false;
                         let shade = Self::dmg_shade(pal_reg, color_id) as usize;
-                        if self.dmg_compat {
-                            let off = pal_idx * 8 + shade * 2;
-                            Self::decode_cgb_color(self.obpd[off], self.obpd[off + 1])
-                        } else {
-                            self.dmg_palette[shade]
-                        }
+                        self.dmg_obj_color_from_shade(pal_idx, shade)
                     };
                     let idx = self.ly as usize * SCREEN_WIDTH + sx as usize;
                     self.framebuffer[idx] = color;
@@ -7004,7 +6167,7 @@ impl Ppu {
                         if self.ly == SCREEN_HEIGHT as u8 {
                             self.frame_ready = true;
                             self.set_mode(MODE_VBLANK);
-                            if !self.cgb || self.dmg_compat {
+                            if self.is_dmg_mode() {
                                 self.dmg_mode2_vblank_irq_pending = true;
                             }
                             *if_reg |= 0x01;
@@ -7087,7 +6250,7 @@ impl Ppu {
                         self.mode3_target_cycles = self.compute_mode3_cycles_for_line();
                         self.mode0_target_cycles = LINE_CYCLES
                             .saturating_sub(MODE2_CYCLES.saturating_add(self.mode3_target_cycles));
-                        if !self.cgb || self.dmg_compat {
+                        if self.is_dmg_mode() {
                             self.dmg_begin_transfer_line();
                         }
                         if self.dmg_post_startup_line2 {
@@ -7111,7 +6274,7 @@ impl Ppu {
                     let target = self.mode3_target_cycles;
                     if self.mode_clock >= target {
                         self.mode_clock -= target;
-                        if !self.cgb || self.dmg_compat {
+                        if self.is_dmg_mode() {
                             let obj_toggle_line = self.is_dmg_mode()
                                 && self.mode3_lcdc_events[..self.mode3_lcdc_event_count]
                                     .iter()
@@ -7170,7 +6333,7 @@ impl Ppu {
     }
 
     fn render_dmg_bg_window_scanline_simple(&mut self) {
-        let simple_tile_sel_only_line = (!self.cgb || self.dmg_compat)
+        let simple_tile_sel_only_line = self.is_dmg_mode()
             && self.sprite_count > 0
             && self.mode3_lcdc_event_count > 0
             && {
@@ -7290,7 +6453,7 @@ impl Ppu {
         const FETCH_GET_HI_T2: u8 = 5;
         const FETCH_PUSH: u8 = 6;
 
-        let use_pop_schedule = read_trace_bool_env("VIBEEMU_DMG_BG_WINDOW_USE_POP_SCHEDULE");
+        let use_pop_schedule = env_bool_or_false("VIBEEMU_DMG_BG_WINDOW_USE_POP_SCHEDULE");
 
         let mut t_schedule = [0u16; SCREEN_WIDTH];
         let mut use_t_schedule = true;
@@ -7369,7 +6532,7 @@ impl Ppu {
         let mut wx_event_idx = 0usize;
         let mut wy_event_idx = 0usize;
         let use_stage_scy_sampling =
-            (!self.cgb && dmg_mode3_scy_use_stage_sample_t()) || (self.cgb && self.dmg_compat);
+            (!self.cgb && dmg_mode3_scy_use_stage_sample_t()) || (self.is_cgb_dmg_compat_mode());
         let max_mode3_t_i16 = self.mode3_target_cycles.saturating_sub(1) as i16;
 
         if has_win_en_toggle && self.mode3_wx_event_count > 0 && self.mode3_wx_events[0].t <= 7 {
@@ -7400,7 +6563,7 @@ impl Ppu {
         let mut window_tile_x = 0u8;
         let mut window_line = self.win_line_counter;
         let mut window_activations = 0u8;
-        let trace_win_map_fetch = read_trace_bool_env("VIBEEMU_TRACE_WIN_MAP_FETCH")
+        let trace_win_map_fetch = env_bool_or_false("VIBEEMU_TRACE_WIN_MAP_FETCH")
             && trace_obj_debug_line_enabled(self.ly);
         let suppress_wx0_previsible_shortcuts = self.mode3_wx_base == 0
             && self.mode3_wx_event_count > 0
@@ -7595,7 +6758,7 @@ impl Ppu {
             while scy_event_idx < self.mode3_scy_event_count
                 && self.mode3_scy_events[scy_event_idx].t == t
             {
-                if read_trace_bool_env("VIBEEMU_TRACE_SCY_RENDER")
+                if env_bool_or_false("VIBEEMU_TRACE_SCY_RENDER")
                     && trace_obj_debug_line_enabled(self.ly)
                 {
                     eprintln!(
@@ -7715,6 +6878,75 @@ impl Ppu {
                 pop_one_dot!(t);
             }
 
+            // Shared tile-data address computation for LO and HI bitplane
+            // fetch stages. Differences between LO/HI are parameterized:
+            // SCY sample offset, high-plane flag, output addr, trace tag, next state.
+            macro_rules! fetch_tile_data_addr {
+                ($scy_offset_fn:expr, $is_high:expr, $out_addr:ident, $tag:literal, $next_state:expr) => {{
+                    let fetcher_y = if wx_triggered {
+                        window_line
+                    } else if self.is_cgb_dmg_compat_mode() {
+                        if self.sprite_count > 0
+                            && position_in_line < cgb_dmg_mode3_scy_latch_start_pos()
+                        {
+                            let sample_t = (t as i16 + $scy_offset_fn())
+                                .clamp(0, max_mode3_t_i16)
+                                as u16;
+                            self.ly.wrapping_add(self.dmg_scy_for_mode3_t(sample_t))
+                        } else {
+                            bg_fetcher_y_latched
+                        }
+                    } else if use_stage_scy_sampling {
+                        let sample_t = (t as i16 + $scy_offset_fn())
+                            .clamp(0, max_mode3_t_i16)
+                            as u16;
+                        self.ly.wrapping_add(self.dmg_scy_for_mode3_t(sample_t))
+                    } else {
+                        self.ly.wrapping_add(scy_cur)
+                    };
+                    let cgb_dmg_compat_use_win_tile_sel_pos =
+                        self.is_cgb_dmg_compat_mode() && wx_triggered && self.sprite_count > 0 && {
+                            let first_x = self.line_sprites[0].x;
+                            first_x <= -1 || first_x >= 7
+                        };
+                    let lcdc_fetch = if (!self.cgb
+                        && wx_triggered
+                        && use_window_tile_sel_pos_sampling)
+                        || cgb_dmg_compat_use_win_tile_sel_pos
+                    {
+                        self.dmg_lcdc_for_bg_fetch_window_tile_sel_pos(position_in_line, $is_high)
+                    } else {
+                        let sample_t =
+                            if self.is_cgb_dmg_compat_mode() && wx_triggered && self.sprite_count > 0
+                            {
+                                Self::cgb_compat_tile_data_sample_t(
+                                    self.line_sprites[0].x,
+                                    t,
+                                    $is_high,
+                                )
+                            } else {
+                                t
+                            };
+                        self.dmg_lcdc_for_bg_fetch_t(sample_t)
+                    };
+                    let tile_base =
+                        Self::bg_tile_row_base_addr(current_tile, (lcdc_fetch & 0x10) != 0);
+                    $out_addr = tile_base + ((fetcher_y as usize & 0x07) * 2)
+                        + if $is_high { 1 } else { 0 };
+                    if trace_win_map_fetch
+                        && wx_triggered
+                        && window_tile_x < 6
+                        && (-16..48).contains(&position_in_line)
+                    {
+                        eprintln!(
+                            concat!($tag, " ly={} t={} pos={} tile_x={} lcdc_fetch={:02X} tile_base={:04X} tile_idx={:02X} y={} fifo={} wx_cur={}"),
+                            self.ly, t, position_in_line, window_tile_x, lcdc_fetch, tile_base, current_tile, fetcher_y, bg_fifo.len(), wx_cur
+                        );
+                    }
+                    fetcher_state = $next_state;
+                }};
+            }
+
             match fetcher_state {
                 FETCH_GET_TILE_T1 => {
                     if (lcdc_cur & 0x20) == 0 {
@@ -7741,7 +6973,7 @@ impl Ppu {
                     {
                         fetcher_y = fetcher_y.wrapping_sub(1);
                     }
-                    if self.cgb && self.dmg_compat && !wx_triggered {
+                    if self.is_cgb_dmg_compat_mode() && !wx_triggered {
                         // CGB DMG-compat keeps SCY Y-source stable for the
                         // whole tile fetch (index + data), instead of
                         // resampling independently at LO/HI stage boundaries.
@@ -7776,13 +7008,13 @@ impl Ppu {
                     } else if (position_in_line + 16) < 8 {
                         scx_cur >> 3
                     } else {
-                        let cgb_non_obj_bias =
-                            if self.cgb && self.dmg_compat && !self.mode3_obj_fetch_active_for_t(t)
-                            {
-                                1
-                            } else {
-                                0
-                            };
+                        let cgb_non_obj_bias = if self.is_cgb_dmg_compat_mode()
+                            && !self.mode3_obj_fetch_active_for_t(t)
+                        {
+                            1
+                        } else {
+                            0
+                        };
                         (((scx_cur as i16 + position_in_line + 8 - cgb_non_obj_bias) >> 3) & 0x1F)
                             as u8
                     };
@@ -7832,160 +7064,26 @@ impl Ppu {
                     fetcher_state = FETCH_GET_LO_T1;
                 }
                 FETCH_GET_LO_T1 => {
-                    let fetcher_y = if wx_triggered {
-                        window_line
-                    } else if self.cgb && self.dmg_compat {
-                        if self.sprite_count > 0
-                            && position_in_line < cgb_dmg_mode3_scy_latch_start_pos()
-                        {
-                            let sample_t = (t as i16 + dmg_mode3_scy_sample_lo_t_offset())
-                                .clamp(0, max_mode3_t_i16)
-                                as u16;
-                            self.ly.wrapping_add(self.dmg_scy_for_mode3_t(sample_t))
-                        } else {
-                            bg_fetcher_y_latched
-                        }
-                    } else if use_stage_scy_sampling {
-                        let sample_t = (t as i16 + dmg_mode3_scy_sample_lo_t_offset())
-                            .clamp(0, max_mode3_t_i16)
-                            as u16;
-                        self.ly.wrapping_add(self.dmg_scy_for_mode3_t(sample_t))
-                    } else {
-                        self.ly.wrapping_add(scy_cur)
-                    };
-                    let cgb_dmg_compat_use_win_tile_sel_pos =
-                        self.cgb && self.dmg_compat && wx_triggered && self.sprite_count > 0 && {
-                            let first_x = self.line_sprites[0].x;
-                            first_x <= -1 || first_x >= 7
-                        };
-                    let lcdc_fetch = if (!self.cgb
-                        && wx_triggered
-                        && use_window_tile_sel_pos_sampling)
-                        || cgb_dmg_compat_use_win_tile_sel_pos
-                    {
-                        self.dmg_lcdc_for_bg_fetch_window_tile_sel_pos(position_in_line, false)
-                    } else {
-                        let sample_t =
-                            if self.cgb && self.dmg_compat && wx_triggered && self.sprite_count > 0
-                            {
-                                let first_x = self.line_sprites[0].x;
-                                if (2..=6).contains(&first_x) {
-                                    t.saturating_sub(2)
-                                } else {
-                                    t
-                                }
-                            } else {
-                                t
-                            };
-                        self.dmg_lcdc_for_bg_fetch_t(sample_t)
-                    };
-                    let tile_base = if (lcdc_fetch & 0x10) != 0 {
-                        TILE_DATA_0_BASE + current_tile as usize * 16
-                    } else {
-                        TILE_DATA_1_BASE + ((current_tile as i8 as i16 + 128) as usize) * 16
-                    };
-                    tile_lo_addr = tile_base + ((fetcher_y as usize & 0x07) * 2);
-                    if trace_win_map_fetch
-                        && wx_triggered
-                        && window_tile_x < 6
-                        && (-16..48).contains(&position_in_line)
-                    {
-                        eprintln!(
-                            "WMAP_LO ly={} t={} pos={} tile_x={} lcdc_fetch={:02X} tile_base={:04X} tile_idx={:02X} y={} fifo={} wx_cur={}",
-                            self.ly,
-                            t,
-                            position_in_line,
-                            window_tile_x,
-                            lcdc_fetch,
-                            tile_base,
-                            current_tile,
-                            fetcher_y,
-                            bg_fifo.len(),
-                            wx_cur
-                        );
-                    }
-                    fetcher_state = FETCH_GET_LO_T2;
+                    fetch_tile_data_addr!(
+                        dmg_mode3_scy_sample_lo_t_offset,
+                        false,
+                        tile_lo_addr,
+                        "WMAP_LO",
+                        FETCH_GET_LO_T2
+                    );
                 }
                 FETCH_GET_LO_T2 => {
                     current_lo = self.vram_read_for_render(0, tile_lo_addr);
                     fetcher_state = FETCH_GET_HI_T1;
                 }
                 FETCH_GET_HI_T1 => {
-                    let fetcher_y = if wx_triggered {
-                        window_line
-                    } else if self.cgb && self.dmg_compat {
-                        if self.sprite_count > 0
-                            && position_in_line < cgb_dmg_mode3_scy_latch_start_pos()
-                        {
-                            let sample_t = (t as i16 + dmg_mode3_scy_sample_hi_t_offset())
-                                .clamp(0, max_mode3_t_i16)
-                                as u16;
-                            self.ly.wrapping_add(self.dmg_scy_for_mode3_t(sample_t))
-                        } else {
-                            bg_fetcher_y_latched
-                        }
-                    } else if use_stage_scy_sampling {
-                        let sample_t = (t as i16 + dmg_mode3_scy_sample_hi_t_offset())
-                            .clamp(0, max_mode3_t_i16)
-                            as u16;
-                        self.ly.wrapping_add(self.dmg_scy_for_mode3_t(sample_t))
-                    } else {
-                        self.ly.wrapping_add(scy_cur)
-                    };
-                    let cgb_dmg_compat_use_win_tile_sel_pos =
-                        self.cgb && self.dmg_compat && wx_triggered && self.sprite_count > 0 && {
-                            let first_x = self.line_sprites[0].x;
-                            first_x <= -1 || first_x >= 7
-                        };
-                    let lcdc_fetch = if (!self.cgb
-                        && wx_triggered
-                        && use_window_tile_sel_pos_sampling)
-                        || cgb_dmg_compat_use_win_tile_sel_pos
-                    {
-                        self.dmg_lcdc_for_bg_fetch_window_tile_sel_pos(position_in_line, true)
-                    } else {
-                        let sample_t =
-                            if self.cgb && self.dmg_compat && wx_triggered && self.sprite_count > 0
-                            {
-                                let first_x = self.line_sprites[0].x;
-                                if (4..=6).contains(&first_x) {
-                                    t.saturating_sub(3)
-                                } else if (2..=3).contains(&first_x) {
-                                    t.saturating_sub(2)
-                                } else {
-                                    t
-                                }
-                            } else {
-                                t
-                            };
-                        self.dmg_lcdc_for_bg_fetch_t(sample_t)
-                    };
-                    let tile_base = if (lcdc_fetch & 0x10) != 0 {
-                        TILE_DATA_0_BASE + current_tile as usize * 16
-                    } else {
-                        TILE_DATA_1_BASE + ((current_tile as i8 as i16 + 128) as usize) * 16
-                    };
-                    tile_hi_addr = tile_base + ((fetcher_y as usize & 0x07) * 2) + 1;
-                    if trace_win_map_fetch
-                        && wx_triggered
-                        && window_tile_x < 6
-                        && (-16..48).contains(&position_in_line)
-                    {
-                        eprintln!(
-                            "WMAP_HI ly={} t={} pos={} tile_x={} lcdc_fetch={:02X} tile_base={:04X} tile_idx={:02X} y={} fifo={} wx_cur={}",
-                            self.ly,
-                            t,
-                            position_in_line,
-                            window_tile_x,
-                            lcdc_fetch,
-                            tile_base,
-                            current_tile,
-                            fetcher_y,
-                            bg_fifo.len(),
-                            wx_cur
-                        );
-                    }
-                    fetcher_state = FETCH_GET_HI_T2;
+                    fetch_tile_data_addr!(
+                        dmg_mode3_scy_sample_hi_t_offset,
+                        true,
+                        tile_hi_addr,
+                        "WMAP_HI",
+                        FETCH_GET_HI_T2
+                    );
                 }
                 FETCH_GET_HI_T2 => {
                     current_hi = self.vram_read_for_render(0, tile_hi_addr);
@@ -8044,7 +7142,7 @@ impl Ppu {
             self.win_line_counter = self.win_line_counter.wrapping_add(window_activations);
         }
 
-        if read_trace_bool_env("VIBEEMU_TRACE_DMG_BG_OUTPUT")
+        if env_bool_or_false("VIBEEMU_TRACE_DMG_BG_OUTPUT")
             && trace_frame_window_enabled(self.frame_counter)
             && trace_bg_output_line_enabled(self.ly)
         {
@@ -8218,49 +7316,40 @@ impl Ppu {
 
                     let map_addr = tile_map_base + tile_row * 32 + tile_col;
 
+                    macro_rules! cgb_tile_plane_addr {
+                        ($high:expr) => {{
+                            let tile_y_raw = if window_active {
+                                window_tile_y_raw
+                            } else {
+                                bg_tile_y_raw
+                            };
+                            let tile_y = if (cur_attr & 0x40) != 0 {
+                                7usize.saturating_sub(tile_y_raw)
+                            } else {
+                                tile_y_raw
+                            };
+                            let bank = if (cur_attr & 0x08) != 0 { 1 } else { 0 };
+                            let addr = Self::bg_tile_row_plane_addr(
+                                cur_tile,
+                                tile_y,
+                                (lcdc_cur & 0x10) != 0,
+                                $high,
+                            );
+                            (bank, addr)
+                        }};
+                    }
+
                     match fetcher_step {
                         0 => {
                             cur_tile = self.vram_read_for_render(0, map_addr);
                             cur_attr = self.vram_read_for_render(1, map_addr);
                         }
                         1 => {
-                            let tile_y_raw = if window_active {
-                                window_tile_y_raw
-                            } else {
-                                bg_tile_y_raw
-                            };
-                            let tile_y = if (cur_attr & 0x40) != 0 {
-                                7usize.saturating_sub(tile_y_raw)
-                            } else {
-                                tile_y_raw
-                            };
-                            let bank = if (cur_attr & 0x08) != 0 { 1 } else { 0 };
-                            let addr = Self::bg_tile_row_plane_addr(
-                                cur_tile,
-                                tile_y,
-                                (lcdc_cur & 0x10) != 0,
-                                false,
-                            );
+                            let (bank, addr) = cgb_tile_plane_addr!(false);
                             cur_lo = self.vram_read_for_render(bank, addr);
                         }
                         2 => {
-                            let tile_y_raw = if window_active {
-                                window_tile_y_raw
-                            } else {
-                                bg_tile_y_raw
-                            };
-                            let tile_y = if (cur_attr & 0x40) != 0 {
-                                7usize.saturating_sub(tile_y_raw)
-                            } else {
-                                tile_y_raw
-                            };
-                            let bank = if (cur_attr & 0x08) != 0 { 1 } else { 0 };
-                            let addr = Self::bg_tile_row_plane_addr(
-                                cur_tile,
-                                tile_y,
-                                (lcdc_cur & 0x10) != 0,
-                                true,
-                            );
+                            let (bank, addr) = cgb_tile_plane_addr!(true);
                             cur_hi = if hi_glitch {
                                 cur_tile
                             } else {
